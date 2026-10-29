@@ -99,7 +99,11 @@ def test_record_adapter_discovers_current_locks_only_inside_lookup(
             assert scope[0] is session
         return original(doctor, **args)
 
-    monkeypatch.setattr(provider_record_authority, "doctor_access_in_force", access)
+    monkeypatch.setattr(
+        provider_record_authority,
+        "doctor_access_in_force",
+        access,
+    )
     assert native.post("mount").status_code == 200
     assert any(scope and proof for scope, proof in checks)
     assert owned._LOOKUP_ROWS.get() is None and owned._CAPTURE_ROWS.get() is None

@@ -139,8 +139,7 @@ def catalog_rows(session, rows, *, doctor_id, subject, link):
         .outerjoin(Doctor, col(Doctor.id) == col(ProviderRecordAuthority.doctor_id))
         .outerjoin(
             ProviderPracticeAuthority,
-            col(ProviderPracticeAuthority.id)
-            == col(ProviderRecordAuthority.practice_authority_id),
+            col(ProviderPracticeAuthority.practice_id) == link.practice_id,
         )
         .outerjoin(
             AuthorityPerson,
@@ -270,7 +269,18 @@ def validate_record_row(session, result, *, doctor_id, subject, link):
     scope = _SCOPE.get()
     assert scope is not None
     if result.record is None:
-        raise authority.AuthorityRequestDeniedError
+        _validate_unmapped_record(
+            appointment=result.appointment,
+            patient=result.patient,
+            binding=result.binding,
+            person=result.person,
+            mapping=result.mapping,
+            origin=result.origin,
+            doctor_id=doctor_id,
+            practice=scope.practice,
+            link=link,
+        )
+        return result
     if (
         result.doctor is None
         or result.doctor.id != doctor_id
@@ -290,6 +300,78 @@ def validate_record_row(session, result, *, doctor_id, subject, link):
         ),
     )
     return result
+
+
+def _validate_unmapped_record(
+    *, appointment, patient, binding, person, mapping, origin, doctor_id, practice, link
+):
+    """Validate a retained Scribe binding that predates Prep record mapping."""
+    if (
+        appointment is None
+        or patient is None
+        or binding is None
+        or person is None
+        or mapping is None
+        or origin is None
+        or practice.id != link.practice_id
+        or mapping.practice_id != practice.id
+        or mapping.tenant_id != link.tenant_id
+        or appointment.doctor_id != doctor_id
+        or appointment.patient_id != patient.id
+        or patient.doctor_id != doctor_id
+        or binding.person_id != person.id
+        or binding.actor_id != link.actor_id
+        or binding.tenant_id != link.tenant_id
+        or binding.binding_kind != "provider_record"
+        or binding.binding_ref != str(appointment.id)
+        or binding.status != "active"
+        or binding.verified_at is None
+        or binding.revoked_at is not None
+        or person.status != "active"
+    ):
+        raise authority.AuthorityRequestDeniedError
+
+
+def validate_unmapped_record(
+    session, *, appointment, patient, binding, doctor_id, subject, link
+):
+    """Fresh fallback for adapters outside the bounded catalog read."""
+    doctor = session.get(Doctor, doctor_id, populate_existing=True)
+    if doctor is None or doctor.clerk_id != subject:
+        raise authority.AuthorityRequestDeniedError
+    practice = provider_record_authority._current_practice(session, doctor)
+    person = (
+        session.get(AuthorityPerson, binding.person_id, populate_existing=True)
+        if binding is not None
+        else None
+    )
+    mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    origin = (
+        session.exec(
+            select(AuthorityPersonOrigin).where(
+                AuthorityPersonOrigin.person_id == person.id,
+                AuthorityPersonOrigin.origin == "provider_entry",
+                AuthorityPersonOrigin.source_ref == str(patient.id),
+            )
+        ).one_or_none()
+        if person is not None and patient is not None
+        else None
+    )
+    _validate_unmapped_record(
+        appointment=appointment,
+        patient=patient,
+        binding=binding,
+        person=person,
+        mapping=mapping,
+        origin=origin,
+        doctor_id=doctor_id,
+        practice=practice,
+        link=link,
+    )
 
 
 def identity_view(value, row, link):

@@ -116,7 +116,7 @@ def real_record_capture(capture_engine, monkeypatch):
             monkeypatch.setattr(
                 configuration,
                 "SESSION_PREP_PROVIDER_SETTINGS",
-                SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+                SessionPrepProviderSettings(True),
             )
             token = authority.exchange_context_token(
                 clerk_issuer=ISSUER,

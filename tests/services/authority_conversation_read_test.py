@@ -405,7 +405,7 @@ def test_browser_selectors_rejected(scope, extra):
     )
 
 
-def test_current_cohort_revocation_denies_hydration_and_memory(scope, monkeypatch):
+def test_global_rollout_disable_denies_hydration_and_memory(scope, monkeypatch):
     import app.configuration.session_prep as configuration
     from app.configuration.session_prep import SessionPrepProviderSettings
 
@@ -414,7 +414,7 @@ def test_current_cohort_revocation_denies_hydration_and_memory(scope, monkeypatc
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(False, frozenset()),
+        SessionPrepProviderSettings(False),
     )
     assert read(client, token).status_code == 403
     assert memory(client, token, turn).status_code in {403, 503}

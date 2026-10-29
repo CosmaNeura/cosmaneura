@@ -112,19 +112,11 @@ def case(capture_case, monkeypatch):
     session.flush()
     monkeypatch.setattr(repair, "is_staging", lambda: True)
     monkeypatch.setattr(repair, "AUTHORITY_KERNEL_SETTINGS", SETTINGS)
-    cohort = SessionPrepProviderSettings(
-        True,
-        frozenset(
-            {
-                current.doctor.clerk_id,
-                current.additional.clerk_id,
-            }
-        ),
-    )
-    monkeypatch.setattr(repair, "SESSION_PREP_PROVIDER_SETTINGS", cohort)
+    rollout = SessionPrepProviderSettings(True)
+    monkeypatch.setattr(repair, "SESSION_PREP_PROVIDER_SETTINGS", rollout)
     import app.configuration.session_prep as configuration
 
-    monkeypatch.setattr(configuration, "SESSION_PREP_PROVIDER_SETTINGS", cohort)
+    monkeypatch.setattr(configuration, "SESSION_PREP_PROVIDER_SETTINGS", rollout)
     monkeypatch.setattr(
         authority, "validate_provider_record_scope", validate_provider_record_scope
     )
@@ -383,7 +375,7 @@ def test_apply_and_idempotent_retry_preserve_scope_and_provenance(case):
     "change",
     [
         "production",
-        "cohort",
+        "rollout_disabled",
         "disabled",
         "inactive_member",
         "ended_member",
@@ -408,11 +400,11 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
     plan = repair.reconcile(session, **f.kwargs)
     if change == "production":
         monkeypatch.setattr(repair, "is_staging", lambda: False)
-    elif change == "cohort":
+    elif change == "rollout_disabled":
         monkeypatch.setattr(
             repair,
             "SESSION_PREP_PROVIDER_SETTINGS",
-            SessionPrepProviderSettings(False, frozenset()),
+            SessionPrepProviderSettings(False),
         )
     elif change == "disabled":
         f.additional.deleted_at = datetime.now(UTC)

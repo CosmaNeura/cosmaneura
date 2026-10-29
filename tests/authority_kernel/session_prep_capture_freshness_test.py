@@ -25,6 +25,7 @@ from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_capture_notes as notes
 from app.services import session_prep_capture_freshness as freshness
+from app.services.provider_record_authority import validate_provider_record_scope
 from app.services.scribe_capture_admission import authorize_admitted_capture
 from app.services.scribe_capture_protocol import OPERATION_ADAPTER
 from app.services.scribe_creator_edit_contract import CreatorTranscriptEditReceiptV1
@@ -85,10 +86,16 @@ def capture_engine(monkeypatch):
         and url.query.get("host") == str(lab / "socket")
         and url.query.get("port") == "55460"
     )
-    engine = create_engine(url, json_serializer=_serialize_pydantic_model)
+    engine = create_engine(
+        url.set(drivername="postgresql+psycopg"),
+        json_serializer=_serialize_pydantic_model,
+    )
     monkeypatch.setattr(
         "app.services.view_as.mount_context_session_blocked_by_view_as",
         REAL_VIEW_AS_GUARD,
+    )
+    monkeypatch.setattr(
+        authority, "validate_provider_record_scope", validate_provider_record_scope
     )
     yield engine
     engine.dispose()
@@ -155,13 +162,7 @@ async def case(f, monkeypatch):
     monkeypatch.setattr(
         review_route.configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(
-            enabled=True,
-            clerk_subjects=(
-                review_route.configuration.SESSION_PREP_PROVIDER_SETTINGS.clerk_subjects
-                | frozenset({f.case.doctor.clerk_id})
-            ),
-        ),
+        SessionPrepProviderSettings(enabled=True),
     )
     # The newly reviewed real-record association changes the context digest;
     # exchange a fresh human grant before any subsequent capture operation.

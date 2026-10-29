@@ -5,24 +5,28 @@ from decouple import config
 
 @dataclass(frozen=True)
 class SessionPrepProviderSettings:
-    """Explicit, default-off cohort for reviewed-note Session Prep."""
+    """One default-off global switch for provider Session Prep.
+
+    Provider lifecycle, practice, BAA, entitlement, view-as, and record
+    ownership are live authorization inputs at their existing boundaries. The
+    rollout switch deliberately carries no account allowlist, so a provider
+    becomes eligible automatically when those current access checks pass.
+    """
 
     enabled: bool = False
-    clerk_subjects: frozenset[str] = frozenset()
 
     def allows(self, subject: str) -> bool:
-        return bool(self.enabled and subject and subject in self.clerk_subjects)
+        """Return only global availability for an authenticated subject.
+
+        This is not an access decision. Callers that touch provider data must
+        still apply their current provider/practice/record authorization.
+        """
+
+        return bool(self.enabled and subject)
 
 
 SESSION_PREP_PROVIDER_SETTINGS = SessionPrepProviderSettings(
     enabled=config("SESSION_PREP_PROVIDER_ENABLED", default=False, cast=bool),
-    clerk_subjects=frozenset(
-        value.strip()
-        for value in config("SESSION_PREP_PROVIDER_CLERK_SUBJECTS", default="").split(
-            ","
-        )
-        if value.strip()
-    ),
 )
 
 
@@ -70,17 +74,3 @@ SESSION_PREP_SYNTHETIC_SETTINGS = SessionPrepSyntheticSettings(
         cast=str,
     ),
 )
-
-
-def validate_session_prep_cohorts() -> None:
-    """A real-record provider never falls back to an unscoped demo binding."""
-    if (
-        SESSION_PREP_SYNTHETIC_SETTINGS.enabled
-        and SESSION_PREP_PROVIDER_SETTINGS.allows(
-            SESSION_PREP_SYNTHETIC_SETTINGS.clerk_subject
-        )
-    ):
-        raise ValueError("Session Prep provider and synthetic cohorts must be distinct")
-
-
-validate_session_prep_cohorts()

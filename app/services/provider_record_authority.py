@@ -1,4 +1,4 @@
-"""Bind selected providers to their actual practice and owned clinical record.
+"""Bind currently authorized providers to their practice and owned record.
 
 Only verified Clerk exchange calls may provision. Reads revalidate current
 access and the immutable binding; client record references never confer access.
@@ -20,6 +20,9 @@ from app.services.doctor_access import doctor_access_in_force
 from app.services.doctor_access_row_ownership import (
     capture_owns_subject_rows,
     provider_record_owner_rows,
+)
+from app.services.session_prep_provider_access import (
+    resolve_session_prep_provider_access,
 )
 
 from activemodel.types import TypeIDType
@@ -46,6 +49,10 @@ from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
 )
+from app.models.synthetic_preview_appointment_fixture import (
+    SYNTHETIC_PREVIEW_FIXTURE_VERSION,
+    SyntheticPreviewAppointmentFixture,
+)
 from sqlalchemy import select as sql_select
 from sqlalchemy.exc import MultipleResultsFound
 from sqlmodel import Session, col, select
@@ -55,34 +62,39 @@ class ProviderRecordScopeDenied(ValueError):
     """Value-free refusal; no discovery of another provider's record."""
 
 
-def _current_practice_rows(session: Session, doctor: Doctor):
-    """One fresh post-access read, including an absent practice or membership."""
-    return session.exec(
+class SessionPrepProviderScopeUnavailable(ProviderRecordScopeDenied):
+    """Current provider access is insufficient for Session Prep only."""
+
+
+def _current_practice(session: Session, doctor: Doctor) -> Practice:
+    """Resolve the existing provider-product policy used by Scribe capture."""
+    now = datetime.now(UTC)
+    if doctor.deleted_at is not None or not doctor_access_in_force(doctor, at=now):
+        raise ProviderRecordScopeDenied
+    rows = session.exec(
         select(PracticeMember, Practice)
         .outerjoin(Practice, col(Practice.id) == col(PracticeMember.practice_id))
         .where(PracticeMember.doctor_id == doctor.id)
         .execution_options(populate_existing=True)
     ).one_or_none()
-
-
-def _current_practice(session: Session, doctor: Doctor) -> Practice:
-    now = datetime.now(UTC)
-    if (
-        doctor.deleted_at is not None
-        or not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id)
-        or not doctor_access_in_force(doctor, at=now)
-    ):
-        raise ProviderRecordScopeDenied
-    rows = _current_practice_rows(session, doctor)
     member, practice = rows if rows is not None else (None, None)
     if (
         member is None
         or member_access_state(member, at=now) not in SEAT_HOLDING_ACCESS_STATES
+        or practice is None
     ):
         raise ProviderRecordScopeDenied
-    if practice is None:
-        raise ProviderRecordScopeDenied
     return practice
+
+
+def _current_session_prep_practice(session: Session, doctor: Doctor) -> Practice:
+    """Apply the stronger Session Prep policy without changing provider access."""
+    if not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id):
+        raise SessionPrepProviderScopeUnavailable
+    decision = resolve_session_prep_provider_access(doctor, session=session)
+    if not decision.allowed or decision.practice is None:
+        raise SessionPrepProviderScopeUnavailable
+    return decision.practice
 
 
 @dataclass(frozen=True)
@@ -134,14 +146,15 @@ def _record_lineage_rows(session, scope, binding):
     )
 
 
-def validate_provider_record_scope(
+def _validate_provider_record_scope(
     *,
     session: Session,
     binding: AuthorityPersonBinding,
     actor_id: TypeIDType,
     clerk_subject: str,
+    session_prep: bool,
 ) -> ProviderRecordAuthority | None:
-    """A stored real-record binding can never fall back to synthetic authority."""
+    """Validate one mapped record under generic or Session Prep policy."""
     if capture_owns_subject_rows(session, clerk_subject):
         current = _record_owner_rows(session, binding)
         if current is None:
@@ -159,10 +172,21 @@ def validate_provider_record_scope(
             else None
         )
     if scope is None:
+        _validate_unmapped_provider_record_scope(
+            session=session,
+            binding=binding,
+            actor_id=actor_id,
+            clerk_subject=clerk_subject,
+            session_prep=session_prep,
+        )
         return None
     if doctor is None or doctor.clerk_id != clerk_subject:
         raise ProviderRecordScopeDenied
-    practice = _current_practice(session, doctor)
+    practice = (
+        _current_session_prep_practice(session, doctor)
+        if session_prep
+        else _current_practice(session, doctor)
+    )
     # Keep this fresh record-lineage boundary after the complete current
     # practice/access decision. Nothing becomes cached permission, and the
     # exact provenance decision still follows these ownership checks.
@@ -180,6 +204,40 @@ def validate_provider_record_scope(
     )
 
 
+def validate_provider_capture_record_scope(
+    *,
+    session: Session,
+    binding: AuthorityPersonBinding,
+    actor_id: TypeIDType,
+    clerk_subject: str,
+) -> ProviderRecordAuthority | None:
+    """Validate generic provider-record access without granting Session Prep."""
+    return _validate_provider_record_scope(
+        session=session,
+        binding=binding,
+        actor_id=actor_id,
+        clerk_subject=clerk_subject,
+        session_prep=False,
+    )
+
+
+def validate_provider_record_scope(
+    *,
+    session: Session,
+    binding: AuthorityPersonBinding,
+    actor_id: TypeIDType,
+    clerk_subject: str,
+) -> ProviderRecordAuthority | None:
+    """Validate mapped record lineage plus every current Session Prep gate."""
+    return _validate_provider_record_scope(
+        session=session,
+        binding=binding,
+        actor_id=actor_id,
+        clerk_subject=clerk_subject,
+        session_prep=True,
+    )
+
+
 def _validate_record_lineage(
     *, session, scope, doctor, practice, binding, actor_id, current
 ):
@@ -187,6 +245,7 @@ def _validate_record_lineage(
     mapping, appointment, patient, person = current
     if (
         mapping is None
+        or mapping.id != scope.practice_authority_id
         or mapping.practice_id != practice.id
         or mapping.tenant_id != binding.tenant_id
         or binding.actor_id != actor_id
@@ -221,6 +280,121 @@ def _validate_record_lineage(
     return scope
 
 
+def _validate_unmapped_provider_record_scope(
+    *,
+    session: Session,
+    binding: AuthorityPersonBinding,
+    actor_id: TypeIDType,
+    clerk_subject: str,
+    session_prep: bool,
+) -> None:
+    """Validate a legacy appointment binding before record-scope reconciliation."""
+    try:
+        appointment_id = TypeID.from_string(binding.binding_ref)
+    except (TypeIDException, TypeError, ValueError):
+        return
+    if appointment_id.prefix != "appointment":
+        return
+    doctor = session.exec(
+        select(Doctor)
+        .where(Doctor.clerk_id == clerk_subject)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if doctor is None:
+        raise ProviderRecordScopeDenied
+    appointment = session.get(
+        Appointment, cast(TypeIDType, appointment_id), populate_existing=True
+    )
+    patient = (
+        session.get(Patient, appointment.patient_id, populate_existing=True)
+        if appointment is not None
+        else None
+    )
+    person = session.get(AuthorityPerson, binding.person_id, populate_existing=True)
+    origin = (
+        session.exec(
+            select(AuthorityPersonOrigin).where(
+                AuthorityPersonOrigin.person_id == person.id,
+                AuthorityPersonOrigin.origin == "provider_entry",
+                AuthorityPersonOrigin.source_ref == str(patient.id),
+            )
+        ).one_or_none()
+        if person is not None and patient is not None
+        else None
+    )
+    fixture = session.exec(
+        select(SyntheticPreviewAppointmentFixture).where(
+            SyntheticPreviewAppointmentFixture.appointment_id == appointment_id,
+            SyntheticPreviewAppointmentFixture.doctor_id == doctor.id,
+            SyntheticPreviewAppointmentFixture.fixture_version
+            == SYNTHETIC_PREVIEW_FIXTURE_VERSION,
+        )
+    ).one_or_none()
+    provisioned = session.exec(
+        select(AuthorityAuditEvent).where(
+            AuthorityAuditEvent.event_type == "authority.provider_fixture.provisioned",
+            AuthorityAuditEvent.event_source == "platform_authoritative",
+            AuthorityAuditEvent.outcome == "accepted",
+            AuthorityAuditEvent.actor_id == actor_id,
+            AuthorityAuditEvent.tenant_id == binding.tenant_id,
+            AuthorityAuditEvent.person_id == binding.person_id,
+            AuthorityAuditEvent.resource_type == "appointment",
+            AuthorityAuditEvent.resource_ref == binding.binding_ref,
+        )
+    ).one_or_none()
+    if fixture is not None and provisioned is not None:
+        if (
+            doctor.deleted_at is not None
+            or doctor.last_active_at is None
+            or appointment is None
+            or patient is None
+            or person is None
+            or origin is None
+            or fixture.synthetic_only is not True
+            or fixture.patient_id != patient.id
+            or appointment.doctor_id != doctor.id
+            or appointment.patient_id != patient.id
+            or patient.doctor_id != doctor.id
+            or binding.actor_id is not None
+            or binding.binding_kind != "provider_record"
+            or binding.status != "active"
+            or binding.verified_at is None
+            or binding.revoked_at is not None
+            or person.status != "active"
+        ):
+            raise ProviderRecordScopeDenied
+        return
+    practice = (
+        _current_session_prep_practice(session, doctor)
+        if session_prep
+        else _current_practice(session, doctor)
+    )
+    mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if (
+        appointment is None
+        or patient is None
+        or mapping is None
+        or person is None
+        or origin is None
+        or appointment.doctor_id != doctor.id
+        or appointment.patient_id != patient.id
+        or patient.doctor_id != doctor.id
+        or mapping.tenant_id != binding.tenant_id
+        or binding.actor_id != actor_id
+        or binding.binding_kind != "provider_record"
+        or binding.binding_ref != str(appointment.id)
+        or binding.status != "active"
+        or binding.verified_at is None
+        or binding.revoked_at is not None
+        or person.status != "active"
+    ):
+        raise ProviderRecordScopeDenied
+
+
 def _record_owner_rows(session: Session, binding: AuthorityPersonBinding):
     """Fresh exact-bound scope and Doctor; later full authorization remains."""
     return session.exec(
@@ -235,7 +409,29 @@ def _record_owner_rows(session: Session, binding: AuthorityPersonBinding):
 def lock_provider_record_owner(
     *, session: Session, clerk_subject: str
 ) -> tuple[Doctor, Practice]:
-    """Take the shared practice/doctor order before any request view-as lock."""
+    """Take generic provider locks before any request view-as lock."""
+    return _lock_provider_record_owner(
+        session=session,
+        clerk_subject=clerk_subject,
+        session_prep=False,
+    )
+
+
+def lock_session_prep_record_owner(
+    *, session: Session, clerk_subject: str
+) -> tuple[Doctor, Practice]:
+    """Take the same locks while enforcing the stronger Session Prep policy."""
+    return _lock_provider_record_owner(
+        session=session,
+        clerk_subject=clerk_subject,
+        session_prep=True,
+    )
+
+
+def _lock_provider_record_owner(
+    *, session: Session, clerk_subject: str, session_prep: bool
+) -> tuple[Doctor, Practice]:
+    """Share the Practice -> Doctor lock order across provider products."""
     # Organization roster/offboarding takes Practice before Doctor. Discover
     # the practice without a lock, acquire that same order, then recheck the
     # membership so a concurrent practice move cannot bind the old practice.
@@ -246,11 +442,14 @@ def lock_provider_record_owner(
     ).one_or_none()
     if doctor is None:
         raise ProviderRecordScopeDenied
-    practice = _current_practice(session, doctor)
+    current_practice = (
+        _current_session_prep_practice if session_prep else _current_practice
+    )
+    practice = current_practice(session, doctor)
     with provider_record_owner_rows(
         session, practice_id=practice.id, subject=clerk_subject
     ) as doctor:
-        if doctor is None or _current_practice(session, doctor).id != practice.id:
+        if doctor is None or current_practice(session, doctor).id != practice.id:
             raise ProviderRecordScopeDenied
         return doctor, practice
 
@@ -258,16 +457,48 @@ def lock_provider_record_owner(
 def ensure_provider_record_scope(
     *, session: Session, clerk_issuer: str, clerk_subject: str, record_ref: str
 ) -> ProviderRecordAuthority:
-    """Provision within the verified token exchange transaction; never repair tombstones."""
+    """Provision generic provider record authority for an existing product user."""
+    return _ensure_provider_record_scope(
+        session=session,
+        clerk_issuer=clerk_issuer,
+        clerk_subject=clerk_subject,
+        record_ref=record_ref,
+        session_prep=False,
+    )
+
+
+def ensure_session_prep_record_scope(
+    *, session: Session, clerk_issuer: str, clerk_subject: str, record_ref: str
+) -> ProviderRecordAuthority:
+    """Provision only after the complete current Session Prep decision passes."""
+    return _ensure_provider_record_scope(
+        session=session,
+        clerk_issuer=clerk_issuer,
+        clerk_subject=clerk_subject,
+        record_ref=record_ref,
+        session_prep=True,
+    )
+
+
+def _ensure_provider_record_scope(
+    *,
+    session: Session,
+    clerk_issuer: str,
+    clerk_subject: str,
+    record_ref: str,
+    session_prep: bool,
+) -> ProviderRecordAuthority:
+    """Provision in one verified transaction; never repair tombstones."""
     try:
         appointment_id = TypeID.from_string(record_ref)
     except (TypeIDException, TypeError, ValueError):
         raise ProviderRecordScopeDenied from None
     if appointment_id.prefix != "appointment":
         raise ProviderRecordScopeDenied
-    doctor, practice = lock_provider_record_owner(
-        session=session, clerk_subject=clerk_subject
+    lock_owner = (
+        lock_session_prep_record_owner if session_prep else lock_provider_record_owner
     )
+    doctor, practice = lock_owner(session=session, clerk_subject=clerk_subject)
     appointment = session.get(
         Appointment, cast(TypeIDType, appointment_id), populate_existing=True
     )
@@ -398,7 +629,12 @@ def ensure_provider_record_scope(
         )
     ).one_or_none()
     if binding is not None:
-        scope = validate_provider_record_scope(
+        validator = (
+            validate_provider_record_scope
+            if session_prep
+            else validate_provider_capture_record_scope
+        )
+        scope = validator(
             session=session,
             binding=binding,
             actor_id=actor.id,
@@ -406,6 +642,8 @@ def ensure_provider_record_scope(
         )
         if scope is None:
             # Existing fixture/import bindings require explicit reconciliation.
+            if session_prep:
+                raise SessionPrepProviderScopeUnavailable
             raise ProviderRecordScopeDenied
         return scope
 

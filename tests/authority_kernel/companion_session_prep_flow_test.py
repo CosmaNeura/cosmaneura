@@ -74,7 +74,10 @@ def flow(monkeypatch):
         "companion_synth",
         "companion_prep_test",
     )
-    engine = create_engine(url, json_serializer=_serialize_pydantic_model)
+    engine = create_engine(
+        url.set(drivername="postgresql+psycopg"),
+        json_serializer=_serialize_pydantic_model,
+    )
     names = {t.name for t in _AUTHORITY_TABLES} | {
         "doctor",
         "patient",
@@ -91,6 +94,10 @@ def flow(monkeypatch):
         "session_prep_artifact",
         "session_prep_build",
         "session_prep_read_receipt",
+        "scribe_capture_admission",
+        "scribe_capture_reviewed_source",
+        "scribe_capture_correction_frontier",
+        "scribe_patient_identity",
     }
     tables = {name: SQLModel.metadata.tables[name] for name in names}
     while True:
@@ -200,7 +207,7 @@ def _prepare(monkeypatch):
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        configuration.SessionPrepProviderSettings(True, frozenset({subject})),
+        configuration.SessionPrepProviderSettings(True),
     )
     token = authority.exchange_context_token(
         clerk_issuer=SETTINGS.clerk_issuer,
@@ -354,17 +361,17 @@ def test_pending_ready_retry_correction_and_new_review(flow):
     )
 
 
-@pytest.mark.parametrize("revoke", ["identity", "membership", "cohort"])
+@pytest.mark.parametrize("revoke", ["identity", "membership", "rollout"])
 def test_current_human_permissions_are_rechecked_on_retry(flow, monkeypatch, revoke):
     f = flow
     a = action(f)
     assert build() == "ready"
     assert read(f, a).json()["result"]["state"] == "ready"
-    if revoke == "cohort":
+    if revoke == "rollout":
         monkeypatch.setattr(
             configuration,
             "SESSION_PREP_PROVIDER_SETTINGS",
-            configuration.SessionPrepProviderSettings(True, frozenset()),
+            configuration.SessionPrepProviderSettings(False),
         )
     else:
         with get_session() as s:

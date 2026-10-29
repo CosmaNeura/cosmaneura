@@ -26,7 +26,6 @@ def runtime():
         AGENT_API_SCRIBE_RECEIVER_CLIENT_ID="22222222-2222-2222-2222-222222222222",
         SCRIBE_SERVICE_TIMEOUT_SECONDS="60",
         SCRIBE_CAPTURE_UPLOAD_ORIGINS="https://syntheticstaging.blob.core.windows.net",
-        SESSION_PREP_PROVIDER_CLERK_SUBJECTS="user_syntheticreview",
     )
     return result
 
@@ -115,6 +114,37 @@ def test_runtime_accepts_legacy_companion_and_explicit_withdrawal_without_mutati
         before = dict(candidate)
         m["validate_runtime"](candidate)
         assert candidate == before
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_runtime_preserves_exact_workflow_flag_group_without_changing_legacy_plans(
+    enabled,
+):
+    for baseline in (runtime(), companion_runtime()):
+        candidate = baseline | dict.fromkeys(m["PRESERVED_WORKFLOW_FLAGS"], enabled)
+        before = dict(candidate)
+        m["validate_runtime"](candidate)
+        assert candidate == before
+        m["validate_runtime"](baseline)
+
+
+@pytest.mark.parametrize("key", sorted(m["PRESERVED_WORKFLOW_FLAGS"]))
+def test_runtime_refuses_partial_workflow_preservation_group(key):
+    candidate = companion_runtime() | dict.fromkeys(
+        m["PRESERVED_WORKFLOW_FLAGS"], "true"
+    )
+    del candidate[key]
+    with pytest.raises(ValueError):
+        m["validate_runtime"](candidate)
+
+
+@pytest.mark.parametrize("key", sorted(m["PRESERVED_WORKFLOW_FLAGS"]))
+@pytest.mark.parametrize("value", [True, "1", "TRUE"])
+def test_runtime_refuses_ambiguous_preserved_workflow_flag_values(key, value):
+    candidate = runtime() | dict.fromkeys(m["PRESERVED_WORKFLOW_FLAGS"], "true")
+    candidate[key] = value
+    with pytest.raises(ValueError):
+        m["validate_runtime"](candidate)
 
 
 @pytest.mark.parametrize(

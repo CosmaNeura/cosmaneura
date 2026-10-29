@@ -5,7 +5,7 @@ This does not import Core, authenticate Clerk, or qualify PostgreSQL installatio
 """
 
 import ast
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal, cast
@@ -52,6 +52,14 @@ class SourceCaptureBinding(ActiveModel, table=True):
     appointment_id: str
 
 
+class SourceAudio(ActiveModel, table=True):
+    id: str = SqlField(primary_key=True)
+    doctor_id: str
+    patient_id: str
+    appointment_id: str
+    created_at: datetime
+
+
 class SourceNote(ActiveModel, table=True):
     id: str = SqlField(primary_key=True)
     doctor_id: str = "doctor_a"
@@ -63,20 +71,30 @@ class SourceNote(ActiveModel, table=True):
 
 def load_route(root: Path):
     tree = ast.parse((root / "app/routes/internal.py").read_text())
-    selected = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef))
-        and node.name in {"NoteDetail", "note_detail"}
-    ]
-    assert len(selected) == 2
-    for node in selected:
-        node.decorator_list = []
+    selected = []
+    for node in tree.body:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in {
+            "_uploaded_note_status",
+            "NoteDetail",
+            "note_detail",
+        }:
+            node.decorator_list = []
+            selected.append(node)
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name)
+            and target.id in {"NoteStatus", "NOTE_PROCESSING_EXPECTED_WINDOW"}
+            for target in node.targets
+        ):
+            selected.append(node)
+    assert len(selected) == 5
     namespace = {
         "Annotated": Annotated,
         "Any": Any,
         "Literal": Literal,
         "cast": cast,
+        "datetime": datetime,
+        "timedelta": timedelta,
+        "timezone": timezone,
         "Request": Request,
         "Response": Response,
         "HTTPException": HTTPException,
@@ -92,6 +110,7 @@ def load_route(root: Path):
         "AIVisitNote": SourceNote,
         "AIVisitTranscript": SourceTranscript,
         "ScribeCaptureBinding": SourceCaptureBinding,
+        "VisitAudioFile": SourceAudio,
         # This suite isolates transcript selection; integrated route tests
         # exercise the authenticated Session Prep review metadata separately.
         "SessionPrepNoteReview": BaseModel,
@@ -126,6 +145,7 @@ def rows(monkeypatch):
             SourceNote,
             SourceTranscript,
             SourceCaptureBinding,
+            SourceAudio,
         )
     ]
     SQLModel.metadata.create_all(engine, tables=tables)

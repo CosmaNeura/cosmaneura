@@ -12,7 +12,6 @@ import app.configuration.session_prep as configuration
 import app.services.authority as authority
 from app.configuration.session_prep import (
     SessionPrepProviderSettings,
-    SessionPrepSyntheticSettings,
 )
 from app.routes.agent import agent_api_app, get_agent_authority_settings
 from app.routes.dependencies.entra_service import (
@@ -48,13 +47,15 @@ from tests.factories import (
 from tests.routes.utils import provision_practice_in_force
 from tests.services.session_prep_authority_test import (
     AUTHORITY_SETTINGS,
+    _configure_session_prep,
+    _provision,
     _token,
 )
 
 
 @pytest.fixture
 def scope(monkeypatch):
-    doctor = DoctorFactory.build().save()
+    doctor = DoctorFactory.build(onboarding_completed_at=datetime.now(UTC)).save()
     practice = provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     appointment = AppointmentFactory.build(
@@ -63,7 +64,7 @@ def scope(monkeypatch):
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+        SessionPrepProviderSettings(True),
     )
     return doctor, practice, patient, appointment
 
@@ -78,27 +79,23 @@ def _record(appointment):
     return ProviderRecordAuthority.get(appointment_id=appointment.id)
 
 
-def test_synthetic_and_real_cohort_overlap_is_a_configuration_error(scope, monkeypatch):
-    doctor, _practice, _patient, appointment = scope
-    monkeypatch.setattr(
-        configuration,
-        "SESSION_PREP_SYNTHETIC_SETTINGS",
-        SessionPrepSyntheticSettings(
-            True,
-            "context_synthetic_test",
-            doctor.clerk_id,
-            str(appointment.id),
-            "synthetic_preview_fixture_test",
-        ),
-    )
-    with pytest.raises(ValueError, match="cohorts must be distinct"):
-        configuration.validate_session_prep_cohorts()
+def test_global_provider_rollout_and_exact_synthetic_fixture_can_coexist(
+    monkeypatch,
+):
+    doctor, fixture, _authority = _provision(monkeypatch, "global-coexistence")
+    _configure_session_prep(monkeypatch, doctor=doctor, fixture=fixture)
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({"user_other_synthetic"})),
+        SessionPrepProviderSettings(True),
     )
-    configuration.validate_session_prep_cohorts()
+
+    token = _token(doctor, str(fixture.appointment.id))
+    context = _context(token)
+
+    assert "session-prep:read" in context.capabilities
+    assert context.session_prep_context_ref is None
+    assert ProviderRecordAuthority.count() == 0
 
 
 def test_verified_exchange_binds_actual_record_and_reuses_practice_and_person(scope):
@@ -240,25 +237,16 @@ def test_unmapped_fixture_membership_is_not_retired_by_real_record_exchange(scop
 
 
 @pytest.mark.parametrize("same_practice", [False, True])
-def test_other_selected_provider_cannot_exchange_or_reuse_record(
-    scope, monkeypatch, same_practice
-):
+def test_other_current_provider_cannot_exchange_or_reuse_record(scope, same_practice):
     doctor, practice, _patient, appointment = scope
     _token(doctor, str(appointment.id))
-    outsider = DoctorFactory.build().save()
+    outsider = DoctorFactory.build(onboarding_completed_at=datetime.now(UTC)).save()
     provision_practice_in_force(outsider)
     if same_practice:
         member = PracticeMember.get(doctor_id=outsider.id)
         assert member is not None
         member.practice_id = practice.id
         save_practice_member(member)
-    monkeypatch.setattr(
-        configuration,
-        "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(
-            True, frozenset({doctor.clerk_id, outsider.clerk_id})
-        ),
-    )
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _token(outsider, str(appointment.id))
     assert ProviderRecordAuthority.count() == 1
@@ -267,7 +255,7 @@ def test_other_selected_provider_cannot_exchange_or_reuse_record(
 @pytest.mark.parametrize(
     "change",
     [
-        "cohort",
+        "rollout_disabled",
         "doctor",
         "member",
         "seat",
@@ -291,7 +279,7 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
     assert record is not None
     binding = AuthorityPersonBinding.one(id=record.binding_id)
     member = PracticeMember.get(doctor_id=doctor.id)
-    if change == "cohort":
+    if change == "rollout_disabled":
         monkeypatch.setattr(
             configuration,
             "SESSION_PREP_PROVIDER_SETTINGS",
@@ -343,6 +331,11 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         tenant = AuthorityTenant.one(id=binding.tenant_id)
         tenant.status = "revoked"
         tenant.save()
+    if change == "rollout_disabled":
+        for current in (_context(token), _context(_token(doctor, str(appointment.id)))):
+            assert current.session_prep_context_ref is None
+            assert "session-prep:read" not in current.capabilities
+        return
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _context(token)
     with pytest.raises(authority.AuthorityRequestDeniedError):

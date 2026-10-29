@@ -1,6 +1,6 @@
 """Only the current clinician can review exactly the displayed note revision."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import Request
@@ -26,12 +26,14 @@ from tests.services.session_prep_note_sources_test import _note, _scope
 def reviewable_note(authenticated_client, monkeypatch):
     _, _, clerk_user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    doctor.onboarding_completed_at = datetime.now(UTC)
+    doctor.save()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     note = _note(doctor, patient)
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+        SessionPrepProviderSettings(True),
     )
     return note
 
@@ -100,6 +102,55 @@ def test_current_visit_exposes_only_prior_note_metadata_and_refreshes_after_revi
     assert after["included_count"] == 1 and after["notes"][0]["status"] == "included"
 
 
+def test_corrected_note_leaves_prep_until_the_displayed_revision_is_reviewed_again(
+    authenticated_client, reviewable_note
+):
+    note = reviewable_note
+    source = AIVisitTranscript.one(id=note.ai_transcript_id)
+    target = AppointmentFactory.build(
+        doctor_id=note.doctor_id,
+        patient_id=source.patient_id,
+        appointment_date=datetime.now(),
+    ).save()
+    target_path = api_app.url_path_for("note_detail", appointment_id=target.id)
+    source_path = api_app.url_path_for(
+        "note_detail", appointment_id=note.appointment_id
+    )
+    original_digest = note_content_sha256(note.note)
+    assert _review(authenticated_client, note).status_code == 200
+    assert (
+        authenticated_client.get(target_path).json()["session_prep_prior_notes"][
+            "included_count"
+        ]
+        == 1
+    )
+
+    note.note = {"Plan": "Corrected synthetic follow-up for explicit clinician review."}
+    note.save()
+    current = authenticated_client.get(source_path)
+    assert current.status_code == 200 and "no-store" in current.headers["cache-control"]
+    revision = current.json()["session_prep_reviews"][str(note.id)]
+    assert revision["reviewed_at"] is None
+    assert revision["content_sha256"] != original_digest
+    excluded = authenticated_client.get(target_path).json()["session_prep_prior_notes"]
+    assert excluded["included_count"] == 0
+    assert excluded["notes"][0]["status"] == "needs_review"
+
+    stale = _review(authenticated_client, note, expected_content_sha256=original_digest)
+    assert stale.status_code == 409
+    assert SessionPrepNoteFinalization.count() == 1
+    reviewed = _review(
+        authenticated_client, note, expected_content_sha256=revision["content_sha256"]
+    )
+    assert reviewed.status_code == 200
+    assert SessionPrepNoteFinalization.count() == 2
+    reopened = authenticated_client.get(source_path).json()
+    assert reopened["session_prep_reviews"][str(note.id)] == reviewed.json()
+    included = authenticated_client.get(target_path).json()["session_prep_prior_notes"]
+    assert included["included_count"] == 1
+    assert included["notes"][0]["status"] == "included"
+
+
 def test_scribe_note_keeps_its_source_and_review_when_another_transcript_arrives(
     authenticated_client, reviewable_note
 ):
@@ -165,21 +216,11 @@ def test_two_current_notes_keep_distinct_sources_and_reviews(
     assert detail["session_prep_reviews"][str(second.id)]["reviewed_at"] is None
 
 
-@pytest.mark.parametrize("disabled", ["switch", "cohort"])
-def test_review_is_default_off_and_scoped_to_selected_providers(
-    authenticated_client, reviewable_note, monkeypatch, disabled
-):
+def test_review_is_default_off(authenticated_client, reviewable_note, monkeypatch):
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(
-            enabled=disabled != "switch",
-            clerk_subjects=(
-                frozenset({"user_unrelated"})
-                if disabled == "cohort"
-                else configuration.SESSION_PREP_PROVIDER_SETTINGS.clerk_subjects
-            ),
-        ),
+        SessionPrepProviderSettings(enabled=False),
     )
     assert _review(authenticated_client, reviewable_note).status_code == 404
     path = api_app.url_path_for(

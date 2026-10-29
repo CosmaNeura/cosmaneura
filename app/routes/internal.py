@@ -31,6 +31,8 @@ import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
 import app.services.reference_labs_gate as reference_labs_gate
+import app.services.session_prep_discovery as session_prep_discovery
+import app.services.session_prep_provider_access as session_prep_provider_access
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -39,6 +41,7 @@ import app.services.zoom_capture_status as zoom_capture_status
 import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
+from app.configuration import session_prep as session_prep_configuration
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.redis import get_redis
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
@@ -187,6 +190,7 @@ from app.models.practice import (
 from app.models.public_onboarding import PracticeInvitation
 from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.scribe_patient_identity import ScribePatientIdentity
+from app.models.visit_audio_file import VisitAudioFile
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
@@ -280,12 +284,32 @@ def intake_list(request: Request) -> IntakeList:
     return IntakeList(appointments=cast(list[Appointment], list(appointment_list)))
 
 
+NoteListStatus = Literal["not-started", "in-progress", "completed"]
+NoteStatus = Literal["not-started", "in-progress", "taking-longer", "completed"]
+NOTE_PROCESSING_EXPECTED_WINDOW = timedelta(minutes=15)
+
+
+def _uploaded_note_status(
+    uploaded_at: datetime,
+    *,
+    now: datetime,
+) -> Literal["in-progress", "taking-longer"]:
+    """Describe an admitted upload without inventing a worker failure state."""
+    if uploaded_at.tzinfo is None:
+        uploaded_at = uploaded_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return (
+        "in-progress"
+        if now - uploaded_at < NOTE_PROCESSING_EXPECTED_WINDOW
+        else "taking-longer"
+    )
+
+
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
     patient_names: dict[str, str] = Field(default_factory=dict)
-    note_statuses: dict[str, Literal["not-started", "completed"]] = Field(
-        default_factory=dict
-    )
+    note_statuses: dict[str, NoteListStatus] = Field(default_factory=dict)
 
 
 @internal_api_app.get("/notes")
@@ -311,7 +335,7 @@ def note_list(request: Request) -> NotetakingData:
 
     appointments = cast(list[Appointment], list(appointment_list))
     appointment_ids = [appointment.id for appointment in appointments]
-    note_statuses: dict[str, Literal["not-started", "completed"]] = {
+    note_statuses: dict[str, NoteListStatus] = {
         str(appointment_id): "not-started" for appointment_id in appointment_ids
     }
     if appointment_ids:
@@ -331,11 +355,37 @@ def note_list(request: Request) -> NotetakingData:
                 )
                 .distinct()
             ).all()
+            # A completed upload is durable server state, unlike the browser's
+            # short-lived upload marker. This lets another browser or device
+            # show note generation without classifying untouched scheduled
+            # visits or Scribe capture drafts as active work.
+            uploaded_ids = session.exec(
+                select(cast(Any, VisitAudioFile.appointment_id))
+                .join(
+                    Appointment,
+                    cast(Any, Appointment.id) == VisitAudioFile.appointment_id,
+                )
+                .where(
+                    VisitAudioFile.doctor_id == doctor.id,
+                    Appointment.doctor_id == doctor.id,
+                    cast(Any, VisitAudioFile.patient_id)
+                    == cast(Any, Appointment.patient_id),
+                )
+                .distinct()
+            ).all()
         for appointment_id in completed_ids:
             # A new appointment may appear after the list read. Never introduce
             # a status key for a visit absent from this response's appointments.
             if str(appointment_id) in note_statuses:
                 note_statuses[str(appointment_id)] = "completed"
+
+        for appointment_id in uploaded_ids:
+            key = str(appointment_id)
+            if key in note_statuses and note_statuses[key] != "completed":
+                # Preserve the deployed list contract during rolling updates.
+                # The additive detail field can distinguish an older upload;
+                # old clients safely ignore it, while their list still renders.
+                note_statuses[key] = "in-progress"
 
     patient_names = {}
     if (
@@ -404,6 +454,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     canonical_patient: Patient | None = None
     patient_identity_state: Literal["provisional", "matched", "confirmed"] | None = None
     private_note_available: bool = False
+    note_status: NoteStatus = "not-started"
 
     @computed_field
     @property
@@ -488,6 +539,22 @@ def note_detail(
         ).first()
         is not None
     )
+    uploaded_audio = cast(
+        VisitAudioFile | None,
+        VisitAudioFile.where(
+            VisitAudioFile.appointment_id == appointment.id,
+            VisitAudioFile.doctor_id == doctor.id,
+            VisitAudioFile.patient_id == appointment.patient_id,
+        )
+        .order_by(cast(Any, VisitAudioFile.created_at).desc())
+        .first(),
+    )
+    note_status: NoteStatus = "completed" if visit_notes else "not-started"
+    if not visit_notes and uploaded_audio is not None:
+        note_status = _uploaded_note_status(
+            cast(datetime, uploaded_audio.created_at),
+            now=datetime.now(timezone.utc),
+        )
     canonical_patient = None
     identity_state = None
     if (
@@ -536,6 +603,7 @@ def note_detail(
             )
             and request.state.auth_state.payload.get("sub") == doctor.clerk_id
         ),
+        note_status=note_status,
         billing_header_sources=note_billing_sources(request, visit_notes),
         session_prep_reviews=(
             note_review_statuses(doctor, visit_notes)
@@ -1016,6 +1084,19 @@ class VisitPrepSettingsData(BaseModel, extra="forbid"):
     can_send_sms: bool
 
 
+class SessionPrepSettingsData(BaseModel, extra="forbid"):
+    """PHI-free discovery state for the current provider context.
+
+    This is intentionally narrower than an execution authorization.
+    ``can_review_sources`` reflects the same current provider/practice/BAA/
+    entitlement gate as review execution. Session Prep read and review routes
+    still re-resolve record and note ownership at request time.
+    """
+
+    eligible: bool
+    can_review_sources: bool
+
+
 class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
@@ -1037,6 +1118,14 @@ class SettingsData(BaseModel, extra="forbid"):
     has_natmed_subscription: bool
     terminology: Terminology
     visit_prep: VisitPrepSettingsData
+    # Optional on the wire so existing generated clients and cached fixtures
+    # remain compatible. The server always supplies the current projection.
+    session_prep: SessionPrepSettingsData = Field(
+        default_factory=lambda: SessionPrepSettingsData(
+            eligible=False,
+            can_review_sources=False,
+        )
+    )
 
 
 def _platform_admin_capability_active(request: Request) -> bool:
@@ -1069,10 +1158,21 @@ def _platform_admin_capability_active(request: Request) -> bool:
 @internal_api_app.get("/settings")
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
+    view_as_active = getattr(request.state, "view_as", None) is not None
     access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    session_prep_access_decision = (
+        session_prep_provider_access.resolve_session_prep_provider_access(doctor)
+    )
     visit_prep_decision = visit_prep_access.resolve_visit_prep_access(
         doctor,
-        view_as_active=getattr(request.state, "view_as", None) is not None,
+        view_as_active=view_as_active,
+    )
+    session_prep_decision = session_prep_discovery.resolve_session_prep_discovery(
+        rollout_enabled=(
+            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
+        ),
+        provider_access_allowed=session_prep_access_decision.allowed,
+        view_as_active=view_as_active,
     )
 
     zoom_integration = DoctorVideoIntegration.get(
@@ -1137,6 +1237,10 @@ def settings_data(request: Request) -> SettingsData:
             can_manage=visit_prep_decision.can_manage,
             can_send_email=visit_prep_decision.can_send_email,
             can_send_sms=visit_prep_decision.can_send_sms,
+        ),
+        session_prep=SessionPrepSettingsData(
+            eligible=session_prep_decision.eligible,
+            can_review_sources=session_prep_decision.can_review_sources,
         ),
     )
 

@@ -47,4 +47,25 @@ describe("account control layout", () => {
     expect(screen.queryByRole("button", { name: "Account menu" })).toBeNull()
     expect(screen.getByText("Account controls disabled")).toHaveClass("sr-only")
   })
+
+  it.each([
+    "https://app.cosmaneura.com",
+    "https://staging-app.cosmaneura.com.evil.invalid",
+    "https://evil.invalid/staging-app.cosmaneura.com",
+    "https://evil.invalid?origin=staging-app.cosmaneura.com",
+    "https://staging-app.cosmaneura.com@evil.invalid",
+    "https://user:pass@staging-app.cosmaneura.com",
+    "http://staging-app.cosmaneura.com",
+    "https://staging-app.cosmaneura.com:8443",
+    "https://api.cosma.localhost/",
+    "not a URL",
+    "",
+    undefined,
+  ])("does not label another target as staging: %s", (url) => {
+    vi.stubEnv("VITE_PYTHON_URL", url)
+    render(<ViewAsAccountControl compact />)
+    expect(screen.queryByText("Staging")).toBeNull()
+    expect(screen.queryByTitle("Staging")).toBeNull()
+    expect(screen.getByRole("button", { name: "Account menu" })).toBeVisible()
+  })
 })

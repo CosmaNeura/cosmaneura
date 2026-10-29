@@ -128,9 +128,7 @@ def workflow(engine, monkeypatch):
     monkeypatch.setattr(
         session_prep,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        session_prep.SessionPrepProviderSettings(
-            enabled=True, clerk_subjects=frozenset({args["verified_clerk_subject"]})
-        ),
+        session_prep.SessionPrepProviderSettings(enabled=True),
     )
     provisioned = apply(engine, args, plan(engine, args).plan_sha256)
     with session_for(engine) as session:

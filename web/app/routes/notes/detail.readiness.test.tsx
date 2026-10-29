@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { NoteDetail } from "~/configuration/client"
 
 import NoteDetailPage, { ErrorBoundary, clientLoader } from "./detail"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 
 const { read } = vi.hoisted(() => ({ read: vi.fn() }))
@@ -123,9 +124,19 @@ async function openVisit() {
     ],
     { initialEntries: ["/notes/synthetic_visit"] },
   )
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { retry: false },
+    },
+  })
   let rendered!: ReturnType<typeof render>
   await act(async () => {
-    rendered = render(<RouterProvider router={router} />)
+    rendered = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
   })
   return { router, ...rendered }
 }

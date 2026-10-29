@@ -9,6 +9,14 @@ mock_provider "azapi" {
 }
 
 mock_provider "azurerm" {
+  mock_data "azurerm_user_assigned_identity" {
+    defaults = {
+      id           = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
+      client_id    = "10000000-0000-4000-8000-000000000003"
+      principal_id = "10000000-0000-4000-8000-000000000004"
+    }
+  }
+
   mock_resource "azurerm_ai_services" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.CognitiveServices/accounts/mock"
@@ -152,10 +160,13 @@ override_data {
       SCRIBE_CALLER_CLIENT_ID            = ""
       SCRIBE_HANDOFF_ENABLED             = "false"
       SCRIBE_RECONCILER_CALLER_CLIENT_ID = ""
+      SCRIBE_CAPTURE_ENABLED             = "forbidden-generic-override"
       SENTRY_DSN                         = ""
       SESSION_SECRET_KEY                 = "not-a-secret"
       SMTP_URL                           = "smtp://placeholder.invalid:1025"
-      SOVEREIGN_RECORD_GRANT_SECRET      = "not-a-secret"
+      # Canonical 32-byte Fernet test key (43 URL-safe base64 characters plus
+      # one pad). This is fixed non-production test material.
+      SOVEREIGN_RECORD_GRANT_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       # Production must always declare live/test mode explicitly, even while
       # both default-off Stripe gates are disabled. Keep the PR plan inert
       # while exercising that fail-closed configuration invariant.
@@ -228,6 +239,248 @@ run "secretless_static_plan" {
     ])
     error_message = "No dormant source policy or non-API CAB capability may be exposed"
   }
+
+  assert {
+    condition = alltrue([
+      for name, value in local.scribe_native_api_public_values :
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value
+    ]) && alltrue([for value in values(local.scribe_native_api_public_values) : value == "false" || value == ""])
+    error_message = "native Scribe and durable Zoom production settings must be explicit and dark by default"
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "false"
+    ])
+    error_message = "the durable Zoom cutover must remain consistently disabled on every production workload by default"
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      alltrue([
+        for name in setsubtract(toset(keys(local.scribe_native_api_public_values)), toset(keys(local.zoom_durable_public_values))) :
+        !contains([for entry in workload.template[0].container[0].env : entry.name], name)
+      ])
+    ])
+    error_message = "native device and encounter gates must remain API-only"
+  }
+
+  assert {
+    condition = alltrue([
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_WORKFLOW_ENABLED"]) == "false",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_HANDOFF_ENABLED"]) == "false",
+    ])
+    error_message = "the production wiring must not activate the unprovisioned external workflow or legacy handoff"
+  }
+
+  assert {
+    condition = (
+      !azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 0
+    )
+    error_message = "PostgreSQL Entra auth and the Scribe migration administrator must remain absent by default while existing password auth remains enabled"
+  }
+}
+
+run "session_prep_activation_projects_complete_worker_runtime" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    session_prep_production_rollout = {
+      enabled             = true
+      sovereign_client_id = "11111111-1111-1111-1111-111111111111"
+      agent_api_audience  = "22222222-2222-2222-2222-222222222222"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.app, azurerm_container_app.worker] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "AUTHORITY_KERNEL_ENABLED"]) == "true"
+    ])
+    error_message = "Session Prep activation must enable the Authority Kernel in both API and worker"
+  }
+
+  assert {
+    condition = alltrue([
+      for name, value in local.session_prep_authority_runtime_public_values :
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == name]) == value
+      ]) && one([
+      for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value
+      if entry.name == "AUTHORITY_CLERK_ISSUER"
+    ]) == local.session_prep_clerk_issuer
+    error_message = "The Session Prep worker must receive the complete non-secret Authority Kernel runtime contract"
+  }
+
+  assert {
+    condition = alltrue([
+      for name in keys(local.session_prep_api_public_values) :
+      !contains([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name], name)
+      ]) && !contains(
+      [for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name],
+      "SOVEREIGN_RECORD_GRANT_SECRET",
+    )
+    error_message = "Agent API identity and record-grant capability must remain API-only"
+  }
+}
+
+run "scribe_core_native_independent_projection" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = []
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = true
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = true
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_ENCOUNTER_CREATION_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CAPTURE_ENABLED"]) == "false",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "true",
+    ])
+    error_message = "Core-native encounter and durable Zoom gates must project without activating the absent Scribe workflow"
+  }
+}
+
+run "scribe_capture_complete_projection" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    enable_scribe_workflow                         = true
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_service_base_url                        = "https://scribe.example.invalid"
+    scribe_service_scope                           = "api://00000000-0000-0000-0000-000000000000/.default"
+    scribe_native_production_rollout = {
+      capture_enabled                       = true
+      capture_long_visits_enabled           = true
+      capture_notes_enabled                 = true
+      capture_recovery_enabled              = true
+      capture_source_enabled                = true
+      capture_upload_origins                = ["https://uploads.example.invalid"]
+      capture_working_transcripts_enabled   = true
+      combined_session_preparation_enabled  = true
+      encounter_creation_enabled            = true
+      encounter_prep_enabled                = true
+      zoom_durable_capture_bindings_enabled = true
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for name, value in local.scribe_native_api_public_values :
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value
+    ]) && local.scribe_native_api_public_values.SCRIBE_CAPTURE_UPLOAD_ORIGINS == "https://uploads.example.invalid"
+    error_message = "a complete reviewed Scribe workflow must project every exact native gate and upload origin"
+  }
+}
+
+run "reject_capture_without_workflow" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = true
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = ["https://uploads.example.invalid"]
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_non_origin_upload_target" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = ["https://uploads.example.invalid/container?token=forbidden"]
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_subfeature_without_capture" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = true
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = []
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_controlled_rollout_name_in_api_only_secrets" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_api_only_secret_vars = [
+      "RECALL_WEBHOOK_SECRET",
+      "SCRIBE_CAPTURE_ENABLED",
+      "SOVEREIGN_RECORD_GRANT_SECRET",
+    ]
+  }
+
+  expect_failures = [azurerm_container_app.app]
 }
 
 run "public_phi_observability_static_plan" {
@@ -369,7 +622,7 @@ run "core_cab_api_only_configured_projection" {
         SENTRY_DSN                         = ""
         SESSION_SECRET_KEY                 = "not-a-secret"
         SMTP_URL                           = "smtp://placeholder.invalid:1025"
-        SOVEREIGN_RECORD_GRANT_SECRET      = "not-a-secret"
+        SOVEREIGN_RECORD_GRANT_SECRET      = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         # Production must always declare live/test mode explicitly, even while
         # both default-off Stripe gates are disabled. Keep the PR plan inert
         # while exercising that fail-closed configuration invariant.
@@ -403,4 +656,80 @@ run "core_cab_api_only_configured_projection" {
     !contains([for secret in workload.secret : secret.name], "billing-source-policy-json") && alltrue([for entry in workload.template[0].container[0].env : !startswith(entry.name, "CORE_CAB_") && entry.name != "BILLING_SOURCE_POLICY_JSON"])])
     error_message = "Configured CAB input must not reach worker or scheduler"
   }
+}
+
+run "scribe_database_entra_auth_is_additive_and_exact" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_entra_auth              = true
+    enable_scribe_database_migration_administrator = true
+    scribe_database_migration_identity_binding = {
+      resource_id  = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
+      client_id    = "10000000-0000-4000-8000-000000000003"
+      principal_id = "10000000-0000-4000-8000-000000000004"
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].tenant_id == "d51754d0-bba5-4810-820e-afac542844d6"
+    )
+    error_message = "Scribe database support must add exact-tenant Entra auth without disabling the existing password path"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 1 &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].server_name == azurerm_postgresql_flexible_server.main.name &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].resource_group_name == azurerm_resource_group.main.name &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].tenant_id == "d51754d0-bba5-4810-820e-afac542844d6" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].object_id == var.scribe_database_migration_identity_binding.principal_id &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].principal_name == "cosmaneura-scribe-production-database-migrations" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].principal_type == "ServicePrincipal"
+    )
+    error_message = "only the exact reviewed Scribe migration UAMI may receive temporary PostgreSQL administrator authority"
+  }
+}
+
+run "scribe_database_entra_auth_can_remain_after_admin_cleanup" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_entra_auth              = true
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 0
+    )
+    error_message = "migration-admin cleanup must preserve both Entra runtime authentication and the existing password rollback path"
+  }
+}
+
+run "scribe_database_admin_refuses_disabled_entra_auth" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_migration_administrator = true
+    scribe_database_migration_identity_binding = {
+      resource_id  = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
+      client_id    = "10000000-0000-4000-8000-000000000003"
+      principal_id = "10000000-0000-4000-8000-000000000004"
+    }
+  }
+
+  expect_failures = [
+    var.enable_scribe_database_migration_administrator,
+  ]
 }

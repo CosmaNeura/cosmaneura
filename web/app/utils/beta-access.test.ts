@@ -70,4 +70,28 @@ describe("isBetaUserEnabled", () => {
     expect(isBetaUserEnabled(null)).toBe(false)
     expect(isBetaUserEnabled("")).toBe(false)
   })
+
+  it.each([
+    "https://staging-app.cosmaneura.com.evil.invalid",
+    "https://evil.invalid/staging-app.cosmaneura.com",
+    "https://evil.invalid?origin=app.cosmaneura.com",
+    "https://staging-app.cosmaneura.com@evil.invalid",
+    "https://user:pass@staging-app.cosmaneura.com",
+    "http://staging-app.cosmaneura.com",
+    "https://app.cosmaneura.com:8443",
+    "https://preview.example.invalid",
+    "not a URL",
+    "",
+    undefined,
+  ])("denies both cohorts for an untrusted target: %s", (url) => {
+    vi.stubEnv("VITE_PYTHON_URL", url)
+    expect(isBetaUserEnabled("zoom-reviewer@cosmaneura.com")).toBe(false)
+    expect(isBetaUserEnabled("sweeman@fiathealth.org")).toBe(false)
+  })
+
+  it("preserves the production beta cohort in explicit local development", () => {
+    vi.stubEnv("VITE_PYTHON_URL", "https://api.cosma.localhost/")
+    expect(isBetaUserEnabled("sweeman@fiathealth.org")).toBe(true)
+    expect(isBetaUserEnabled("zoom-reviewer@cosmaneura.com")).toBe(false)
+  })
 })

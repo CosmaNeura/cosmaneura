@@ -19,6 +19,9 @@ from app.services.session_prep_note_sources import (
     note_content_sha256,
     prior_note_overview,
 )
+from app.services.session_prep_provider_access import (
+    resolve_session_prep_provider_access,
+)
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -51,8 +54,13 @@ def prior_notes_for_session_prep(
         return None
     try:
         with get_session() as managed:
+            session = cast(Session, managed)
+            if not resolve_session_prep_provider_access(
+                doctor, session=session
+            ).allowed:
+                return None
             return prior_note_overview(
-                session=cast(Session, managed),
+                session=session,
                 doctor_id=doctor.id,
                 target_appointment_id=appointment_id,
                 observed_at=datetime.now(UTC),
@@ -72,11 +80,14 @@ def note_review_statuses(
         return None
     eligible: dict[str, SessionPrepNoteReview] = {}
     with get_session() as managed:
+        session = cast(Session, managed)
+        if not resolve_session_prep_provider_access(doctor, session=session).allowed:
+            return None
         for note in notes:
             if (
                 note.doctor_id != doctor.id
                 or note.superseded_at is not None
-                or note_has_saved_capture_correction(cast(Session, managed), note)
+                or note_has_saved_capture_correction(session, note)
             ):
                 continue
             try:
@@ -85,9 +96,8 @@ def note_review_statuses(
                 )
             except NoteSourceDenied:
                 continue
-    if not eligible:
-        return eligible
-    with get_session() as session:
+        if not eligible:
+            return eligible
         rows = session.exec(
             select(SessionPrepNoteFinalization)
             .join(
@@ -127,6 +137,12 @@ def review_note_for_session_prep(
     try:
         with get_session() as managed:
             session = cast(Session, managed)
+            if not resolve_session_prep_provider_access(
+                doctor, session=session
+            ).allowed:
+                raise HTTPException(
+                    status_code=404, detail="Session Prep is unavailable."
+                )
             reviewed = finalize_note_for_session_prep(
                 session=session,
                 doctor_id=doctor.id,

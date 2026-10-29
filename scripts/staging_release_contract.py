@@ -42,7 +42,6 @@ FIELDS = FLAGS | {
     "SCRIBE_SERVICE_TIMEOUT_SECONDS",
     "SCRIBE_CAPTURE_UPLOAD_ORIGINS",
     "AGENT_API_SCRIBE_RECEIVER_CLIENT_ID",
-    "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
 }
 COMPANION_FLAGS = {
     "COMPANION_ENCOUNTER_READ_ENABLED",
@@ -50,6 +49,13 @@ COMPANION_FLAGS = {
     "COMPANION_APPOINTMENT_SETUP_ENABLED",
 }
 COMPANION_FIELDS = COMPANION_FLAGS | {"AGENT_API_COMPANION_CLIENT_ID"}
+PRESERVED_WORKFLOW_FLAGS = {
+    "SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED",
+    "SCRIBE_NATIVE_REQUEST_TIMING",
+    "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
+    "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+    "SESSION_PREP_HEALTH_ALERTS_ENABLED",
+}
 
 
 def require(value: object) -> None:
@@ -103,11 +109,23 @@ def bound_json(filename: str, digest: str):
 def validate_runtime(runtime: dict[str, str]) -> None:
     # Historical Scribe-only plans remain valid. Companion admission is an
     # explicit, complete group, including an empty caller for full withdrawal.
+    # Current workflow preservation is another exact, optional complete group;
+    # no arbitrary environment keys or partial flag defaults are admitted.
+    field_groups = (FIELDS, FIELDS | COMPANION_FIELDS)
     require(
-        type(runtime) is dict and set(runtime) in (FIELDS, FIELDS | COMPANION_FIELDS)
+        type(runtime) is dict
+        and set(runtime)
+        in (
+            *field_groups,
+            *(group | PRESERVED_WORKFLOW_FLAGS for group in field_groups),
+        )
     )
     require(all(type(value) is str and len(value) < 2048 for value in runtime.values()))
     require(all(runtime[key] in {"true", "false"} for key in FLAGS))
+    if PRESERVED_WORKFLOW_FLAGS <= runtime.keys():
+        require(
+            all(runtime[key] in {"true", "false"} for key in PRESERVED_WORKFLOW_FLAGS)
+        )
     if COMPANION_FIELDS <= runtime.keys():
         require(all(runtime[key] in {"true", "false"} for key in COMPANION_FLAGS))
         caller = runtime["AGENT_API_COMPANION_CLIENT_ID"]
@@ -154,9 +172,6 @@ def validate_runtime(runtime: dict[str, str]) -> None:
             for value in origins
         )
     )
-    subjects = runtime["SESSION_PREP_PROVIDER_CLERK_SUBJECTS"].split(",")
-    require(0 < len(subjects) <= 10 and len(set(subjects)) == len(subjects))
-    require(all(re.fullmatch(r"user_[A-Za-z0-9]{10,64}", value) for value in subjects))
 
 
 def validate_recovery(recovery: dict[str, dict[str, str]]) -> None:
@@ -207,7 +222,7 @@ def resolve_publication(
         require(type(spec["path"]) is str and type(spec["sha256"]) is str)
         values.append(bound_json(cast(str, spec["path"]), cast(str, spec["sha256"])))
     original, published = values
-    # No transitive receipt chains or implicit changes to the release cohort,
+    # No transitive receipt chains or implicit changes to the access model,
     # recovery baseline, schema, frontend, source archive, or build materials.
     require(published.get("schema_version") == 1)
     deployment_inputs(original, publication["original_plan"]["sha256"], published)

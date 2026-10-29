@@ -152,6 +152,117 @@ variable "python_public_vars" {
     "AUTHORITY_CLERK_ISSUER",
     "DURABLE_WEBHOOK_INBOX_ENABLED"
   ]
+
+  validation {
+    condition = length(setintersection(var.python_public_vars, toset([
+      "AGENT_API_AUDIENCE",
+      "AGENT_API_ENABLED",
+      "AGENT_API_SOVEREIGN_CLIENT_IDS",
+      "AUTHORITY_KERNEL_ENABLED",
+      "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
+      "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
+      "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
+      "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
+      "SESSION_PREP_PROVIDER_ENABLED",
+      "SCRIBE_CAPTURE_ENABLED",
+      "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
+      "SCRIBE_CAPTURE_NOTES_ENABLED",
+      "SCRIBE_CAPTURE_RECOVERY_ENABLED",
+      "SCRIBE_CAPTURE_SOURCE_ENABLED",
+      "SCRIBE_CAPTURE_UPLOAD_ORIGINS",
+      "SCRIBE_CAPTURE_WORKING_TRANSCRIPTS_ENABLED",
+      "SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED",
+      "SCRIBE_ENCOUNTER_CREATION_ENABLED",
+      "SCRIBE_ENCOUNTER_PREP_ENABLED",
+      "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+    ]))) == 0
+    error_message = "Session Prep, native Scribe, and durable Zoom rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
+  }
+}
+
+variable "session_prep_production_rollout" {
+  description = "Source-controlled global production rollout for provider Session Prep. Defaults are dark; activation requires a reviewed Tier-2 production plan and a separately built provider frontend/Sovereign pair. Current provider/practice/BAA/entitlement access controls eligibility."
+  type = object({
+    enabled             = bool
+    sovereign_client_id = string
+    agent_api_audience  = string
+  })
+  nullable = false
+  default = {
+    enabled             = false
+    sovereign_client_id = ""
+    agent_api_audience  = ""
+  }
+
+  validation {
+    condition = !var.session_prep_production_rollout.enabled || (
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.session_prep_production_rollout.sovereign_client_id)) &&
+      var.session_prep_production_rollout.sovereign_client_id != "00000000-0000-0000-0000-000000000000" &&
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.session_prep_production_rollout.agent_api_audience)) &&
+      var.session_prep_production_rollout.agent_api_audience != "00000000-0000-0000-0000-000000000000"
+    )
+    error_message = "Session Prep production activation requires nonzero canonical Entra audience and Sovereign client UUIDs"
+  }
+}
+
+variable "scribe_native_production_rollout" {
+  description = "Source-controlled production rollout for native Scribe and durable Zoom behavior. Defaults are dark and changes require a reviewed Tier-2 production plan."
+  type = object({
+    capture_enabled                       = bool
+    capture_long_visits_enabled           = bool
+    capture_notes_enabled                 = bool
+    capture_recovery_enabled              = bool
+    capture_source_enabled                = bool
+    capture_upload_origins                = set(string)
+    capture_working_transcripts_enabled   = bool
+    combined_session_preparation_enabled  = bool
+    encounter_creation_enabled            = bool
+    encounter_prep_enabled                = bool
+    zoom_durable_capture_bindings_enabled = bool
+  })
+  nullable = false
+  default = {
+    capture_enabled                       = false
+    capture_long_visits_enabled           = false
+    capture_notes_enabled                 = false
+    capture_recovery_enabled              = false
+    capture_source_enabled                = false
+    capture_upload_origins                = []
+    capture_working_transcripts_enabled   = false
+    combined_session_preparation_enabled  = false
+    encounter_creation_enabled            = false
+    encounter_prep_enabled                = false
+    zoom_durable_capture_bindings_enabled = false
+  }
+
+  validation {
+    condition = !var.scribe_native_production_rollout.capture_enabled || alltrue([
+      var.enable_scribe_workflow,
+      length(var.scribe_native_production_rollout.capture_upload_origins) > 0,
+    ])
+    error_message = "Native capture requires the separately reviewed Scribe workflow and at least one exact upload origin"
+  }
+
+  validation {
+    condition = var.scribe_native_production_rollout.capture_enabled || !anytrue([
+      var.scribe_native_production_rollout.capture_long_visits_enabled,
+      var.scribe_native_production_rollout.capture_notes_enabled,
+      var.scribe_native_production_rollout.capture_recovery_enabled,
+      var.scribe_native_production_rollout.capture_source_enabled,
+      var.scribe_native_production_rollout.capture_working_transcripts_enabled,
+      var.scribe_native_production_rollout.combined_session_preparation_enabled,
+      var.scribe_native_production_rollout.encounter_prep_enabled,
+    ])
+    error_message = "Native capture subfeatures require capture_enabled"
+  }
+
+  validation {
+    condition = alltrue([
+      for origin in var.scribe_native_production_rollout.capture_upload_origins :
+      can(regex("^https://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+(:443)?$", origin))
+    ])
+    error_message = "Capture upload origins must be exact HTTPS origins with no credentials, path, query, fragment, whitespace, wildcard, or non-443 port"
+  }
 }
 
 variable "enable_scribe_workflow" {
