@@ -538,19 +538,20 @@ def note_detail(
         ).first()
         is not None
     )
-    uploaded_audio = (
+    uploaded_audio = cast(
+        VisitAudioFile | None,
         VisitAudioFile.where(
             VisitAudioFile.appointment_id == appointment.id,
             VisitAudioFile.doctor_id == doctor.id,
             VisitAudioFile.patient_id == appointment.patient_id,
         )
         .order_by(cast(Any, VisitAudioFile.created_at).desc())
-        .first()
+        .first(),
     )
     note_status: NoteStatus = "completed" if visit_notes else "not-started"
     if not visit_notes and uploaded_audio is not None:
         note_status = _uploaded_note_status(
-            uploaded_audio.created_at,
+            cast(datetime, uploaded_audio.created_at),
             now=datetime.now(timezone.utc),
         )
     canonical_patient = None
