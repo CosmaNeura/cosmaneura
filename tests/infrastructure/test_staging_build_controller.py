@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -289,10 +290,10 @@ class ControllerTests(unittest.TestCase):
             source_archive=b"invented-source",
             source_archive_sha256=m.sha(b"invented-source"),
             github_user_sha256=self.plan["github_user_sha256"],
-            protection_sha256="policy",
+            protection_sha256="9" * 64,
             github_actions_enabled=True,
         )
-        source.BuildSourceReader.return_value.protections.return_value = "policy"
+        source.BuildSourceReader.return_value.protections.return_value = "9" * 64
         if changed_source:
             source.BuildSourceReader.return_value.final_boundaries.side_effect = (
                 RuntimeError("invented drift")
@@ -371,7 +372,7 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(value["local_bindings_passed"])
         self.assertTrue(value["authenticated_source_checked"])
         self.assertIs(value["github_actions_enabled"], True)
-        self.assertEqual(value["protection_sha256"], "policy")
+        self.assertEqual(value["protection_sha256"], "9" * 64)
         self.assertFalse(value["build_started"])
         self.assertEqual(value["candidate_sha"], m.CANDIDATE)
         self.assertEqual(value["approval_pr_number"], 385)
@@ -381,6 +382,67 @@ class ControllerTests(unittest.TestCase):
         modules["staging_human_build_inputs"].prepare_build_inputs.assert_not_called()
         modules["staging_human_build_executor"].build_candidate.assert_not_called()
         self.assertFalse(self.parent.exists())
+
+    def test_actual_success_record_satisfies_closed_publisher_contract(self):
+        self.configure_unchanged_schema()
+        modules = self.fake_modules()
+        with patch.object(m, "load_modules", return_value=modules):
+            result = self.invoke()
+        self.assertEqual(
+            result,
+            json.loads((self.parent / "controller-result.json").read_bytes()),
+        )
+        publisher = (ROOT / "infra-staging/publish-local.sh").read_text()
+        opening = "\tlength == 2 and (.[0] as $result | .[1] as $plan |"
+        closing = "' >/dev/null\nBUILD_ROOT="
+        self.assertEqual(publisher.count(opening), 1)
+        self.assertEqual(publisher.count(closing), 1)
+        start = publisher.index(opening)
+        program = publisher[start : publisher.index(closing, start)]
+
+        def accepted(value):
+            command = ["/usr/bin/jq", "-se"]
+            for name, bound in (
+                ("candidate", self.plan["candidate_sha"]),
+                ("controller", self.plan["controller_sha"]),
+                ("plan_sha256", result["plan_sha256"]),
+                ("source_sha256", self.plan["source_archive_sha256"]),
+            ):
+                command += ["--arg", name, bound]
+            return (
+                subprocess.run(
+                    command + [program],
+                    input=m.canonical(value) + b"\n" + m.canonical(self.plan) + b"\n",
+                    capture_output=True,
+                    check=False,
+                    env={"PATH": "/usr/bin:/bin"},
+                    timeout=10,
+                ).returncode
+                == 0
+            )
+
+        self.assertTrue(accepted(result))
+        self.assertTrue(accepted(result | {"github_actions_enabled": False}))
+        for field, values in (
+            ("github_actions_enabled", (None, "true", 1, {})),
+            ("protection_sha256", (None, "", "9" * 63, "G" * 64, 1)),
+            ("candidate_sha", ("a" * 40,)),
+            ("controller_sha", ("a" * 40,)),
+            ("plan_sha256", ("a" * 64,)),
+            ("source_archive_sha256", ("a" * 64,)),
+            ("module_sha256s", ({},)),
+            ("publication_authorized", (True,)),
+            ("deployment_authorized", (True,)),
+        ):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.assertFalse(accepted(result | {field: value}))
+        for field in ("github_actions_enabled", "protection_sha256"):
+            changed = dict(result)
+            del changed[field]
+            with self.subTest(missing=field):
+                self.assertFalse(accepted(changed))
+        self.assertFalse(accepted(result | {"unreviewed_field": True}))
 
     def test_changed_helper_refuses_before_any_import(self):
         (self.root / "scripts/staging_build_source.py").write_text(
@@ -630,7 +692,7 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(value["complete"])
         self.assertEqual(value["actor"], "delegated_assistant")
         self.assertIs(value["github_actions_enabled"], True)
-        self.assertEqual(value["protection_sha256"], "policy")
+        self.assertEqual(value["protection_sha256"], "9" * 64)
         self.assertEqual(value["candidate_sha"], m.CANDIDATE)
         self.assertFalse(
             value["publication_authorized"] or value["deployment_authorized"]
