@@ -27,6 +27,13 @@ SENSITIVE_KEYS = (
     "DATABASE_URL",
     "SOVEREIGN_RECORD_GRANT_SECRET",
 )
+PRESERVED_FLAG_SCOPES = {
+    "SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED": {API},
+    "SCRIBE_NATIVE_REQUEST_TIMING": {API},
+    "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED": {API},
+    "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED": {API, WORKER},
+    "SESSION_PREP_HEALTH_ALERTS_ENABLED": {WORKER},
+}
 REFUSAL = "staging_runtime_configuration_refused\n"
 
 
@@ -223,6 +230,42 @@ def test_contract_inventory_covers_all_workloads_and_sensitive_keys(contracts):
         assert flag in by_name[API]["public_names"]
         assert flag not in by_name[WORKER]["public_names"]
         assert flag not in by_name[SCHEDULER]["public_names"]
+
+
+def test_actual_deployer_preserves_current_flags_only_on_their_existing_workloads(
+    contracts,
+):
+    for flag, owners in PRESERVED_FLAG_SCOPES.items():
+        actual = {
+            contract["name"]
+            for contract in contracts
+            if flag in contract["public_names"]
+        }
+        assert actual == owners
+
+
+@pytest.mark.parametrize("flag", sorted(PRESERVED_FLAG_SCOPES))
+def test_preserved_flag_drift_changes_fingerprint_and_refuses_live_state(
+    configuration, contracts, flag
+):
+    configuration.update(dict.fromkeys(PRESERVED_FLAG_SCOPES, "true"))
+    baseline = _fingerprint(configuration, contracts)
+    changed = dict(configuration, **{flag: "false"})
+    assert _fingerprint(changed, contracts) != baseline
+    for contract in contracts:
+        payload = _workload_payload(configuration, contract)
+        if contract["name"] in PRESERVED_FLAG_SCOPES[flag]:
+            assert payload["state"]["publicConfig"][flag] == "true"
+            result = _cli("--check-workload", payload)
+            assert result.returncode == 0, result.stderr
+            payload["state"]["publicConfig"][flag] = "false"
+        else:
+            assert flag not in payload["state"]["publicConfig"]
+            payload["state"]["publicConfig"][flag] = "true"
+        result = _cli("--check-workload", payload)
+        assert result.returncode != 0
+        assert result.stderr == REFUSAL
+        _no_secret_output(result, configuration)
 
 
 @pytest.mark.parametrize(
