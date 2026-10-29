@@ -331,6 +331,11 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         tenant = AuthorityTenant.one(id=binding.tenant_id)
         tenant.status = "revoked"
         tenant.save()
+    if change == "rollout_disabled":
+        for current in (_context(token), _context(_token(doctor, str(appointment.id)))):
+            assert current.session_prep_context_ref is None
+            assert "session-prep:read" not in current.capabilities
+        return
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _context(token)
     with pytest.raises(authority.AuthorityRequestDeniedError):

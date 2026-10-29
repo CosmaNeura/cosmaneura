@@ -112,16 +112,23 @@ def _visit(
         scribe_catalog_rows.validate_record_row(
             session, batch, doctor_id=doctor_id, subject=subject, link=link
         )
-    elif (
-        provider_record_authority.validate_provider_record_scope(
+    else:
+        record_scope = provider_record_authority.validate_provider_capture_record_scope(
             session=session,
             binding=binding,
             actor_id=link.actor_id,
             clerk_subject=subject,
         )
-        is None
-    ):
-        raise authority.AuthorityRequestDeniedError
+        if record_scope is None:
+            scribe_catalog_rows.validate_unmapped_record(
+                session,
+                appointment=appointment,
+                patient=patient,
+                binding=binding,
+                doctor_id=doctor_id,
+                subject=subject,
+                link=link,
+            )
     capture_query = select(ScribeCaptureBinding).where(
         ScribeCaptureBinding.appointment_id == appointment.id,
         ScribeCaptureBinding.actor_id == link.actor_id,

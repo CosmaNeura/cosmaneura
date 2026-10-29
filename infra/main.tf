@@ -15,6 +15,7 @@ locals {
   }
 
   azure_subscription_id = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+  azure_tenant_id       = "d51754d0-bba5-4810-820e-afac542844d6"
   environment           = "prod"
   name                  = "cosmaneura-${local.environment}"
 
@@ -427,7 +428,13 @@ resource "azurerm_postgresql_flexible_server" "main" {
   public_network_access_enabled = true
 
   authentication {
-    password_auth_enabled = true
+    active_directory_auth_enabled = var.enable_scribe_database_entra_auth
+    password_auth_enabled         = true
+    tenant_id = (
+      var.enable_scribe_database_entra_auth
+      ? local.azure_tenant_id
+      : null
+    )
   }
 
   # TODO I need to pull this from 1p

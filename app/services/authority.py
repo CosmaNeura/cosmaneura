@@ -21,7 +21,9 @@ from app.services.provider_database_deadline import (
 )
 from app.services.provider_record_authority import (
     ProviderRecordScopeDenied,
-    ensure_provider_record_scope,
+    SessionPrepProviderScopeUnavailable,
+    ensure_session_prep_record_scope,
+    validate_provider_capture_record_scope,
     validate_provider_record_scope,
 )
 
@@ -452,12 +454,19 @@ def exchange_context_token(
         )
     ):
         try:
-            provider_scope = ensure_provider_record_scope(
-                session=db,
-                clerk_issuer=clerk_issuer,
-                clerk_subject=clerk_subject,
-                record_ref=record_ref,
-            )
+            # Session Prep provisioning is optional to the shared provider
+            # exchange. A savepoint prevents a refused mapping from leaving
+            # partial identity/tenant writes before generic Scribe authority
+            # is evaluated below.
+            with db.begin_nested():
+                provider_scope = ensure_session_prep_record_scope(
+                    session=db,
+                    clerk_issuer=clerk_issuer,
+                    clerk_subject=clerk_subject,
+                    record_ref=record_ref,
+                )
+        except SessionPrepProviderScopeUnavailable:
+            provider_scope = None
         except ProviderRecordScopeDenied:
             raise AuthorityRequestDeniedError from None
     actor, source_identity = _actor_for_clerk_identity(
@@ -477,14 +486,29 @@ def exchange_context_token(
         if binding is None:
             raise AuthorityRequestDeniedError
         try:
-            provider_scope = validate_provider_record_scope(
+            validated_scope = validate_provider_record_scope(
                 session=db,
                 binding=binding,
                 actor_id=actor.id,
                 clerk_subject=source_identity.subject,
             )
+        except SessionPrepProviderScopeUnavailable:
+            try:
+                validated_scope = validate_provider_capture_record_scope(
+                    session=db,
+                    binding=binding,
+                    actor_id=actor.id,
+                    clerk_subject=source_identity.subject,
+                )
+            except ProviderRecordScopeDenied:
+                raise AuthorityRequestDeniedError from None
+            provider_scope = None
         except ProviderRecordScopeDenied:
             raise AuthorityRequestDeniedError from None
+        if provider_scope is not None and (
+            validated_scope is None or validated_scope.id != provider_scope.id
+        ):
+            raise AuthorityRequestDeniedError
     if provider_scope is not None:
         from app.services.session_prep_runtime import schedule_scope_build
 
@@ -733,17 +757,31 @@ def _context_for_session(
             raise AuthorityRequestDeniedError
         if source_identity is None:
             raise AuthorityRequestDeniedError
+        session_prep_record_scope = None
         try:
-            record_scope = validate_provider_record_scope(
+            session_prep_record_scope = validate_provider_record_scope(
                 session=session,
                 binding=binding,
                 actor_id=actor.id,
                 clerk_subject=source_identity.subject,
             )
+            record_scope = session_prep_record_scope
+        except SessionPrepProviderScopeUnavailable:
+            try:
+                record_scope = validate_provider_capture_record_scope(
+                    session=session,
+                    binding=binding,
+                    actor_id=actor.id,
+                    clerk_subject=source_identity.subject,
+                )
+            except ProviderRecordScopeDenied:
+                raise AuthorityRequestDeniedError from None
         except ProviderRecordScopeDenied:
             raise AuthorityRequestDeniedError from None
-        if record_scope is not None:
-            session_prep_context_ref = record_scope.context_snapshot_ref
+        if session_prep_record_scope is not None:
+            if record_scope is None or session_prep_record_scope.id != record_scope.id:
+                raise AuthorityRequestDeniedError
+            session_prep_context_ref = session_prep_record_scope.context_snapshot_ref
         surface = "provider_assistant"
         derived_auth_tier = "provider"
     else:

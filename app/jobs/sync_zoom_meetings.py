@@ -16,6 +16,48 @@ def _bounded_count(value: int) -> int:
     return min(value, _MAX_LOG_COUNT)
 
 
+def upsert_meeting(doctor: Doctor, meeting: dict) -> ZoomMeeting | None:
+    """Import one provider-owned meeting without changing bound lifecycle state."""
+    zoom_meeting_id = str(meeting["id"])
+    raw_start_time = meeting.get("start_time")
+    if not raw_start_time:
+        return None
+
+    start_time = raw_start_time
+    if isinstance(start_time, str):
+        start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+
+    topic = meeting.get("topic") or ""
+    join_url = meeting.get("join_url") or ""
+    duration = meeting.get("duration") or 0
+    existing = ZoomMeeting.get(
+        doctor_id=doctor.id,
+        zoom_meeting_id=zoom_meeting_id,
+    )
+
+    if existing:
+        if existing.status in (ZoomMeetingStatus.started, ZoomMeetingStatus.ended):
+            # Don't reset status for active/completed meetings; only refresh mutable fields.
+            existing.topic = topic
+            existing.join_url = join_url
+        else:
+            existing.topic = topic
+            existing.start_time = start_time
+            existing.duration = duration
+            existing.join_url = join_url
+        existing.save()
+        return existing
+
+    return ZoomMeeting(
+        doctor_id=doctor.id,
+        zoom_meeting_id=zoom_meeting_id,
+        topic=topic,
+        start_time=start_time,
+        duration=duration,
+        join_url=join_url,
+    ).save()
+
+
 def perform(doctor_id: str) -> None:
     """Fetch upcoming and active Zoom meetings and upsert them into the DB."""
     doctor = Doctor.get(id=doctor_id)
@@ -42,9 +84,7 @@ def perform(doctor_id: str) -> None:
     synced = 0
     skipped_no_start_time = 0
 
-    for m in meetings:
-        zoom_meeting_id = str(m["id"])
-
+    for meeting in meetings:
         # Recurring meetings with no fixed time (Zoom meeting type 3) arrive
         # without start_time or duration. ZoomMeeting requires both, and the
         # agenda endpoint filters and sorts on start_time, so there is nothing
@@ -55,41 +95,9 @@ def perform(doctor_id: str) -> None:
         # meetings before the untimed one persisted, everything after it was
         # dropped, and the task burned all 20 autoretries. That silently
         # truncated doctors' agendas rather than failing visibly.
-        raw_start_time = m.get("start_time")
-        if not raw_start_time:
+        if upsert_meeting(doctor, meeting) is None:
             skipped_no_start_time += 1
             continue
-
-        start_time = raw_start_time
-        if isinstance(start_time, str):
-            start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-
-        topic = m.get("topic") or ""
-        join_url = m.get("join_url") or ""
-        duration = m.get("duration") or 0
-
-        existing = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=zoom_meeting_id)
-
-        if existing:
-            if existing.status in (ZoomMeetingStatus.started, ZoomMeetingStatus.ended):
-                # Don't reset status for active/completed meetings; only refresh mutable fields
-                existing.topic = topic
-                existing.join_url = join_url
-            else:
-                existing.topic = topic
-                existing.start_time = start_time
-                existing.duration = duration
-                existing.join_url = join_url
-            existing.save()
-        else:
-            ZoomMeeting(
-                doctor_id=doctor.id,
-                zoom_meeting_id=zoom_meeting_id,
-                topic=topic,
-                start_time=start_time,
-                duration=duration,
-                join_url=join_url,
-            ).save()
 
         synced += 1
 

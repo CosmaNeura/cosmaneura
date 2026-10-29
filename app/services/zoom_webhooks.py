@@ -293,7 +293,76 @@ def handle_meeting_started(
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id_str)
 
-    if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
+    if zoom_mtg is None:
+        meeting = zoom_service.get_meeting(doctor, meeting_id_str)
+        if (
+            str(meeting.get("id")) != meeting_id_str
+            or meeting.get("host_id") != host_id
+            or integration.provider_user_id != host_id
+        ):
+            log.warning(
+                "live meeting detail did not match signed host occurrence",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                host_ref=provider_log_ref(host_id),
+            )
+            return
+        # A reusable PMI/recurring meeting's detail endpoint describes its
+        # template, so start_time can be missing or can point at an old
+        # occurrence. The authenticated start event is the authority for the
+        # live occurrence's agenda time.
+        meeting = {
+            **meeting,
+            "start_time": _meeting_started_at(payload, obj),
+        }
+
+        # The provider read deliberately runs outside the lifecycle lock. It
+        # may take long enough for this occurrence to end or be replaced, so
+        # reacquire the lock and bind every identity again before importing.
+        # Re-query the row as well: a concurrent delivery can have completed
+        # the same import while this worker was waiting on Zoom.
+        with _lifecycle_lock(redis, meeting_id_str):
+            current_integration = zoom_service.get_zoom_integration(doctor)
+            if (
+                _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
+                != event_occurrence
+                or _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+                != str(doctor.id)
+                or _rget(redis, f"recall:meeting:{meeting_id}:host_id") != host_id
+                or current_integration is None
+                or current_integration.id != integration.id
+                or current_integration.provider_user_id != host_id
+            ):
+                log.warning(
+                    "live meeting import fenced after lifecycle identity changed",
+                    meeting_ref=provider_log_ref(meeting_id_str),
+                )
+                return
+
+            zoom_mtg = ZoomMeeting.get(
+                doctor_id=doctor.id,
+                zoom_meeting_id=meeting_id_str,
+            )
+            if zoom_mtg is None:
+                from app.jobs import sync_zoom_meetings as sync_zoom_meetings_job
+
+                zoom_mtg = sync_zoom_meetings_job.upsert_meeting(doctor, meeting)
+                if zoom_mtg is None:
+                    log.warning(
+                        "live meeting detail could not be imported",
+                        meeting_ref=provider_log_ref(meeting_id_str),
+                    )
+                    return
+                log.info(
+                    "live meeting imported from signed start webhook",
+                    meeting_ref=provider_log_ref(meeting_id_str),
+                    doctor_ref=provider_log_ref(str(doctor.id)),
+                )
+
+            if zoom_mtg.status == ZoomMeetingStatus.scheduled:
+                zoom_mtg.status = ZoomMeetingStatus.started
+                zoom_mtg.save()
+
+    elif zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
 
@@ -409,6 +478,34 @@ def _occurrence_digest(obj: dict[str, Any]) -> str | None:
     if not isinstance(occurrence_uuid, str) or not occurrence_uuid.strip():
         return None
     return digest_provider_reference(f"zoom-occurrence:{occurrence_uuid}")
+
+
+def _meeting_started_at(payload: dict[str, Any], obj: dict[str, Any]) -> datetime:
+    """Return the live occurrence time carried by an authenticated start event."""
+
+    raw_start_time = obj.get("start_time")
+    if isinstance(raw_start_time, str) and raw_start_time.strip():
+        try:
+            parsed = datetime.fromisoformat(raw_start_time.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(UTC)
+        except ValueError:
+            pass
+
+    event_timestamp = payload.get("event_ts")
+    if (
+        not isinstance(event_timestamp, bool)
+        and isinstance(event_timestamp, int)
+        and event_timestamp >= 0
+    ):
+        try:
+            return datetime.fromtimestamp(event_timestamp / 1000, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            pass
+
+    # The signed start event itself proves this is a live occurrence. Receipt
+    # time is a safer agenda key than a stale reusable-meeting template time.
+    return datetime.now(UTC)
 
 
 def _participant_ref(

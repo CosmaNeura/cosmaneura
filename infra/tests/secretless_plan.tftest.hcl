@@ -9,6 +9,14 @@ mock_provider "azapi" {
 }
 
 mock_provider "azurerm" {
+  mock_data "azurerm_user_assigned_identity" {
+    defaults = {
+      id           = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
+      client_id    = "10000000-0000-4000-8000-000000000003"
+      principal_id = "10000000-0000-4000-8000-000000000004"
+    }
+  }
+
   mock_resource "azurerm_ai_services" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.CognitiveServices/accounts/mock"
@@ -274,6 +282,15 @@ run "secretless_static_plan" {
       one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_HANDOFF_ENABLED"]) == "false",
     ])
     error_message = "the production wiring must not activate the unprovisioned external workflow or legacy handoff"
+  }
+
+  assert {
+    condition = (
+      !azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 0
+    )
+    error_message = "PostgreSQL Entra auth and the Scribe migration administrator must remain absent by default while existing password auth remains enabled"
   }
 }
 
@@ -685,4 +702,80 @@ run "core_cab_api_only_configured_projection" {
     !contains([for secret in workload.secret : secret.name], "billing-source-policy-json") && alltrue([for entry in workload.template[0].container[0].env : !startswith(entry.name, "CORE_CAB_") && entry.name != "BILLING_SOURCE_POLICY_JSON"])])
     error_message = "Configured CAB input must not reach worker or scheduler"
   }
+}
+
+run "scribe_database_entra_auth_is_additive_and_exact" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_entra_auth              = true
+    enable_scribe_database_migration_administrator = true
+    scribe_database_migration_identity_binding = {
+      resource_id  = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
+      client_id    = "10000000-0000-4000-8000-000000000003"
+      principal_id = "10000000-0000-4000-8000-000000000004"
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].tenant_id == "d51754d0-bba5-4810-820e-afac542844d6"
+    )
+    error_message = "Scribe database support must add exact-tenant Entra auth without disabling the existing password path"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 1 &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].server_name == azurerm_postgresql_flexible_server.main.name &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].resource_group_name == azurerm_resource_group.main.name &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].tenant_id == "d51754d0-bba5-4810-820e-afac542844d6" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].object_id == var.scribe_database_migration_identity_binding.principal_id &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].principal_name == "cosmaneura-scribe-production-database-migrations" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations[0].principal_type == "ServicePrincipal"
+    )
+    error_message = "only the exact reviewed Scribe migration UAMI may receive temporary PostgreSQL administrator authority"
+  }
+}
+
+run "scribe_database_entra_auth_can_remain_after_admin_cleanup" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_entra_auth              = true
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 0
+    )
+    error_message = "migration-admin cleanup must preserve both Entra runtime authentication and the existing password rollback path"
+  }
+}
+
+run "scribe_database_admin_refuses_disabled_entra_auth" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_migration_administrator = true
+    scribe_database_migration_identity_binding = {
+      resource_id  = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
+      client_id    = "10000000-0000-4000-8000-000000000003"
+      principal_id = "10000000-0000-4000-8000-000000000004"
+    }
+  }
+
+  expect_failures = [
+    var.enable_scribe_database_migration_administrator,
+  ]
 }
