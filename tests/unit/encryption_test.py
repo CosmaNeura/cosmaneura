@@ -173,3 +173,47 @@ def test_explicit_helpers_and_encrypted_type_share_the_compatible_boundary(
     )
     assert encrypted_type.process_bind_param(None, dialect) is None
     assert encrypted_type.process_result_value(None, dialect) is None
+
+
+def test_pseudonym_digest_depends_on_the_root_key() -> None:
+    encryption_key = _key()
+    first = encryption.EncryptionKeyRing.from_config(
+        _config(
+            active_key_id="active",
+            keys={"active": encryption_key},
+            pseudonym_root_key=_key(),
+        )
+    )
+    second = encryption.EncryptionKeyRing.from_config(
+        _config(
+            active_key_id="active",
+            keys={"active": encryption_key},
+            pseudonym_root_key=_key(),
+        )
+    )
+
+    assert first.pseudonymous_digest(
+        "synthetic-provider-id", context="provider-reference"
+    ) != second.pseudonymous_digest(
+        "synthetic-provider-id", context="provider-reference"
+    )
+
+
+def test_pseudonym_context_and_value_have_unambiguous_boundaries() -> None:
+    ring = encryption.EncryptionKeyRing.from_config(_key())
+
+    assert ring.pseudonymous_digest("bc", context="a") != ring.pseudonymous_digest(
+        "c", context="ab"
+    )
+
+
+@pytest.mark.parametrize("context", ["", "x" * 129, "é" * 65])
+def test_pseudonym_rejects_empty_or_oversized_context_without_raw_values(
+    context: str,
+) -> None:
+    ring = encryption.EncryptionKeyRing.from_config(_key())
+
+    with pytest.raises(encryption.EncryptionError) as error:
+        ring.pseudonymous_digest("synthetic-private-id", context=context)
+
+    assert str(error.value) == "encryption_failed"

@@ -280,13 +280,18 @@ def test_live_managed_email_drift_routes_to_support_and_blocks_personal_baa(
 
 
 @pytest.mark.parametrize(
-    "managed_domain",
-    ["mycatholicdoctor.com", "fiathealth.org", "east.mycatholicdoctor.com"],
+    ("managed_domain", "expected_domain"),
+    [
+        ("mycatholicdoctor.com", "mycatholicdoctor.com"),
+        ("fiathealth.org", "fiathealth.org"),
+        ("east.mycatholicdoctor.com", "mycatholicdoctor.com"),
+    ],
 )
 def test_unprovisioned_managed_identity_gets_pending_and_cannot_self_enroll(
     bare_authenticated_client: TestClient,
     monkeypatch,
     managed_domain: str,
+    expected_domain: str,
 ):
     doctor = _authed_doctor()
     assert doctor.email
@@ -304,11 +309,7 @@ def test_unprovisioned_managed_identity_gets_pending_and_cannot_self_enroll(
     assert disposition.json() == {
         "state": "pending",
         "organization_name": None,
-        "email_domain": (
-            "mycatholicdoctor.com"
-            if managed_domain.endswith("mycatholicdoctor.com")
-            else "fiathealth.org"
-        ),
+        "email_domain": expected_domain,
     }
 
     created = bare_authenticated_client.post(
