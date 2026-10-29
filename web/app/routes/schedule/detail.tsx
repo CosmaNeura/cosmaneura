@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { SidebarInset } from "@/components/ui/sidebar"
+import { ScheduleLoadBoundary } from "~/components/ScheduleLoadBoundary"
 import { ConfirmDialog } from "~/components/shared/ConfirmDialog"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PageHeader } from "~/components/shared/PageHeader"
@@ -30,7 +31,12 @@ import {
   type MeetingNoteAvailability,
   loadMeetingNoteAvailability,
 } from "~/lib/meeting-note-availability"
+import { loadSchedule, scheduleLoadFailure } from "~/lib/schedule-load"
 import { useTerminology } from "~/utils/terminology"
+
+export function ErrorBoundary({ error }: { error: unknown }) {
+  return <ScheduleLoadBoundary error={error} />
+}
 
 function formatDateTime(isoString: string): string {
   return new Date(isoString).toLocaleString(undefined, {
@@ -400,18 +406,16 @@ export function MeetingDetail({
 }
 
 export async function clientLoader(args: Route.ClientLoaderArgs) {
-  const { noteList, patientList, scheduleList } = await import(
-    "~/configuration/client"
-  )
-  const { data } = await scheduleList()
-  const captureEnabled = data?.capture_available ?? false
+  const { noteList, patientList } = await import("~/configuration/client")
+  const data = await loadSchedule(args.request)
+  const captureEnabled = data.capture_available ?? false
 
-  const meeting = data?.meetings.find(
+  const meeting = data.meetings.find(
     (m) => m.zoom_meeting_id === args.params.zoom_meeting_id,
   )
 
   if (!meeting) {
-    throw new Response("Meeting not found", { status: 404 })
+    throw scheduleLoadFailure("unavailable")
   }
 
   const needsAppointmentOptions =
