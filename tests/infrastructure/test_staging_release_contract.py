@@ -26,7 +26,6 @@ def runtime():
         AGENT_API_SCRIBE_RECEIVER_CLIENT_ID="22222222-2222-2222-2222-222222222222",
         SCRIBE_SERVICE_TIMEOUT_SECONDS="60",
         SCRIBE_CAPTURE_UPLOAD_ORIGINS="https://syntheticstaging.blob.core.windows.net",
-        SESSION_PREP_PROVIDER_CLERK_SUBJECTS="user_syntheticreview",
     )
     return result
 

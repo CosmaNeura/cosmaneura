@@ -39,7 +39,7 @@ from tests.services.session_prep_note_sources_test import _note
 
 
 def test_concurrent_exchanges_create_one_record_and_practice_scope(monkeypatch):
-    doctor = DoctorFactory.build().save()
+    doctor = DoctorFactory.build(onboarding_completed_at=datetime.now(UTC)).save()
     provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     appointment = AppointmentFactory.build(
@@ -48,7 +48,7 @@ def test_concurrent_exchanges_create_one_record_and_practice_scope(monkeypatch):
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+        SessionPrepProviderSettings(True),
     )
     barrier = Barrier(2)
 
@@ -108,7 +108,7 @@ def test_concurrent_review_actions_record_only_one_exact_revision():
 def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(
     monkeypatch, via_http
 ):
-    doctor = DoctorFactory.build().save()
+    doctor = DoctorFactory.build(onboarding_completed_at=datetime.now(UTC)).save()
     practice = provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     appointment = AppointmentFactory.build(
@@ -117,7 +117,7 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+        SessionPrepProviderSettings(True),
     )
     monkeypatch.setattr(
         provider_context_exchange,

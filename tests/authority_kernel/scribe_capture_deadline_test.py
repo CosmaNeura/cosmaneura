@@ -851,6 +851,7 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
     monkeypatch,
 ):
     target = app(monkeypatch, seconds=2)
+    clock = coordinated_deadline(monkeypatch, seconds=2)
     entered, disconnect, release, cancelled, closed, continued = (
         Event() for _ in range(6)
     )
@@ -905,10 +906,12 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
     request = asyncio.create_task(target(scope, receive, send))
     try:
         await until(entered)
-        started = time.monotonic()
+        await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+        # Leave the request deadline unexpired: only the disconnect watcher can
+        # end the request, independent of a busy runner's scheduling latency.
         disconnect.set()
-        await asyncio.wait_for(request, timeout=0.5)
-        assert time.monotonic() - started < 0.5 and sent == []
+        await asyncio.wait_for(request, timeout=2)
+        assert sent == []
         assert not closed.is_set()
         await until(cancelled)
         assert not closed.is_set() and sent == [] and not continued.is_set()

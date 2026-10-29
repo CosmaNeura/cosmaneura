@@ -65,6 +65,8 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "canonical_conversation_final_phase": "canonical_conversation_final_phase_append_only",
     "baa_acceptance": "baa_acceptance_reject_mutation",
     "practice_access_audit": "practice_access_audit_reject_mutation",
+    "organization_roster_approval": "organization_roster_approval_guard_mutation",
+    "practice_member": "practice_member_organization_evidence_guard_mutation",
     "public_legal_acceptance": "public_legal_acceptance_reject_mutation",
     "practice_invitation": "practice_invitation_guard_mutation",
     "superadmin_capability_audit": "superadmin_capability_audit_reject_mutation",

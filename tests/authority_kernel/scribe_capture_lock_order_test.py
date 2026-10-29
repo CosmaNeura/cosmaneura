@@ -7,6 +7,7 @@ No database, service, account, or clinical payload is accessed.
 import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 from app.configuration.authority import AuthorityKernelSettings
 from app.services import authority, provider_record_authority, view_as
 from app.services import scribe_capture_scope as capture
+from app.services.session_prep_provider_access import SessionPrepProviderAccessDecision
 
 from app.models.appointment import Appointment
 from app.models.authority import (
@@ -215,6 +217,15 @@ def case(monkeypatch):
         lambda _doctor, **_kwargs: True,
     )
     monkeypatch.setattr(
+        provider_record_authority,
+        "resolve_session_prep_provider_access",
+        lambda _doctor, **_kwargs: SessionPrepProviderAccessDecision(
+            allowed=True,
+            denial_reason=None,
+            practice=cast(Practice, practice),
+        ),
+    )
+    monkeypatch.setattr(
         provider_record_authority.configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
         SimpleNamespace(allows=lambda _: True),
@@ -256,7 +267,7 @@ def case(monkeypatch):
 
 def test_capture_and_exchange_use_the_same_owner_lock_order(case):
     exchange = Transaction(case.transaction.rows)
-    provider_record_authority.lock_provider_record_owner(
+    provider_record_authority.lock_session_prep_record_owner(
         session=exchange.session, clerk_subject=case.doctor.clerk_id
     )
     result = capture._authorized_scope(**case.arguments)
@@ -279,6 +290,27 @@ def test_invalid_token_never_chooses_a_doctor_from_request_input(case):
             }
         )
     assert case.transaction.locks == []
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+def test_exchange_requires_allowed_access_with_a_current_practice(
+    case, monkeypatch, allowed
+):
+    monkeypatch.setattr(
+        provider_record_authority,
+        "resolve_session_prep_provider_access",
+        lambda _doctor, **_kwargs: SessionPrepProviderAccessDecision(
+            allowed=allowed,
+            denial_reason=None if allowed else "practice_membership_inactive",
+            practice=None,
+        ),
+    )
+    exchange = Transaction(case.transaction.rows)
+    with pytest.raises(provider_record_authority.ProviderRecordScopeDenied):
+        provider_record_authority.lock_session_prep_record_owner(
+            session=exchange.session, clerk_subject=case.doctor.clerk_id
+        )
+    assert exchange.locks == []
 
 
 @pytest.mark.parametrize("change", ["revoked", "subject"])
@@ -361,7 +393,7 @@ def test_changed_capture_link_cannot_choose_another_owner_to_lock(case, field):
     assert all(identifier != "foreign" for _, identifier in case.transaction.locks)
 
 
-def test_capture_does_not_add_the_separate_session_prep_allowlist(case, monkeypatch):
+def test_capture_does_not_require_session_prep_product_enabled(case, monkeypatch):
     monkeypatch.setattr(
         provider_record_authority.configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",

@@ -162,13 +162,7 @@ async def case(f, monkeypatch):
     monkeypatch.setattr(
         review_route.configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(
-            enabled=True,
-            clerk_subjects=(
-                review_route.configuration.SESSION_PREP_PROVIDER_SETTINGS.clerk_subjects
-                | frozenset({f.case.doctor.clerk_id})
-            ),
-        ),
+        SessionPrepProviderSettings(enabled=True),
     )
     # The newly reviewed real-record association changes the context digest;
     # exchange a fresh human grant before any subsequent capture operation.

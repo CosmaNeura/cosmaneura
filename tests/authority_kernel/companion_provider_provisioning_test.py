@@ -102,6 +102,7 @@ def case(engine):
             clerk_id="user_w78_" + suffix,
             email=suffix + "@synthetic.invalid",
             last_active_at=now,
+            onboarding_completed_at=now,
             biography=None,
         )
         practice = Practice(

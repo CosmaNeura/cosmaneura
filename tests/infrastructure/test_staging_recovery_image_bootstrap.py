@@ -719,7 +719,7 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
     # Current executor retains reviewed readiness/traffic bindings and preserves
-    # the five active workflow flags on their existing workloads.
-    assert hashlib.sha256(deploy).hexdigest() == "bf1ee39468f69ac49b7bf44496f3037a44aec974dcd181b321d87836a658cfb9"
+    # five active workflow flags while retiring the legacy Session Prep cohort.
+    assert hashlib.sha256(deploy).hexdigest() == "d37e7486ed2950ec85e43c01af9eafad970fac1083b7f0f992468eade9805c40"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on

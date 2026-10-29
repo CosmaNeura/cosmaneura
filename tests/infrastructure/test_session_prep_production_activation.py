@@ -37,10 +37,10 @@ def test_session_prep_production_rollout_defaults_dark() -> None:
     )
 
     assert "nullable = false" in block
-    assert "enabled                 = false" in block
-    assert "provider_clerk_subjects = []" in block
-    assert 'sovereign_client_id     = ""' in block
-    assert 'agent_api_audience      = ""' in block
+    assert "enabled             = false" in block
+    assert "provider_clerk_subjects" not in block
+    assert 'sovereign_client_id = ""' in block
+    assert 'agent_api_audience  = ""' in block
 
 
 def test_one_source_controlled_switch_drives_all_core_receiver_gates() -> None:
@@ -57,22 +57,23 @@ def test_one_source_controlled_switch_drives_all_core_receiver_gates() -> None:
     assert "SESSION_PREP_HEALTH_ALERTS_ENABLED" not in rollout
 
 
-def test_activation_requires_bounded_exact_cohort_and_paired_identity() -> None:
+def test_activation_requires_paired_identity_without_a_manual_provider_cohort() -> None:
     block = _hcl_variable(
         _read("infra/variables.tf"), "session_prep_production_rollout"
     )
 
-    assert (
-        "length(var.session_prep_production_rollout.provider_clerk_subjects) <= 20"
-        in block
-    )
-    assert 'regex("^user_[A-Za-z0-9]{10,64}$", subject)' in block
-    assert (
-        "length(var.session_prep_production_rollout.provider_clerk_subjects) > 0"
-        in block
-    )
+    assert "provider_clerk_subjects" not in block
     assert 'sovereign_client_id != "00000000-0000-0000-0000-000000000000"' in block
     assert 'agent_api_audience != "00000000-0000-0000-0000-000000000000"' in block
+
+
+def test_runtime_has_no_manual_session_prep_subject_allowlist() -> None:
+    configuration = _read("app/configuration/session_prep.py")
+    rollout = _read("infra/session_prep_rollout.tf")
+
+    assert "SESSION_PREP_PROVIDER_CLERK_SUBJECTS" not in configuration
+    assert "clerk_subjects" not in configuration
+    assert "SESSION_PREP_PROVIDER_CLERK_SUBJECTS" not in rollout
 
 
 def test_api_worker_and_scheduler_receive_one_coherent_session_prep_projection() -> (
@@ -193,6 +194,8 @@ def test_generic_environment_sets_cannot_shadow_rollout_authority() -> None:
         "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
         "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
         "SESSION_PREP_PROVIDER_ENABLED",
+        # The retired subject allowlist remains reserved so it cannot be
+        # reintroduced through an unreviewed generic production environment.
         "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
     ):
         assert f'"{key}"' in variables

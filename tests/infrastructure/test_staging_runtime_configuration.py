@@ -268,9 +268,7 @@ def test_preserved_flag_drift_changes_fingerprint_and_refuses_live_state(
         _no_secret_output(result, configuration)
 
 
-@pytest.mark.parametrize(
-    "key", (*SENSITIVE_KEYS, "SESSION_PREP_PROVIDER_CLERK_SUBJECTS")
-)
+@pytest.mark.parametrize("key", SENSITIVE_KEYS)
 def test_full_fingerprint_changes_when_effective_configuration_changes(
     configuration, contracts, key
 ):
@@ -375,9 +373,7 @@ def test_missing_ambiguous_removed_or_changed_configuration_refuses_generically(
     elif failure == "changed-secret":
         secret["value"] += "-changed"
     elif failure == "changed-public":
-        payload["state"]["publicConfig"]["SESSION_PREP_PROVIDER_CLERK_SUBJECTS"] += (
-            "-changed"
-        )
+        payload["state"]["publicConfig"]["SESSION_PREP_PROVIDER_ENABLED"] += "-changed"
     elif failure == "wrong-revision":
         payload["expected_revision"] += "-changed"
     elif failure == "wrong-command":

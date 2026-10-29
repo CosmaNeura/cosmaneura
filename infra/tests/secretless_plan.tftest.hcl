@@ -292,10 +292,9 @@ run "session_prep_activation_projects_complete_worker_runtime" {
     adopt_existing_production_postgres_egress_rule = false
     production_container_apps_egress_ipv4          = "198.51.100.10"
     session_prep_production_rollout = {
-      enabled                 = true
-      provider_clerk_subjects = ["user_SessionPrepBeta01"]
-      sovereign_client_id     = "11111111-1111-1111-1111-111111111111"
-      agent_api_audience      = "22222222-2222-2222-2222-222222222222"
+      enabled             = true
+      sovereign_client_id = "11111111-1111-1111-1111-111111111111"
+      agent_api_audience  = "22222222-2222-2222-2222-222222222222"
     }
   }
 

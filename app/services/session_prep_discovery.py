@@ -13,7 +13,7 @@ class SessionPrepDiscovery:
 
 def resolve_session_prep_discovery(
     *,
-    selected_for_beta: bool,
+    rollout_enabled: bool,
     provider_access_allowed: bool,
     view_as_active: bool,
 ) -> SessionPrepDiscovery:
@@ -25,9 +25,8 @@ def resolve_session_prep_discovery(
     by every execution route.
     """
 
+    eligible = rollout_enabled and provider_access_allowed and not view_as_active
     return SessionPrepDiscovery(
-        eligible=selected_for_beta,
-        can_review_sources=(
-            selected_for_beta and provider_access_allowed and not view_as_active
-        ),
+        eligible=eligible,
+        can_review_sources=eligible,
     )

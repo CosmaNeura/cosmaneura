@@ -1,27 +1,42 @@
 """Current provider exchange lock evidence on owned synthetic PostgreSQL."""
 
 import asyncio
+import hashlib
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from typeid import TypeID
 
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
-from app.services import authority
+from app.routes import embed_context as embed_route
+from app.routes.embed_context import VerifiedClerkIdentity
+from app.services import authority, doctor_access
 from app.services import doctor_access_row_ownership as owned
 from app.services import provider_record_authority as records
 from app.services import scribe_native_capture as service
 from app.services.scribe_capture_deadline import CaptureBudget, capture_budget
 
 from activemodel import session_manager
+from app.models.appointment import Appointment
 from app.models.authority import AuthorityActorExternalIdentity
 from app.models.doctor import Doctor
-from app.models.practice import PracticeMember, lock_practice_seats
+from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
+from app.models.provider_record_authority import ProviderRecordAuthority
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
+from app.models.session_prep_runtime import (
+    SessionPrepArtifact,
+    SessionPrepBuild,
+    SessionPrepReadReceipt,
+)
 from sqlalchemy import event
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from tests.authority_kernel.companion_provider_provisioning_test import (
     SETTINGS,
@@ -39,6 +54,185 @@ from tests.authority_kernel.scribe_native_status_enrichment_test import (
 )
 
 engine, native, workflow = _engine, _native, _workflow
+
+
+def _replace_ordinary_entitlement_with_pilot(engine, native, *, mapped):
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        doctor = session.get(Doctor, native.args["doctor_id"])
+        practice = session.get(Practice, native.args["practice_id"])
+        assert doctor is not None and doctor.email is not None
+        assert practice is not None
+        practice.billing_exempt = False
+        practice.billing_exempt_until = None
+        practice.subscription_status = None
+        practice.trial_ends_at = None
+        email = doctor.email.lower()
+        session.add_all(
+            [
+                practice,
+                PilotAccessGrandfatherGrant(
+                    clerk_id=doctor.clerk_id,
+                    doctor_id_snapshot=doctor.id,
+                    practice_id_snapshot=practice.id,
+                    email_snapshot=email,
+                    email_sha256=hashlib.sha256(email.encode()).hexdigest(),
+                    source_ref="synthetic:capture-continuity",
+                    source_sha256="a" * 64,
+                    grant_plan_sha256="b" * 64,
+                    granted_by_ref="synthetic-capture-continuity-review",
+                    grant_reason="Preserve the existing invented capture policy",
+                    granted_at=now - timedelta(seconds=1),
+                ),
+            ]
+        )
+        record = session.exec(
+            select(ProviderRecordAuthority).where(
+                ProviderRecordAuthority.appointment_id
+                == TypeID.from_string(native.row["appointment_ref"])
+            )
+        ).one()
+        if not mapped:
+            for model in (
+                SessionPrepReadReceipt,
+                SessionPrepArtifact,
+                SessionPrepBuild,
+            ):
+                for row in session.exec(
+                    select(model).where(model.record_scope_id == record.id)
+                ).all():
+                    session.delete(row)
+            session.flush()
+            session.delete(record)
+        session.commit()
+
+
+def _browser_exchange(native):
+    app = FastAPI()
+    app.include_router(embed_route.embed_context_api_app)
+    app.dependency_overrides[embed_route.authenticate_embed_platform_session] = (
+        lambda: VerifiedClerkIdentity(
+            SETTINGS.clerk_issuer,
+            native.args["verified_clerk_subject"],
+            "session_invented_scribe",
+        )
+    )
+    app.dependency_overrides[embed_route.get_authority_kernel_settings] = (
+        lambda: SETTINGS
+    )
+    with TestClient(app) as client:
+        return client.post(
+            "/embed/v1/context-tokens/exchange",
+            headers={"X-Cosmaneura-Embed-Version": "1.0"},
+            json={
+                "requested_surface": "provider_assistant",
+                "record_ref": native.row["appointment_ref"],
+            },
+        )
+
+
+@pytest.mark.parametrize("mapped", [False, True], ids=["legacy", "mapped"])
+def test_pilot_capture_continues_without_session_prep_authority(native, engine, mapped):
+    _replace_ordinary_entitlement_with_pilot(engine, native, mapped=mapped)
+
+    exchanged = _browser_exchange(native)
+    assert exchanged.status_code == 201, exchanged.text
+    with session_manager.global_session() as session:
+        resolved = authority.resolve_mount_context(
+            workload_client_id="11111111-1111-4111-8111-111111111111",
+            mount_context_token=exchanged.json()["context_token"],
+            client_turn_id=uuid4(),
+            session=session,
+            settings=SETTINGS,
+        )
+        session.commit()
+    assert resolved.context.surface == "provider_assistant"
+    assert resolved.context.session_prep_context_ref is None
+    assert "session-prep:read" not in resolved.context.capabilities
+    if mapped:
+        from app.services import session_prep_runtime
+        from app.services.session_prep import SessionPrepScopeDenied
+
+        with Session(engine) as session:
+            scope = session.exec(
+                select(ProviderRecordAuthority).where(
+                    ProviderRecordAuthority.appointment_id
+                    == TypeID.from_string(native.row["appointment_ref"])
+                )
+            ).one()
+            with pytest.raises(SessionPrepScopeDenied):
+                session_prep_runtime.current_source_state(
+                    session, scope, observed_at=datetime.now(UTC), settings=SETTINGS
+                )
+
+    captured = native.post()
+    assert captured.status_code == 200, captured.text
+    assert (
+        captured.json()["result"]["encounter"]["appointment_ref"]
+        == (native.row["appointment_ref"])
+    )
+
+
+@pytest.mark.parametrize("mapped", [False, True], ids=["legacy", "mapped"])
+@pytest.mark.parametrize("fault", ["owner", "identity", "view_as"])
+def test_pilot_fallback_rechecks_current_denials(native, engine, mapped, fault):
+    _replace_ordinary_entitlement_with_pilot(engine, native, mapped=mapped)
+    with Session(engine) as session:
+        if fault == "owner":
+            appointment = session.get(
+                Appointment, TypeID.from_string(native.row["appointment_ref"])
+            )
+            foreign = Doctor(clerk_id=f"user_synthetic_{uuid4().hex}", biography=None)
+            assert appointment is not None
+            session.add(foreign)
+            session.flush()
+            appointment.doctor_id = foreign.id
+            session.add(appointment)
+            session.commit()
+        elif fault == "identity":
+            identity = session.exec(
+                select(AuthorityActorExternalIdentity).where(
+                    AuthorityActorExternalIdentity.subject
+                    == native.args["verified_clerk_subject"]
+                )
+            ).one()
+            identity.revoked_at = datetime.now(UTC)
+            session.add(identity)
+            session.commit()
+        else:
+            from tests.authority_kernel.scribe_creator_review_authority_test import (
+                install_view_as,
+            )
+
+            doctor = session.get(Doctor, native.args["doctor_id"])
+            identity = session.exec(
+                select(AuthorityActorExternalIdentity).where(
+                    AuthorityActorExternalIdentity.subject
+                    == native.args["verified_clerk_subject"]
+                )
+            ).one()
+            assert doctor is not None
+            install_view_as(
+                SimpleNamespace(
+                    session=session,
+                    case=SimpleNamespace(doctor=doctor, identity=identity),
+                )
+            )
+            from app.models.view_as import ViewAsSession
+
+            view = session.exec(
+                select(ViewAsSession)
+                .where(ViewAsSession.actor_doctor_id == doctor.id)
+                .order_by(ViewAsSession.started_at.desc())  # type: ignore[attr-defined]
+            ).first()
+            assert view is not None
+            view.clerk_session_sha256 = hashlib.sha256(
+                b"session_invented_scribe"
+            ).hexdigest()
+            session.add(view)
+            session.commit()
+    assert _browser_exchange(native).status_code == 403
+    assert native.post().status_code == 403
 
 
 @pytest.mark.parametrize("kind", ["mount", "creator_review", "capabilities"])
@@ -305,7 +499,7 @@ def test_real_writer_remains_blocked_by_exchange_locks_then_revokes(
     )
 
     original_lookup_access = companion_encounters.doctor_access_in_force
-    original_record_access = records.doctor_access_in_force
+    original_record_access = records.resolve_session_prep_provider_access
 
     def lookup_access(doctor, **kwargs):
         if owned._RECORD_ROWS.get() is None:
@@ -313,13 +507,30 @@ def test_real_writer_remains_blocked_by_exchange_locks_then_revokes(
         return original_lookup_access(doctor, **kwargs)
 
     def record_access(doctor, **kwargs):
-        proof = owned._CAPTURE_ROWS.get()
+        session = session_manager._session_context.get()
+        proof = (
+            owned.current_capture_doctor_rows(session, doctor)
+            if session is not None
+            else None
+        )
         if proof is not None and owned._RECORD_ROWS.get() is not None:
-            kwargs = kwargs | {"_ownership": proof, "_practice_id": proof._practice_id}
+            # Exercise the legacy product-access decision with the retained
+            # lock evidence so the shared writer-race helper can still prove
+            # the lock. The provider-record result itself always comes from
+            # the stricter Session Prep decision below.
+            doctor_access.doctor_access_in_force(
+                doctor,
+                _ownership=proof,
+                _practice_id=proof._practice_id,
+            )
         return original_record_access(doctor, **kwargs)
 
     monkeypatch.setattr(companion_encounters, "doctor_access_in_force", lookup_access)
-    monkeypatch.setattr(records, "doctor_access_in_force", record_access)
+    monkeypatch.setattr(
+        records,
+        "resolve_session_prep_provider_access",
+        record_access,
+    )
     test_actual_writer_waits_then_commits_and_next_native_open_denies(
         native,
         engine,
