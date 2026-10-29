@@ -23,6 +23,7 @@ from app.services.session_prep import (
     SessionPrepIdempotencyConflict,
     SessionPrepScopeDenied,
 )
+from app.services.session_prep_runtime import SessionPrepSourceBusy
 
 from app.models.authority import (
     AuthorityAuditEvent,
@@ -438,6 +439,8 @@ def _select(
             dependency = _verified(session, row, workload, mount, scope, now, settings)
             if dependency:
                 markers.add(cast(str, dependency[0].response_ref))
+        except SessionPrepSourceBusy:
+            raise ConversationContextChanged from None
         except (
             ConversationContextChanged,
             prep.ProviderContextChanged,
@@ -453,6 +456,8 @@ def _select(
             if dependency and dependency[0].response_ref not in markers:
                 raise ConversationContextChanged
             state = "completed" if row[2] is not None else "pending"
+        except SessionPrepSourceBusy:
+            raise ConversationContextChanged from None
         except (
             ConversationContextChanged,
             prep.ProviderContextChanged,
