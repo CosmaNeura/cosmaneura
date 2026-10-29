@@ -11,6 +11,10 @@ from psycopg.conninfo import make_conninfo
 
 from infra import database_role
 
+VERIFIED_TLS_OPTIONS = (
+    "sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
+)
+
 
 def test_password_requires_one_non_cli_source(
     monkeypatch: pytest.MonkeyPatch,
@@ -40,20 +44,47 @@ def test_admin_url_requires_exact_production_target() -> None:
     database_role.validate_admin_database_url(
         "postgresql://admin:opaque@"
         "cosmaneura-prod-postgres.postgres.database.azure.com/"
-        "production?sslmode=require",
+        f"production?{VERIFIED_TLS_OPTIONS}",
         expected_database="production",
     )
     with pytest.raises(database_role.RolePreparationError, match="host"):
         database_role.validate_admin_database_url(
             "postgresql://admin:opaque@"
-            "different.postgres.database.azure.com/production?sslmode=require",
+            "different.postgres.database.azure.com/"
+            f"production?{VERIFIED_TLS_OPTIONS}",
             expected_database="production",
         )
     with pytest.raises(database_role.RolePreparationError, match="invalid"):
         database_role.validate_admin_database_url(
             "postgresql://admin:opaque@"
             "cosmaneura-prod-postgres.postgres.database.azure.com:not-a-port/"
-            "production?sslmode=require",
+            f"production?{VERIFIED_TLS_OPTIONS}",
+            expected_database="production",
+        )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        "sslmode=prefer",
+        "sslmode=require",
+        "sslmode=verify-ca&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt",
+        "sslmode=verify-full",
+        "sslmode=verify-full&sslrootcert=%2Ftmp%2Funtrusted.pem",
+        (
+            "sslmode=verify-full&"
+            "sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt&"
+            "sslmode=require"
+        ),
+        f"{VERIFIED_TLS_OPTIONS}&application_name=other",
+    ],
+)
+def test_admin_url_rejects_noncanonical_tls_options(options: str) -> None:
+    with pytest.raises(database_role.RolePreparationError, match="options"):
+        database_role.validate_admin_database_url(
+            "postgresql://admin:opaque@"
+            "cosmaneura-prod-postgres.postgres.database.azure.com/"
+            f"production?{options}",
             expected_database="production",
         )
 
