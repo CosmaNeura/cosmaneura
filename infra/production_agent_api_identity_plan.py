@@ -131,6 +131,15 @@ def _digest(value: Any) -> str:
     return f"sha256_{hashlib.sha256(_canonical(value).encode()).hexdigest()}"
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            _fail("input file contains duplicate object keys")
+        value[key] = item
+    return value
+
+
 def _authority(raw: Any, *, tenant_id: str) -> dict[str, str]:
     value = _mapping(raw, field="authority")
     expected = {
@@ -870,6 +879,7 @@ def _load_private_input(path_text: str) -> Any:
         or path_metadata.st_size <= 0
         or path_metadata.st_size > MAX_INPUT_BYTES
         or stat.S_IMODE(path_metadata.st_mode) != 0o600
+        or path_metadata.st_uid != os.geteuid()
     ):
         _fail("input file boundary is invalid")
     try:
@@ -880,6 +890,7 @@ def _load_private_input(path_text: str) -> Any:
             if (
                 not stat.S_ISREG(opened_metadata.st_mode)
                 or stat.S_IMODE(opened_metadata.st_mode) != 0o600
+                or opened_metadata.st_uid != os.geteuid()
                 or (opened_metadata.st_dev, opened_metadata.st_ino)
                 != (path_metadata.st_dev, path_metadata.st_ino)
             ):
@@ -887,7 +898,9 @@ def _load_private_input(path_text: str) -> Any:
             payload = stream.read(MAX_INPUT_BYTES + 1)
         if not payload or len(payload) > MAX_INPUT_BYTES:
             _fail("input file boundary is invalid")
-        return json.loads(payload.decode("utf-8"))
+        return json.loads(
+            payload.decode("utf-8"), object_pairs_hook=_unique_json_object
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise IdentityPlanRefused("input file is invalid") from error
 

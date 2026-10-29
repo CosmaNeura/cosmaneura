@@ -35,7 +35,8 @@ from `AgentApi.Access`.
 
 Prepare one normalized JSON input from read-only Azure Resource Manager and
 Microsoft Graph responses. The file must be a regular, non-symlink file, no
-larger than 256 KiB, readable only by its owner (mode `0600`), and contain no
+larger than 256 KiB, owned by the invoking operator and readable only by that
+owner (mode `0600`), and contain no
 access token, client secret, chart identifier, patient data, or PHI. Record an
 exact candidate source SHA and a canonical UTC observation time no more than 30
 minutes old.

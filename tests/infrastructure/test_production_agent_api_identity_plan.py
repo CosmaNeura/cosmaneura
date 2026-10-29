@@ -458,12 +458,47 @@ def test_cli_failure_is_fixed_and_value_free(tmp_path: Path, capsys: Any) -> Non
     assert _uuid(50) not in captured.err
 
 
+def test_cli_rejects_duplicate_json_keys(tmp_path: Path, capsys: Any) -> None:
+    payload = json.dumps(_document(observed_at=datetime.now(UTC)))
+    payload = payload.replace(
+        '"environment": "production"',
+        '"environment": "staging", "environment": "production"',
+        1,
+    )
+    path = tmp_path / "private-plan.json"
+    path.write_text(payload, encoding="utf-8")
+    path.chmod(0o600)
+
+    assert m.main(["--input", str(path)]) == 2
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == "Production Agent API identity plan refused.\n"
+
+
 def test_cli_requires_exact_private_file_mode(tmp_path: Path, capsys: Any) -> None:
     path = tmp_path / "private-plan.json"
     path.write_text(
         json.dumps(_document(observed_at=datetime.now(UTC))), encoding="utf-8"
     )
     path.chmod(0o640)
+
+    assert m.main(["--input", str(path)]) == 2
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == "Production Agent API identity plan refused.\n"
+
+
+def test_cli_requires_current_process_file_ownership(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "private-plan.json"
+    path.write_text(
+        json.dumps(_document(observed_at=datetime.now(UTC))), encoding="utf-8"
+    )
+    path.chmod(0o600)
+    monkeypatch.setattr(m.os, "geteuid", lambda: path.stat().st_uid + 1)
 
     assert m.main(["--input", str(path)]) == 2
     captured = capsys.readouterr()
