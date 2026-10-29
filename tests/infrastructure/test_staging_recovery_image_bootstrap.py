@@ -719,7 +719,7 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
     # Current executor includes the corrected readiness/traffic jq bindings
-    # applied on top of reviewed protected-master deploy.sh.
-    assert hashlib.sha256(deploy).hexdigest() == "15b5a20b21be882371b5f87300f6ce7506702ffd030f7435180a6afeb5e5cf8a"
+    # and the bounded retirement of the legacy Session Prep provider cohort.
+    assert hashlib.sha256(deploy).hexdigest() == "c2bdcbcd1e82e50aefc6be2295110bf3f10ce45bdd4b9d832505d8f869948f1f"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on
