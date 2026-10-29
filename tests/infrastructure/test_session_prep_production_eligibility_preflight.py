@@ -199,6 +199,11 @@ def test_command_refuses_before_database_access_outside_production(
         "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/staging?sslmode=require",
         "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production",
         "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=require&application_name=other",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=require",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=prefer&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=verify-full",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=verify-full&sslrootcert=%2Ftmp%2Funtrusted.pem",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt&sslmode=require",
     ],
 )
 def test_production_database_url_rejects_wrong_endpoint_before_connect(
@@ -239,6 +244,8 @@ class _MainConnection:
             return _Rows([])
         if query == preflight.SERVER_IDENTITY_QUERY:
             return _Rows([("production", "public", "on")])
+        if query == preflight.TLS_STATUS_QUERY:
+            return _Rows([(True, "TLSv1.3")])
         raise AssertionError("unexpected query")
 
     def rollback(self) -> None:
@@ -252,7 +259,8 @@ def test_command_binds_canonical_endpoint_and_read_only_transaction(
     database_url = (
         "postgresql://user:password@"
         "cosmaneura-prod-postgres.postgres.database.azure.com:5432/"
-        "production?sslmode=require"
+        "production?sslmode=verify-full&"
+        "sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
     )
     connection = _MainConnection()
     observed_connect: dict[str, Any] = {}
@@ -291,6 +299,48 @@ def test_command_binds_canonical_endpoint_and_read_only_transaction(
     captured = capsys.readouterr()
     assert json.loads(captured.out) == report
     assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    "tls_row",
+    [
+        None,
+        (False, None),
+        (True, "TLSv1.1"),
+        (True, "TLSv1.4"),
+        (True, None),
+    ],
+)
+def test_command_refuses_unverified_or_unsupported_tls(
+    tls_row: tuple[Any, ...] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = (
+        "postgresql://user:password@"
+        "cosmaneura-prod-postgres.postgres.database.azure.com:5432/"
+        "production?sslmode=verify-full&"
+        "sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
+    )
+
+    class Connection(_MainConnection):
+        def execute(self, query: str, params: tuple[Any, ...] = ()) -> _Rows:
+            if query == preflight.TLS_STATUS_QUERY:
+                return _Rows([] if tls_row is None else [tls_row])
+            return super().execute(query, params)
+
+    connection = Connection()
+    monkeypatch.setenv("PYTHON_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("SESSION_PREP_PROVIDER_ENABLED", "false")
+    monkeypatch.setattr(
+        preflight.psycopg, "connect", lambda *args, **kwargs: connection
+    )
+
+    assert preflight.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "Session Prep production eligibility preflight failed.\n"
 
 
 def _write_revision(path: Path, revision: str, down_revision: object) -> None:

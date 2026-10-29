@@ -65,7 +65,13 @@ Before any activation proposal:
    unrelated resource change.
 3. From the exact candidate source, run
    `PYTHON_ENV=production uv run python scripts/session_prep_production_eligibility_preflight.py`
-   with the production application's existing `DATABASE_URL` supplied privately.
+   with the production application's proposed `DATABASE_URL` supplied privately.
+   It must name the exact production endpoint and use `sslmode=verify-full`
+   with `/etc/ssl/certs/ca-certificates.crt`; `prefer`, `require`, `verify-ca`,
+   a missing or alternate trust root, and extra connection options are refused.
+   A successful connection therefore validates the server certificate chain and
+   hostname through libpq. The command also requires the current backend to
+   report an encrypted TLS 1.2 or 1.3 session before any inventory query.
    The command imports no application code, opens one repeatable-read read-only
    transaction, and emits only fixed denial-reason counts, eligible/total,
    observation time, rollout state, the sole observed Alembic head, and a digest.
@@ -76,6 +82,8 @@ Before any activation proposal:
    provider, practice, account, or chart identifiers. Any migration application
    is a separate founder-approved operation with a rehearsed forward-recovery
    plan.
+   The currently observed stored `sslmode=prefer` URL remains a blocking
+   configuration mismatch; this source checkpoint does not alter or approve it.
 4. Verify the dedicated production provider Sovereign identity has only the
    required Agent API app role, its configured client ID equals the proposed
    Core allowlist, and its Core audience/issuer pair is exact. Verify the public

@@ -30,6 +30,7 @@ EXPECTED_ENVIRONMENT = "production"
 EXPECTED_DATABASE_NAME = "production"
 EXPECTED_SCHEMA = "public"
 EXPECTED_DATABASE_HOST = "cosmaneura-prod-postgres.postgres.database.azure.com"
+LINUX_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 BAA_CURRENT_REFERENCE = "CN-BAA-CUST-CW v2.3"
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SESSION_PREP_ANCESTORS = (
@@ -67,6 +68,12 @@ SERVER_IDENTITY_QUERY: LiteralString = """
 SELECT current_database(),
        current_schema(),
        current_setting('transaction_read_only')
+"""
+
+TLS_STATUS_QUERY: LiteralString = """
+SELECT ssl, version
+  FROM pg_stat_ssl
+ WHERE pid = pg_backend_pid()
 """
 
 MIGRATION_HEAD_QUERY: LiteralString = """
@@ -485,7 +492,24 @@ def validate_production_database_url(database_url: str) -> None:
         raise InventoryFailure("production database host is unexpected")
     if port not in {None, 5432} or parsed.path != f"/{EXPECTED_DATABASE_NAME}":
         raise InventoryFailure("production database target is unexpected")
-    if parsed.query != "sslmode=require" or parsed.fragment:
+    try:
+        pairs = urllib.parse.parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError as error:
+        raise InventoryFailure("production database URL options are invalid") from error
+    query = dict(pairs)
+    if (
+        len(pairs) != len(query)
+        or query
+        != {
+            "sslmode": "verify-full",
+            "sslrootcert": LINUX_CA_BUNDLE,
+        }
+        or parsed.fragment
+    ):
         raise InventoryFailure("production database URL options are unexpected")
 
 
@@ -652,6 +676,14 @@ def _verify_server(connection: ReadOnlyConnection) -> None:
         raise InventoryFailure("production read-only boundary is unavailable")
 
 
+def _verify_tls(connection: ReadOnlyConnection) -> None:
+    """Confirm this verified-full libpq connection negotiated supported TLS."""
+
+    row = connection.execute(TLS_STATUS_QUERY).fetchone()
+    if row not in {(True, "TLSv1.2"), (True, "TLSv1.3")}:
+        raise InventoryFailure("production verified TLS boundary is unavailable")
+
+
 def main() -> int:
     if os.environ.get("PYTHON_ENV") != EXPECTED_ENVIRONMENT:
         print("Session Prep production eligibility preflight refused.", file=sys.stderr)
@@ -681,6 +713,7 @@ def main() -> int:
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
             )
             _verify_server(connection)
+            _verify_tls(connection)
             report = collect_inventory(
                 connection,
                 observed_at=observed_at,
