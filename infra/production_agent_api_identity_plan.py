@@ -403,6 +403,45 @@ def _container_app(
     return _canonical(value)
 
 
+def _public_container_app(
+    raw: Any,
+    *,
+    identity_resource_id: str,
+    field: str,
+) -> str:
+    value = _mapping(raw, field=field)
+    _exact_keys(
+        value,
+        {
+            "exists",
+            "resource_group",
+            "name",
+            "user_assigned_identity_resource_ids",
+            "configuration_present",
+        },
+        field=field,
+    )
+    if (
+        type(value["exists"]) is not bool
+        or type(value["configuration_present"]) is not bool
+        or value["resource_group"] != EXPECTED_SOVEREIGN_RESOURCE_GROUP
+        or value["name"] != EXPECTED_PUBLIC_CONTAINER_APP
+    ):
+        _fail(f"{field} runtime evidence mismatch")
+    if value["exists"]:
+        if (
+            value["user_assigned_identity_resource_ids"] != [identity_resource_id]
+            or value["configuration_present"] is not True
+        ):
+            _fail(f"{field} present runtime binding mismatch")
+    elif (
+        value["user_assigned_identity_resource_ids"] != []
+        or value["configuration_present"] is not False
+    ):
+        _fail(f"{field} absent runtime contains binding or configuration")
+    return _canonical(value)
+
+
 def _assignments(
     raw: Any,
     *,
@@ -567,9 +606,8 @@ def _snapshot(
         identity_resource_id=provider_binding["resource_id"],
         field=f"{field}.provider_container_app",
     )
-    public_app = _container_app(
+    public_app = _public_container_app(
         value["public_container_app"],
-        name=EXPECTED_PUBLIC_CONTAINER_APP,
         identity_resource_id=public_binding["resource_id"],
         field=f"{field}.public_container_app",
     )

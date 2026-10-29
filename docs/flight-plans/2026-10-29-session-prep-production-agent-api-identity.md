@@ -51,9 +51,14 @@ The before snapshot must contain all of the following:
    `Scribe.Transcript.Write`, with matching IDs and definitions on the
    application and resource service principal. The planner never creates or
    repairs an app-role definition.
-4. The provider and public user-assigned identities, their corresponding
-   `ManagedIdentity` service principals, and each container app's exact runtime
-   identity binding.
+4. The provider and public user-assigned identities and their corresponding
+   `ManagedIdentity` service principals. The provider container app must have
+   its exact runtime identity binding. Public runtime evidence must explicitly
+   report either an existing public container app with its exact public
+   identity binding and configuration, or an absent public container app with
+   no runtime binding and no configuration. Provider-only activation therefore
+   does not require deploying the public app; the public identity foundations
+   remain mandatory in either state.
 5. The complete Agent API resource service principal's inbound
    `appRoleAssignedTo` collection, plus the complete provider and public
    service principals' outgoing `appRoleAssignments` collections. Follow all
@@ -108,6 +113,9 @@ Verification succeeds only when:
 The verifier permits no delta when the before snapshot already contained the
 provider assignment. Any stale evidence, plan-digest mismatch, missing page,
 identity drift, unexpected assignment, or changed Scribe grant fails closed.
+An absent public runtime must remain explicitly absent with no binding or
+configuration; a present public runtime must retain the exact reviewed public
+identity binding.
 
 ## Recovery and stop conditions
 

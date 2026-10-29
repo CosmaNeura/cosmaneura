@@ -140,7 +140,12 @@ PUBLIC_TARGET_ASSIGNMENT = _assignment(
 )
 
 
-def _snapshot(*, observed_at: datetime, with_target: bool = False) -> dict[str, Any]:
+def _snapshot(
+    *,
+    observed_at: datetime,
+    with_target: bool = False,
+    public_runtime_exists: bool = True,
+) -> dict[str, Any]:
     provider = _identity(
         PROVIDER_IDENTITY_NAME, PROVIDER_CLIENT_ID, PROVIDER_PRINCIPAL_ID
     )
@@ -183,9 +188,13 @@ def _snapshot(*, observed_at: datetime, with_target: bool = False) -> dict[str, 
             "user_assigned_identity_resource_ids": [provider["resource_id"]],
         },
         "public_container_app": {
+            "exists": public_runtime_exists,
             "resource_group": "cosmaneura-sovereign-prod",
             "name": "cosmaneura-web-prod-app",
-            "user_assigned_identity_resource_ids": [public["resource_id"]],
+            "user_assigned_identity_resource_ids": (
+                [public["resource_id"]] if public_runtime_exists else []
+            ),
+            "configuration_present": public_runtime_exists,
         },
         "agent_api_resource_assignments": {
             "collection_complete": True,
@@ -203,7 +212,10 @@ def _snapshot(*, observed_at: datetime, with_target: bool = False) -> dict[str, 
 
 
 def _document(
-    *, with_target: bool = False, observed_at: datetime = BEFORE_AT
+    *,
+    with_target: bool = False,
+    observed_at: datetime = BEFORE_AT,
+    public_runtime_exists: bool = True,
 ) -> dict[str, Any]:
     provider = _identity(
         PROVIDER_IDENTITY_NAME, PROVIDER_CLIENT_ID, PROVIDER_PRINCIPAL_ID
@@ -237,18 +249,26 @@ def _document(
             "agent_api_audience": AUDIENCE_CLIENT_ID,
             "sovereign_client_id": PROVIDER_CLIENT_ID,
         },
-        "before": _snapshot(observed_at=observed_at, with_target=with_target),
+        "before": _snapshot(
+            observed_at=observed_at,
+            with_target=with_target,
+            public_runtime_exists=public_runtime_exists,
+        ),
         "after": None,
         "expected_plan_sha256": None,
     }
 
 
-def _verification() -> dict[str, Any]:
-    document = _document()
+def _verification(*, public_runtime_exists: bool = True) -> dict[str, Any]:
+    document = _document(public_runtime_exists=public_runtime_exists)
     plan = m.evaluate(document, now=NOW)
     document["mode"] = "verify"
     document["expected_plan_sha256"] = plan["plan_sha256"]
-    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=True)
+    document["after"] = _snapshot(
+        observed_at=AFTER_AT,
+        with_target=True,
+        public_runtime_exists=public_runtime_exists,
+    )
     return document
 
 
@@ -282,6 +302,46 @@ def test_plan_is_no_change_when_exact_assignment_already_exists() -> None:
     assert report["assignment_action"] == "no_change"
 
 
+def test_plan_accepts_explicitly_absent_public_runtime_with_foundations() -> None:
+    report = m.evaluate(_document(public_runtime_exists=False), now=NOW)
+
+    assert report["assignment_action"] == "create_required"
+    assert report["public_assignment"] == "excluded"
+
+
+@pytest.mark.parametrize(
+    ("exists", "identity_bound", "configuration_present"),
+    [
+        (False, True, False),
+        (False, False, True),
+        (True, False, True),
+        (True, True, False),
+    ],
+)
+def test_public_runtime_presence_and_binding_must_be_consistent(
+    exists: bool,
+    identity_bound: bool,
+    configuration_present: bool,
+) -> None:
+    document = _document(public_runtime_exists=exists)
+    runtime = document["before"]["public_container_app"]
+    runtime["user_assigned_identity_resource_ids"] = (
+        [document["bindings"]["public_identity"]["resource_id"]]
+        if identity_bound
+        else []
+    )
+    runtime["configuration_present"] = configuration_present
+
+    _rejects(document)
+
+
+def test_absent_public_runtime_still_requires_exact_identity_foundations() -> None:
+    document = _document(public_runtime_exists=False)
+    document["before"]["public_service_principal"]["app_id"] = _uuid(43)
+
+    _rejects(document)
+
+
 def test_semantically_identical_collection_order_has_same_digests() -> None:
     first = _document()
     second = deepcopy(first)
@@ -302,6 +362,24 @@ def test_verification_accepts_only_the_exact_target_delta() -> None:
     assert report["assignment_action"] == "verified"
     assert report["public_assignment"] == "excluded"
     assert report["scribe_grants"] == "preserved"
+
+
+def test_verification_preserves_absent_public_runtime() -> None:
+    report = m.evaluate(_verification(public_runtime_exists=False), now=NOW)
+
+    assert report["assignment_action"] == "verified"
+
+
+def test_verification_rejects_public_runtime_activation() -> None:
+    document = _verification(public_runtime_exists=False)
+    runtime = document["after"]["public_container_app"]
+    runtime["exists"] = True
+    runtime["user_assigned_identity_resource_ids"] = [
+        document["bindings"]["public_identity"]["resource_id"]
+    ]
+    runtime["configuration_present"] = True
+
+    _rejects(document)
 
 
 @pytest.mark.parametrize(
@@ -326,7 +404,7 @@ def test_authority_rollout_and_identity_mismatches_fail_closed(
 
 
 def test_public_agent_assignment_fails_in_both_views() -> None:
-    document = _document()
+    document = _document(public_runtime_exists=False)
     before = document["before"]
     before["agent_api_resource_assignments"]["items"].append(
         deepcopy(PUBLIC_TARGET_ASSIGNMENT)
