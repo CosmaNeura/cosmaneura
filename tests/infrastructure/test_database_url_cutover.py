@@ -728,3 +728,67 @@ def test_apply_requires_operational_acknowledgements(
         json.loads(capsys.readouterr().out)["code"]
         == "operational_acknowledgement_missing"
     )
+
+
+@pytest.mark.parametrize("fail_reconcile", [False, True])
+def test_main_migration_reconcile_never_prints_secret_values(
+    fail_reconcile: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    subscription = "00000000-0000-0000-0000-000000000000"
+    credential = (
+        f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
+        "cosmaneura-prod-postgres.postgres.database.azure.com/"
+        "production?sslmode=require"
+    )
+    arm = FakeArm()
+    monkeypatch.setattr(cutover, "azure_account_subscription", lambda: subscription)
+    monkeypatch.setattr(
+        cutover.ArmClient, "from_azure_cli", classmethod(lambda cls: arm)
+    )
+    calls: list[str] = []
+
+    def update(workload: cutover.Workload, **kwargs: Any) -> None:
+        calls.append(workload.label)
+        assert kwargs["secret_name"] == "database-url-v2"
+        assert credential not in json.dumps(kwargs)
+        if fail_reconcile:
+            raise cutover.CutoverError(credential)
+
+    monkeypatch.setattr(cutover, "update_database_reference", update)
+    monkeypatch.setattr(cutover, "verify_revision", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cutover.sys,
+        "stdin",
+        io.StringIO(json.dumps({"database-url-v2": credential})),
+    )
+
+    result = cutover.main(
+        [
+            "--subscription-id",
+            subscription,
+            "--reconcile-migration-secrets-stdin",
+            "--confirm-subscription",
+            subscription,
+            "--confirm-resource-group",
+            "cosmaneura-prod",
+            "--selected-secret-name",
+            "database-url-v2",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert result == (1 if fail_reconcile else 0)
+    assert json.loads(captured.out) == (
+        {"code": "cutover_failed", "result": "failed"}
+        if fail_reconcile
+        else {
+            "mode": "reconcile-migration-secrets",
+            "result": "succeeded",
+            "selected_secret": "database-url-v2",
+        }
+    )
+    assert calls == ["migration"]
+    assert arm.reconciliations[0][1] == {"database-url-v2": credential}
