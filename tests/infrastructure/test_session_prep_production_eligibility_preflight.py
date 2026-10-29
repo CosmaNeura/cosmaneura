@@ -6,7 +6,7 @@ import secrets
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -49,7 +49,7 @@ class _AggregateConnection:
         integrity_overrides: dict[str, int] | None = None,
         migration_heads: list[str] | None = None,
     ) -> None:
-        integrity = dict.fromkeys(preflight.INTEGRITY_CHECKS, 0)
+        integrity: dict[str, int] = {label: 0 for label in preflight.INTEGRITY_CHECKS}
         integrity.update(integrity_overrides or {})
         self.integrity = [(label, count) for label, count in integrity.items()]
         self.classifications = classifications
@@ -425,7 +425,10 @@ def _collect_from_test_database(
     observed_at: datetime,
 ) -> dict[str, Any]:
     with get_session() as session:
-        driver_connection = session.connection().connection.driver_connection
+        driver_connection = cast(
+            preflight.ReadOnlyConnection,
+            session.connection().connection.driver_connection,
+        )
         return preflight.collect_inventory(
             driver_connection,
             observed_at=observed_at,
