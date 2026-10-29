@@ -654,7 +654,10 @@ def collect_build_source(root: Path, request: SourceRequest) -> SourceEvidence:
     require(after == verified and reader.protections() == before)
     reader.controller()
     reader.final_boundaries()
-    require(type(reader.actions_enabled) is bool)
+    actions_enabled = reader.actions_enabled
+    if actions_enabled is None:
+        raise BuildSourceRefused("staging_build_source_refused")
+    require(type(actions_enabled) is bool)
     return SourceEvidence(
         reader.started_utc.isoformat(),
         request.context.candidate_sha,
@@ -664,5 +667,5 @@ def collect_build_source(root: Path, request: SourceRequest) -> SourceEvidence:
         sha(archive),
         before,
         tuple(reader.response_hashes),
-        reader.actions_enabled,
+        actions_enabled,
     )

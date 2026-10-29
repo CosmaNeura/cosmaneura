@@ -285,7 +285,7 @@ class ActionsCompatibilityTests(unittest.TestCase):
         obj.request = replace(
             obj.request, review_kind="local_cursor", controller_check_id=0
         )
-        policy = {
+        policy: dict[str, dict[str, bool | int]] = {
             key: {"enabled": value}
             for key, value in (
                 ("enforce_admins", True),
