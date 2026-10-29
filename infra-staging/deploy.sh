@@ -275,7 +275,7 @@ fi
 CONFIGURATION_STATUS=0
 ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend 2>/dev/null) || \
 	CONFIGURATION_STATUS=$?
-unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
+unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET RECALL_API_KEY_INPUT
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	echo "Failed to load staging deployment configuration."
 	exit 1

@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
@@ -15,6 +18,58 @@ LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
 UNTAGGED_UPLOADER = ROOT / "scripts" / "staging_acr_untagged_upload.py"
 BOUND_ACR = ROOT / "scripts" / "staging_acr_cli_bound.py"
 BOUND_AZURE_CLI = ROOT / "scripts" / "staging_azure_cli_bound.py"
+
+
+@pytest.mark.parametrize("resolver_succeeds", [True, False])
+def test_actual_deployer_drops_resolver_credentials_before_next_child(
+    resolver_succeeds: bool,
+) -> None:
+    source = (ROOT / "infra-staging/deploy.sh").read_text()
+    opening = "CONFIGURATION_STATUS=0\n"
+    closing = "if ! printf '%s' \"$ENV_JSON\" |"
+    assert source.count(opening) == 1
+    start = source.index(opening)
+    actual_resolution_and_cleanup = source[start : source.index(closing, start)]
+    credentials = (
+        "OP_SERVICE_ACCOUNT_TOKEN",
+        "RECALL_WEBHOOK_SECRET",
+        "RECALL_API_KEY_INPUT",
+    )
+    probe = (
+        "import json,os;print(json.dumps({name:name in os.environ for name in "
+        + repr(credentials)
+        + "}))"
+    )
+    next_child = shlex.join([sys.executable, "-I", "-S", "-B", "-c", probe])
+    # The EXIT observer also checks the failure branch after its real exit.
+    # This fixture substitutes only the resolver, never runs the deployer or
+    # reads real credentials. The production just path remains unchanged.
+    fake_just = "printf '{}'" if resolver_succeeds else "return 1"
+    script = (
+        "set -euo pipefail\nREPOSITORY_ROOT="
+        + shlex.quote(str(ROOT))
+        + "\ntrap "
+        + shlex.quote(next_child)
+        + " EXIT\njust() { "
+        + fake_just
+        + "; }\n"
+        + actual_resolution_and_cleanup
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin"}
+        | {name: "fictional-test-value" for name in credentials},
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == (0 if resolver_succeeds else 1)
+    assert json.loads(result.stdout.splitlines()[-1]) == {
+        name: False for name in credentials
+    }
+    assert "fictional-test-value" not in result.stdout + result.stderr
 
 
 def _source() -> str:
