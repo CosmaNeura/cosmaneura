@@ -535,7 +535,7 @@ BILLING_PUBLIC_VARS=()
 PUBLIC_VARS=(PYTHON_ENV)
 LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)
 RETIRED_PUBLIC_ENV_VARS=(SESSION_PREP_PROVIDER_CLERK_SUBJECTS)
-ENV_JSON='{{"DATABASE_URL":"credential-must-not-appear","PYTHON_ENV":"staging","CLERK_DEPLOYMENT_PUBLISHABLE_KEY":"pk_test_legacy","SESSION_PREP_PROVIDER_CLERK_SUBJECTS":"user_existing_provider_123"}}'
+ENV_JSON='{{"DATABASE_URL":"credential-must-not-appear","PYTHON_ENV":"staging","CLERK_DEPLOYMENT_PUBLISHABLE_KEY":"pk_test_legacy"}}'
 az() {{
     local original="$*"
     [[ "$FAIL_AZURE" == true ]] && return 42
@@ -627,13 +627,13 @@ def test_safe_workload_evidence_accepts_only_matching_legacy_clerk_key() -> None
     assert _workload_capture(app_environment=legacy_environment).returncode != 0
 
 
-def test_safe_workload_evidence_accepts_exact_retired_cohort_only() -> None:
+def test_safe_workload_evidence_accepts_bounded_retired_cohort_without_config() -> None:
     retired_environment = [
         {"name": "DATABASE_URL", "value": None, "secretRef": "database-url"},
         {"name": "PYTHON_ENV", "value": "staging", "secretRef": None},
         {
             "name": "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
-            "value": "user_existing_provider_123",
+            "value": "user_existing_provider_123, user_existing_provider_456",
             "secretRef": None,
         },
     ]
@@ -649,9 +649,9 @@ def test_safe_workload_evidence_accepts_exact_retired_cohort_only() -> None:
         ]
         assert "SESSION_PREP_PROVIDER_CLERK_SUBJECTS" not in observed["publicConfig"]
 
-    mismatched = [dict(item) for item in retired_environment]
-    mismatched[-1]["value"] = "user_unreviewed_provider_456"
-    assert _workload_capture(app_environment=mismatched, mode="safe").returncode != 0
+    malformed = [dict(item) for item in retired_environment]
+    malformed[-1]["value"] = "user_existing_provider_123,,user_other"
+    assert _workload_capture(app_environment=malformed, mode="safe").returncode != 0
     assert _workload_capture(app_environment=retired_environment).returncode != 0
 
 
