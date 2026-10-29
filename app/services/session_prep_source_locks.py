@@ -1,7 +1,6 @@
 """Shared bounded Appointment -> Note fences for Session Prep publication.
 
-Callers keep these NOWAIT locks through commit. Callers own savepoint/rollback
-and retry handling; this helper performs no model or network operation.
+Callers retain NOWAIT locks through commit and own savepoint/retry handling.
 """
 
 from __future__ import annotations

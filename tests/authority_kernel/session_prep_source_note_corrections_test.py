@@ -197,6 +197,12 @@ def case(correction_engine):
         )
 
 
+def required[T](session: Session, model: type[T], identifier) -> T:
+    row = session.get(model, identifier)
+    assert row is not None
+    return row
+
+
 def edit(session, case, *, fields=None):
     doctor = session.get(Doctor, case.doctor_id)
     assert doctor is not None
@@ -210,7 +216,6 @@ def edit(session, case, *, fields=None):
 
 
 def authority_scope(session, case):
-    """Retained valid FK graph for the local cache/binding refusal checks."""
     now = datetime.now(UTC)
     doctor = session.get(Doctor, case.doctor_id)
     assert doctor is not None
@@ -354,22 +359,25 @@ def test_correction_retains_original_and_review_but_excludes_it_until_new_review
         queue_build(session, record, old_digest)
         assert run_build(case, monkeypatch) == "ready"
         artifact = ready_artifact(session, record.id, old_digest)
-        assert artifact.result_payload["freshness"] == "current"
-        assert ready_artifact(session, record.id, old_digest).id == artifact.id
+        assert (
+            artifact is not None and artifact.result_payload["freshness"] == "current"
+        )
+        assert artifact.source_digest == old_digest
         saved = edit(session, case)
         saved_id = saved.id
         session.commit()
         assert saved_id != case.note_id
         retained = session.get(AIVisitNote, case.note_id, populate_existing=True)
+        assert retained is not None
         assert (
             retained.note == case.original
             and retained.supersession_reason == "clinician_web_source_correction"
         )
         assert (
-            session.get(SessionPrepNoteFinalization, old_review_id).content_sha256
+            required(session, SessionPrepNoteFinalization, old_review_id).content_sha256
             == case.digest
         )
-        assert session.get(DoctorNoteSchema, case.schema_id).fields == {
+        assert required(session, DoctorNoteSchema, case.schema_id).fields == {
             "Labs - 02/12/2026": "Labs guidance",
             "Provider": "Provider guidance",
         }
@@ -396,7 +404,10 @@ def test_correction_retains_original_and_review_but_excludes_it_until_new_review
         assert not excluded.sources
         assert source_digest(excluded) != old_digest
         assert ready_artifact(session, record.id, source_digest(excluded)) is None
-        assert session.get(SessionPrepArtifact, artifact.id).source_digest == old_digest
+        assert (
+            required(session, SessionPrepArtifact, artifact.id).source_digest
+            == old_digest
+        )
         finalize_note_for_session_prep(
             session=session,
             doctor_id=case.doctor_id,
@@ -420,8 +431,8 @@ def test_correction_retains_original_and_review_but_excludes_it_until_new_review
         assert selection.sources[0].content_sha256 == note_content_sha256(saved.note)
         assert source_digest(selection) != old_digest
         assert ready_artifact(session, record.id, source_digest(selection)) is None
-        assert session.get(
-            SessionPrepNoteFinalization, old_review_id
+        assert required(
+            session, SessionPrepNoteFinalization, old_review_id
         ).reviewed_content == {
             "sections": [[key, value] for key, value in case.original.items()]
         }
@@ -499,14 +510,13 @@ def test_worker_contention_refuses_stale_publication_and_commits_retry_state(
     with Session(case.engine) as editor:
 
         def corrected_during_model(selection):
-            edit(
-                editor, case
-            )  # Hold actual Appointment/Note locks until after publication.
+            edit(editor, case)
             return synthetic_brief(selection)
 
         assert run_build(case, monkeypatch, generate=corrected_during_model) == "failed"
         with Session(case.engine) as observer:
             pending = observer.get(SessionPrepBuild, pending_id)
+            assert pending is not None
             assert pending.state == "pending" and pending.failure_code == "source_busy"
             assert not observer.exec(
                 select(SessionPrepArtifact).where(
@@ -670,18 +680,20 @@ def test_foreign_inconsistent_disabled_or_stale_edit_is_refused(
         if fault == "foreign_actor":
             state["doctor_id"] = other.id
         elif fault == "foreign_patient":
-            session.get(Patient, case.patient_id).doctor_id = other.id
+            required(session, Patient, case.patient_id).doctor_id = other.id
         elif fault == "foreign_schema":
-            session.get(DoctorNoteSchema, case.schema_id).doctor_id = other.id
+            required(session, DoctorNoteSchema, case.schema_id).doctor_id = other.id
         elif fault == "foreign_transcript":
-            session.get(AIVisitTranscript, case.transcript_id).doctor_id = other.id
+            required(
+                session, AIVisitTranscript, case.transcript_id
+            ).doctor_id = other.id
         elif fault == "foreign_upload":
-            session.get(VisitAudioFile, case.upload_id).doctor_id = other.id
+            required(session, VisitAudioFile, case.upload_id).doctor_id = other.id
         elif fault == "missing_upload":
-            session.delete(session.get(VisitAudioFile, case.upload_id))
+            session.delete(required(session, VisitAudioFile, case.upload_id))
         elif fault == "source_deleted":
-            session.get(
-                AIVisitTranscript, case.transcript_id
+            required(
+                session, AIVisitTranscript, case.transcript_id
             ).deleted_at = datetime.now(UTC)
         elif fault == "off":
             monkeypatch.setattr(
@@ -712,6 +724,7 @@ def test_access_revoked_while_waiting_for_practice_lock_is_refused(
     monkeypatch.setattr(corrections, "lock_practice_seats", observe)
     with Session(case.engine) as revoker:
         practice = lock_practice_seats(revoker, case.practice_id)
+        assert practice is not None
         with ThreadPoolExecutor(max_workers=1) as pool:
             pending = pool.submit(client.post, path, json=payload(case))
             assert reached.wait(5)

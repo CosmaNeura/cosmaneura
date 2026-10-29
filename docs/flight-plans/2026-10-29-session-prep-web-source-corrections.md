@@ -30,8 +30,8 @@ the artifact/read receipt commits. No model call runs under these locks.
   recording. Any retained capture binding, including a revoked binding,
   excludes this editor; capture notes keep their Scribe workflow.
 - Appointment/note locking and the existing partial unique index preserve one
-  current appointment/schema version. Stale saves return 409; changed access
-  returns a generic refusal. Original review evidence is never rewritten.
+  current appointment/schema version. Stale saves and busy history reads
+  return 409; changed access is denied. Review evidence is never rewritten.
 - Superseding the source removes its old finalized body from selection. The
   replacement is excluded until explicit review. The current source digest
   changes, so the retained older cache cannot satisfy the current lookup.

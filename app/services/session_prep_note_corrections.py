@@ -89,7 +89,7 @@ def correct_source_note(
     # or foreign/inconsistent retained binding closes this web editing path.
     if (
         session.exec(
-        select(col(ScribeCaptureBinding.id))
+            select(col(ScribeCaptureBinding.id))
             .where(ScribeCaptureBinding.appointment_id == appointment.id)
             .limit(1)
         ).first()
