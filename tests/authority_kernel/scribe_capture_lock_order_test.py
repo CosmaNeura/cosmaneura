@@ -213,6 +213,11 @@ def case(monkeypatch):
     monkeypatch.setattr(capture, "doctor_access_in_force", lambda _: True)
     monkeypatch.setattr(
         provider_record_authority,
+        "doctor_access_in_force",
+        lambda _doctor, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        provider_record_authority,
         "resolve_session_prep_provider_access",
         lambda _doctor, **_kwargs: SessionPrepProviderAccessDecision(
             allowed=True,
@@ -262,7 +267,7 @@ def case(monkeypatch):
 
 def test_capture_and_exchange_use_the_same_owner_lock_order(case):
     exchange = Transaction(case.transaction.rows)
-    provider_record_authority.lock_provider_record_owner(
+    provider_record_authority.lock_session_prep_record_owner(
         session=exchange.session, clerk_subject=case.doctor.clerk_id
     )
     result = capture._authorized_scope(**case.arguments)
@@ -302,7 +307,7 @@ def test_exchange_requires_allowed_access_with_a_current_practice(
     )
     exchange = Transaction(case.transaction.rows)
     with pytest.raises(provider_record_authority.ProviderRecordScopeDenied):
-        provider_record_authority.lock_provider_record_owner(
+        provider_record_authority.lock_session_prep_record_owner(
             session=exchange.session, clerk_subject=case.doctor.clerk_id
         )
     assert exchange.locks == []

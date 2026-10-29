@@ -173,8 +173,12 @@ def test_forged_record_handle_and_provider_revocation_deny_facts(scope, monkeypa
     monkeypatch.setattr(
         configuration, "SESSION_PREP_PROVIDER_SETTINGS", SessionPrepProviderSettings()
     )
-    with pytest.raises((SessionPrepScopeDenied, authority.AuthorityRequestDeniedError)):
+    before = (SessionPrepArtifact.count(), SessionPrepReadReceipt.count())
+    with pytest.raises(authority.ClientTurnConflictError):
         _facts_read(token, record, action)
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        _facts_read(token, record, _action(token))
+    assert (SessionPrepArtifact.count(), SessionPrepReadReceipt.count()) == before
 
 
 @pytest.mark.parametrize(

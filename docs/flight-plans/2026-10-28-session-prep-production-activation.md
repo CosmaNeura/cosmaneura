@@ -125,3 +125,14 @@ grant can never substitute for practice entitlement. The retired
 `SESSION_PREP_PROVIDER_CLERK_SUBJECTS` variable is accepted only under a bounded
 legacy grammar during staging recovery inspection and is removed during the
 deployment; exact post-state evidence rejects it.
+
+## Shared provider exchange and Scribe continuity
+
+The provider token is shared infrastructure, not a Session Prep grant. Browser and
+trusted-native capture retain their existing product decision, exact owner,
+view-as refusal and fresh authorization; a valid legacy pilot can retain only
+that capture access. Optional Prep provisioning runs in a savepoint, and only
+policy-specific unavailability may fall back to capture, without a Prep
+capability or context. All lineage, identity, membership and offboarding
+conflicts still deny; Prep workers and reads remain strict. This adds no token,
+schema or external service. Recovery is the prior image, without data rollback.

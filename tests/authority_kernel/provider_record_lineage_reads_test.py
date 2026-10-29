@@ -127,7 +127,7 @@ def test_changed_lineage_rows_are_rejected_at_original_boundary(
             )
             session.add(other_patient)
             session.flush()
-            original_practice = records._current_practice
+            original_practice = records._current_session_prep_practice
 
             def changed(current_session, doctor):
                 practice = original_practice(current_session, doctor)
@@ -153,7 +153,7 @@ def test_changed_lineage_rows_are_rejected_at_original_boundary(
                 session.flush()
                 return practice
 
-            patch.setattr(records, "_current_practice", changed)
+            patch.setattr(records, "_current_session_prep_practice", changed)
             if not joined:
                 patch.setattr(records, "_record_lineage_rows", original_rows)
             with pytest.raises(records.ProviderRecordScopeDenied):
