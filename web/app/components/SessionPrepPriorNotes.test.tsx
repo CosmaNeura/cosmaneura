@@ -60,7 +60,7 @@ describe("prior visits for Session Prep", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("opens preparation directly and distinguishes an update-needed source set", () => {
+  it("uses Open, View, and Update only for their corresponding preparation states", () => {
     const open = vi.fn()
     const view = render(
       <SessionPrepPriorNotes overview={overview} onOpenSessionPrep={open} />,
@@ -71,12 +71,38 @@ describe("prior visits for Session Prep", () => {
       <SessionPrepPriorNotes
         overview={overview}
         onOpenSessionPrep={open}
+        preparationState="ready"
+      />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "View Session Prep" }))
+    expect(open).toHaveBeenCalledTimes(2)
+    view.rerender(
+      <SessionPrepPriorNotes
+        overview={overview}
+        onOpenSessionPrep={open}
         preparationState="update_needed"
       />,
     )
     expect(screen.getByText(/Reviewed prior notes changed/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Update Session Prep" }))
-    expect(open).toHaveBeenCalledTimes(2)
+    expect(open).toHaveBeenCalledTimes(3)
+  })
+
+  it("describes a pending preparation without calling its content unavailable", () => {
+    render(
+      <SessionPrepPriorNotes
+        overview={overview}
+        onOpenSessionPrep={vi.fn()}
+        preparationState="pending"
+      />,
+    )
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Session Prep is being prepared from 1 reviewed note",
+    )
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Open it to follow progress",
+    )
+    expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument()
   })
 
   it("refreshes only on request and disables duplicate refresh while loading", () => {
@@ -88,10 +114,12 @@ describe("prior visits for Session Prep", () => {
     expect(screen.getByRole("button", { name: "Refreshing…" })).toBeDisabled()
   })
 
-  it("explains empty history and selection limits without claiming a prepared brief", () => {
+  it("keeps a new preparation closed until a reviewed source is available", () => {
+    const open = vi.fn()
     const result = render(
       <SessionPrepPriorNotes
         overview={{ ...overview, included_count: 0, notes: [] }}
+        onOpenSessionPrep={open}
       />,
     )
     expect(
@@ -100,6 +128,28 @@ describe("prior visits for Session Prep", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "No reviewed prior notes",
     )
+    expect(
+      screen.getByRole("button", { name: "Open Session Prep" }),
+    ).toBeDisabled()
+    expect(screen.getByText(/Review at least one prior note/)).toBeVisible()
+    fireEvent.click(screen.getByRole("button", { name: "Open Session Prep" }))
+    expect(open).not.toHaveBeenCalled()
+    result.rerender(
+      <SessionPrepPriorNotes
+        overview={{ ...overview, included_count: 0, notes: [] }}
+        onOpenSessionPrep={open}
+        preparationState="update_needed"
+      />,
+    )
+    expect(
+      screen.getByRole("button", { name: "Update Session Prep" }),
+    ).toBeDisabled()
+    expect(
+      screen
+        .getAllByRole("status")
+        .map((status) => status.textContent)
+        .join(" "),
+    ).toMatch(/none are currently available.*before updating Session Prep/)
     result.rerender(
       <SessionPrepPriorNotes
         overview={{ ...overview, more_notes: true, selection_limited: true }}
@@ -109,5 +159,22 @@ describe("prior visits for Session Prep", () => {
     expect(
       screen.getByText(/Additional reviewed notes are outside/),
     ).toBeInTheDocument()
+  })
+
+  it("keeps an existing brief viewable when no reviewed sources remain", () => {
+    const open = vi.fn()
+    render(
+      <SessionPrepPriorNotes
+        overview={{ ...overview, included_count: 0, notes: [] }}
+        onOpenSessionPrep={open}
+        preparationState="ready"
+      />,
+    )
+    expect(screen.getByText(/existing brief remains available/)).toBeVisible()
+    expect(
+      screen.getByText(/Previous Session Prep answers remain/),
+    ).toHaveTextContent("save an answer as Markdown")
+    fireEvent.click(screen.getByRole("button", { name: "View Session Prep" }))
+    expect(open).toHaveBeenCalledOnce()
   })
 })

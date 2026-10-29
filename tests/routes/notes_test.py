@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -16,6 +16,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
+from app.models.visit_audio_file import VisitAudioFile
 from sqlalchemy import event
 
 from tests.factories import (
@@ -120,6 +121,58 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["patient_id"] == str(patient.id)
     assert result["appointment"]["doctor_id"] == str(doctor.id)
     assert "context_snapshot_ref" not in result
+
+
+def test_note_detail_uses_durable_upload_progress_across_browser_sessions(
+    authenticated_client: TestClient,
+):
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    patient = Patient(
+        doctor_id=doctor.id,
+        name="Synthetic upload progress",
+        date_of_birth=datetime(2000, 1, 1),
+    ).save()
+
+    def uploaded_visit(name: str, *, minutes_ago: int):
+        appointment = Appointment(
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            appointment_date=datetime.now(UTC),
+            appointment_name=name,
+            external_id=None,
+        ).save()
+        audio = VisitAudioFile(
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            appointment_id=appointment.id,
+            azure_file_name=f"synthetic/{name}.wav",
+        ).save()
+        audio.created_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+        audio.save()
+        return appointment
+
+    recent = uploaded_visit("recent", minutes_ago=2)
+    slow = uploaded_visit("slow", minutes_ago=20)
+    scheduled = Appointment(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_date=datetime.now(UTC),
+        appointment_name="scheduled",
+        external_id=None,
+    ).save()
+
+    statuses = {
+        str(appointment.id): authenticated_client.get(
+            api_app.url_path_for("note_detail", appointment_id=appointment.id)
+        ).json()["note_status"]
+        for appointment in (recent, slow, scheduled)
+    }
+    assert statuses == {
+        str(recent.id): "in-progress",
+        str(slow.id): "taking-longer",
+        str(scheduled.id): "not-started",
+    }
 
 
 def test_note_detail_never_projects_context_ref_for_synthetic_fixture(

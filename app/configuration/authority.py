@@ -1,7 +1,13 @@
+import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 from decouple import config
+
+CANONICAL_CLERK_ISSUER_PATTERN = (
+    r"^https://[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+_CANONICAL_CLERK_ISSUER = re.compile(CANONICAL_CLERK_ISSUER_PATTERN)
 
 
 @dataclass(frozen=True)
@@ -13,18 +19,9 @@ class AuthorityKernelSettings:
     clerk_issuer: str = ""
 
     def has_valid_clerk_issuer(self) -> bool:
-        parsed = urlparse(self.clerk_issuer)
-        return (
-            parsed.scheme == "https"
-            and bool(parsed.hostname)
-            and parsed.username is None
-            and parsed.password is None
-            and parsed.path in {"", "/"}
-            and not parsed.params
-            and not parsed.query
-            and not parsed.fragment
-            and self.clerk_issuer == self.clerk_issuer.rstrip("/")
-        )
+        """Require one canonical HTTPS DNS origin, never a URL variant."""
+
+        return _CANONICAL_CLERK_ISSUER.fullmatch(self.clerk_issuer) is not None
 
     def is_complete(self) -> bool:
         return (

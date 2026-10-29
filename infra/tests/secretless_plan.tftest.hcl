@@ -156,7 +156,9 @@ override_data {
       SENTRY_DSN                         = ""
       SESSION_SECRET_KEY                 = "not-a-secret"
       SMTP_URL                           = "smtp://placeholder.invalid:1025"
-      SOVEREIGN_RECORD_GRANT_SECRET      = "not-a-secret"
+      # Canonical 32-byte Fernet test key (43 URL-safe base64 characters plus
+      # one pad). This is fixed non-production test material.
+      SOVEREIGN_RECORD_GRANT_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       # Production must always declare live/test mode explicitly, even while
       # both default-off Stripe gates are disabled. Keep the PR plan inert
       # while exercising that fail-closed configuration invariant.
@@ -263,6 +265,51 @@ run "secretless_static_plan" {
       one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_HANDOFF_ENABLED"]) == "false",
     ])
     error_message = "the production wiring must not activate the unprovisioned external workflow or legacy handoff"
+  }
+}
+
+run "session_prep_activation_projects_complete_worker_runtime" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    session_prep_production_rollout = {
+      enabled                 = true
+      provider_clerk_subjects = ["user_SessionPrepBeta01"]
+      sovereign_client_id     = "11111111-1111-1111-1111-111111111111"
+      agent_api_audience      = "22222222-2222-2222-2222-222222222222"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.app, azurerm_container_app.worker] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "AUTHORITY_KERNEL_ENABLED"]) == "true"
+    ])
+    error_message = "Session Prep activation must enable the Authority Kernel in both API and worker"
+  }
+
+  assert {
+    condition = alltrue([
+      for name, value in local.session_prep_authority_runtime_public_values :
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == name]) == value
+      ]) && one([
+      for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value
+      if entry.name == "AUTHORITY_CLERK_ISSUER"
+    ]) == local.session_prep_clerk_issuer
+    error_message = "The Session Prep worker must receive the complete non-secret Authority Kernel runtime contract"
+  }
+
+  assert {
+    condition = alltrue([
+      for name in keys(local.session_prep_api_public_values) :
+      !contains([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name], name)
+      ]) && !contains(
+      [for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name],
+      "SOVEREIGN_RECORD_GRANT_SECRET",
+    )
+    error_message = "Agent API identity and record-grant capability must remain API-only"
   }
 }
 
@@ -559,7 +606,7 @@ run "core_cab_api_only_configured_projection" {
         SENTRY_DSN                         = ""
         SESSION_SECRET_KEY                 = "not-a-secret"
         SMTP_URL                           = "smtp://placeholder.invalid:1025"
-        SOVEREIGN_RECORD_GRANT_SECRET      = "not-a-secret"
+        SOVEREIGN_RECORD_GRANT_SECRET      = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         # Production must always declare live/test mode explicitly, even while
         # both default-off Stripe gates are disabled. Keep the PR plan inert
         # while exercising that fail-closed configuration invariant.

@@ -31,13 +31,18 @@ afterEach(() => {
   })
 })
 
-function renderProcessing(loader: () => unknown = vi.fn(() => null)) {
+function renderProcessing(
+  loader: () => unknown = vi.fn(() => null),
+  phase: "in-progress" | "taking-longer" = "in-progress",
+) {
   const router = createMemoryRouter(
     [
       {
         path: "/",
         loader,
-        element: <NoteProcessing appointmentId="appointment_new" />,
+        element: (
+          <NoteProcessing appointmentId="appointment_new" phase={phase} />
+        ),
       },
     ],
     { initialEntries: ["/"] },
@@ -71,6 +76,45 @@ describe("note processing state", () => {
       await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
     })
     expect(vi.mocked(loader).mock.calls.length).toBeGreaterThan(initialLoads)
+  })
+
+  it("refreshes when the server moves a pending upload to taking longer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    client.noteDetail.mockResolvedValue({
+      data: { notes: [], note_status: "taking-longer" },
+    })
+    const { loader } = renderProcessing()
+    await screen.findByText("Writing your note…")
+    const initialLoads = vi.mocked(loader).mock.calls.length
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
+    })
+
+    expect(vi.mocked(loader).mock.calls.length).toBeGreaterThan(initialLoads)
+  })
+
+  it("shows an honest delayed state without polling or claiming failure", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const { loader } = renderProcessing(undefined, "taking-longer")
+
+    expect(
+      await screen.findByText(
+        "Your recording was received, but the note is taking longer than expected.",
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText(/this does not mean the upload failed\./),
+    ).toBeVisible()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS * 2)
+    })
+    expect(client.noteDetail).not.toHaveBeenCalled()
+
+    await act(async () =>
+      screen.getByRole("button", { name: "Check again" }).click(),
+    )
+    expect(vi.mocked(loader).mock.calls.length).toBeGreaterThan(1)
   })
 
   it("does not poll while the tab is hidden", async () => {

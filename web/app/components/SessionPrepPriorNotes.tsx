@@ -24,6 +24,28 @@ export function SessionPrepPriorNotes({
   preparationState?: string | null
 }) {
   const revalidator = useRevalidator()
+  const hasReviewedSources = overview.included_count > 0
+  const hasPreparedBrief = preparationState === "ready"
+  const canOpenSessionPrep = hasReviewedSources || hasPreparedBrief
+  const sessionPrepAction =
+    preparationState === "update_needed"
+      ? "Update Session Prep"
+      : hasPreparedBrief
+        ? "View Session Prep"
+        : "Open Session Prep"
+  const sourceStatus =
+    preparationState === "pending" && hasReviewedSources
+      ? "Session Prep is being prepared from " +
+        overview.included_count +
+        " reviewed " +
+        (overview.included_count === 1 ? "note" : "notes") +
+        ". Open it to follow progress."
+      : overview.included_count === 0
+        ? "No reviewed prior notes are available for this visit yet."
+        : overview.included_count +
+          " reviewed " +
+          (overview.included_count === 1 ? "note is" : "notes are") +
+          " available for this visit."
   return (
     <section
       aria-labelledby="prior-notes-title"
@@ -38,12 +60,9 @@ export function SessionPrepPriorNotes({
             <Button
               size="sm"
               onClick={onOpenSessionPrep}
-              disabled={revalidator.state !== "idle"}
+              disabled={revalidator.state !== "idle" || !canOpenSessionPrep}
             >
-              {preparationState === "ready" ||
-              preparationState === "update_needed"
-                ? "Update Session Prep"
-                : "Open Session Prep"}
+              {sessionPrepAction}
             </Button>
           )}
           <Button
@@ -60,20 +79,30 @@ export function SessionPrepPriorNotes({
       </div>
       {preparationState === "update_needed" && (
         <p className="mt-2 text-sm font-medium" role="status">
-          Reviewed prior notes changed. Update Session Prep to use the latest
-          selection.
+          {hasReviewedSources
+            ? "Reviewed prior notes changed. Update Session Prep to use the latest selection."
+            : "Reviewed prior notes changed, but none are currently available. Review at least one prior note and refresh this list before updating Session Prep."}
         </p>
       )}
       <p className="mt-2 text-sm" role="status">
-        {overview.included_count === 0
-          ? "No reviewed prior notes are available for this visit yet."
-          : `${overview.included_count} reviewed ${overview.included_count === 1 ? "note is" : "notes are"} available for this visit.`}
+        {sourceStatus}
       </p>
       <p className="text-muted-foreground mt-1 text-sm">
         Session Prep uses up to five reviewed notes from prior visits in the
-        last 18 months. Open a note, review it, then return here and refresh
-        before opening or updating Session Prep.
+        last 18 months.{" "}
+        {hasReviewedSources
+          ? "Review additional notes, then refresh this list when you want to change the selection."
+          : hasPreparedBrief
+            ? "The existing brief remains available to view. Review a prior note and refresh this list before preparing an update."
+            : "Review at least one prior note, then refresh this list to enable Session Prep."}
       </p>
+      {hasPreparedBrief && (
+        <p className="text-muted-foreground mt-1 text-sm">
+          Previous Session Prep answers remain in the conversation view. Choose
+          Show conversation in the panel to return to them and save an answer as
+          Markdown.
+        </p>
+      )}
       {overview.notes.length ? (
         <ul className="mt-3 divide-y">
           {overview.notes.map((note) => (
