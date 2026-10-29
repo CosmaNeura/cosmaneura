@@ -62,6 +62,7 @@ dependencies = [
 
 [tool.uv]
 constraint-dependencies = [
+    "dnspython>=2.9.0,<3",
     "certifi>=2026.10.19",
     "black>=26.10.1,<27",
     "filelock>=4.2.1,<5",
