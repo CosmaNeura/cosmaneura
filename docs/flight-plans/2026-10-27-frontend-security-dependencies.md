@@ -10,6 +10,13 @@ The 2026-10-28 requalification also raises the declared Vite floor to 6.4.5
 come from pnpm resolution; every other previously qualified package artifact
 is retained. Validate this minimal graph with a fresh frozen install and audit.
 
+Requalify on 2026-10-29 against current master's automatic Session Prep access,
+prior-note review/progress, note processing and checkout recovery changes. Keep
+the same dependency graph unless the fresh audit requires another security fix.
+Locked Happy DOM 21.0.4 also exceeds the newly reported GHSA-c8p4-j97h-3vg8
+and GHSA-5fpq-26gf-qwcr patched floors (21.0.0 and 20.14.6 respectively).
+Verify all current advisories again before handing the candidate to the merger.
+
 Release one reviewed source candidate containing the patched Vite, Happy DOM and
 Zod graph, compatible form resolvers and assistant UI, and the required Zod 4
 syntax repairs. Preserve exact patient names and existing validation messages.
