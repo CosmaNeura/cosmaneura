@@ -293,7 +293,68 @@ def handle_meeting_started(
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id_str)
 
-    if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
+    if zoom_mtg is None:
+        meeting = zoom_service.get_meeting(doctor, meeting_id_str)
+        if (
+            str(meeting.get("id")) != meeting_id_str
+            or meeting.get("host_id") != host_id
+            or integration.provider_user_id != host_id
+        ):
+            log.warning(
+                "live meeting detail did not match signed host occurrence",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                host_ref=provider_log_ref(host_id),
+            )
+            return
+
+        # The provider read deliberately runs outside the lifecycle lock. It
+        # may take long enough for this occurrence to end or be replaced, so
+        # reacquire the lock and bind every identity again before importing.
+        # Re-query the row as well: a concurrent delivery can have completed
+        # the same import while this worker was waiting on Zoom.
+        with _lifecycle_lock(redis, meeting_id_str):
+            current_integration = zoom_service.get_zoom_integration(doctor)
+            if (
+                _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
+                != event_occurrence
+                or _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+                != str(doctor.id)
+                or _rget(redis, f"recall:meeting:{meeting_id}:host_id") != host_id
+                or current_integration is None
+                or current_integration.id != integration.id
+                or current_integration.provider_user_id != host_id
+            ):
+                log.warning(
+                    "live meeting import fenced after lifecycle identity changed",
+                    meeting_ref=provider_log_ref(meeting_id_str),
+                )
+                return
+
+            zoom_mtg = ZoomMeeting.get(
+                doctor_id=doctor.id,
+                zoom_meeting_id=meeting_id_str,
+            )
+            if zoom_mtg is None:
+                from app.jobs import sync_zoom_meetings as sync_zoom_meetings_job
+
+                zoom_mtg = sync_zoom_meetings_job.upsert_meeting(doctor, meeting)
+                if zoom_mtg is None:
+                    log.warning(
+                        "live meeting detail could not be imported",
+                        meeting_ref=provider_log_ref(meeting_id_str),
+                    )
+                    return
+                log.info(
+                    "live meeting imported from signed start webhook",
+                    meeting_ref=provider_log_ref(meeting_id_str),
+                    doctor_ref=provider_log_ref(str(doctor.id)),
+                )
+
+            if zoom_mtg.status == ZoomMeetingStatus.scheduled:
+                zoom_mtg.status = ZoomMeetingStatus.started
+                zoom_mtg.save()
+
+    elif zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
 

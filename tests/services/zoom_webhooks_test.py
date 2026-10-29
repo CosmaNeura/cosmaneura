@@ -204,6 +204,18 @@ def mock_zoom(monkeypatch):
     )
     monkeypatch.setattr(
         zoom_service,
+        "get_meeting",
+        lambda doctor, meeting_id: {
+            "id": meeting_id,
+            "host_id": HOST_ID,
+            "topic": "Recovered live visit",
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "duration": 30,
+            "join_url": f"https://zoom.us/j/{meeting_id}",
+        },
+    )
+    monkeypatch.setattr(
+        zoom_service,
         "get_user_display_name",
         lambda doctor: "Test Doctor",
     )
@@ -291,6 +303,305 @@ def test_meeting_started_does_not_create_bot(
     assert clean_redis.get(_key("bot_id")) is None
     assert clean_redis.get(_key("doctor_id")) is not None
     assert clean_redis.get(_key("host_id")).decode() == HOST_ID
+
+
+def test_meeting_started_imports_missing_live_meeting_when_lists_are_empty(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.jobs import sync_zoom_meetings
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+    monkeypatch.setattr(sync_zoom_meetings, "doctor_access_in_force", lambda _d: True)
+    monkeypatch.setattr(zoom_service, "get_user_meetings", lambda _d: [])
+
+    sync_zoom_meetings.perform(str(doctor_with_zoom.id))
+    assert (
+        ZoomMeeting.get(
+            doctor_id=doctor_with_zoom.id,
+            zoom_meeting_id=MEETING_ID,
+        )
+        is None
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    recovered = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert recovered is not None
+    assert recovered.status == ZoomMeetingStatus.started
+    assert recovered.topic == "Recovered live visit"
+    assert recovered.appointment_id is None
+    assert recovered.capture_authorization_occurrence_digest is None
+    assert mock_recall["create_bot"] == []
+
+
+def test_meeting_started_existing_row_does_not_refetch_detail(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    def unexpected_detail(*_args, **_kwargs):
+        raise AssertionError("existing meeting must not be refetched")
+
+    monkeypatch.setattr(zoom_service, "get_meeting", unexpected_detail)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    meeting = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert meeting is not None
+    assert meeting.status == ZoomMeetingStatus.started
+
+
+def test_meeting_started_missing_row_refuses_wrong_provider_host(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+    monkeypatch.setattr(
+        zoom_service,
+        "get_meeting",
+        lambda _doctor, meeting_id: {
+            "id": meeting_id,
+            "host_id": "different-provider-host",
+            "topic": "Wrong host",
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "duration": 30,
+            "join_url": f"https://zoom.us/j/{meeting_id}",
+        },
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert (
+        ZoomMeeting.get(
+            doctor_id=doctor_with_zoom.id,
+            zoom_meeting_id=MEETING_ID,
+        )
+        is None
+    )
+    assert mock_recall["create_bot"] == []
+
+
+def test_meeting_started_missing_row_refuses_stale_occurrence_before_provider_read(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+    clean_redis.set(_key("occurrence_digest"), "current-occurrence")
+
+    def unexpected_detail(*_args, **_kwargs):
+        raise AssertionError("stale occurrence must be fenced before provider read")
+
+    monkeypatch.setattr(zoom_service, "get_meeting", unexpected_detail)
+
+    zoom_webhooks.handle_meeting_started(_started_payload("stale-occurrence"))
+
+    assert (
+        ZoomMeeting.get(
+            doctor_id=doctor_with_zoom.id,
+            zoom_meeting_id=MEETING_ID,
+        )
+        is None
+    )
+    assert mock_recall["create_bot"] == []
+
+
+def test_meeting_started_missing_row_is_not_resurrected_after_matching_end(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+
+    def detail_after_end(_doctor, meeting_id):
+        zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
+        return {
+            "id": meeting_id,
+            "host_id": HOST_ID,
+            "topic": "Already ended",
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "duration": 30,
+            "join_url": f"https://zoom.us/j/{meeting_id}",
+        }
+
+    monkeypatch.setattr(zoom_service, "get_meeting", detail_after_end)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert (
+        ZoomMeeting.get(
+            doctor_id=doctor_with_zoom.id,
+            zoom_meeting_id=MEETING_ID,
+        )
+        is None
+    )
+    assert clean_redis.get(_key("occurrence_digest")) is None
+    assert clean_redis.get(_key("doctor_id")) is None
+    assert mock_recall["create_bot"] == []
+
+
+def test_meeting_started_missing_row_preserves_replacement_during_provider_read(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+    replacement_occurrence = digest_provider_reference(
+        "zoom-occurrence:replacement-during-fetch"
+    )
+
+    def detail_after_replacement(_doctor, meeting_id):
+        with zoom_webhooks._lifecycle_lock(clean_redis, MEETING_ID):
+            zoom_webhooks._clear_meeting_keys(
+                clean_redis,
+                MEETING_ID,
+                preserve_lock=True,
+            )
+            clean_redis.set(_key("occurrence_digest"), replacement_occurrence)
+            clean_redis.set(_key("doctor_id"), str(doctor_with_zoom.id))
+            clean_redis.set(_key("host_id"), HOST_ID)
+        return {
+            "id": meeting_id,
+            "host_id": HOST_ID,
+            "topic": "Prior occurrence detail",
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "duration": 30,
+            "join_url": f"https://zoom.us/j/{meeting_id}",
+        }
+
+    monkeypatch.setattr(zoom_service, "get_meeting", detail_after_replacement)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert (
+        ZoomMeeting.get(
+            doctor_id=doctor_with_zoom.id,
+            zoom_meeting_id=MEETING_ID,
+        )
+        is None
+    )
+    assert clean_redis.get(_key("occurrence_digest")).decode() == (
+        replacement_occurrence
+    )
+    assert clean_redis.get(_key("doctor_id")).decode() == str(doctor_with_zoom.id)
+    assert clean_redis.get(_key("host_id")).decode() == HOST_ID
+    assert mock_recall["create_bot"] == []
+
+
+def test_meeting_started_missing_row_reuses_concurrent_import_without_overwrite(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+    concurrent_start = datetime.now(timezone.utc) - timedelta(minutes=2)
+
+    def detail_after_concurrent_import(_doctor, meeting_id):
+        ZoomMeeting(
+            doctor_id=doctor_with_zoom.id,
+            zoom_meeting_id=meeting_id,
+            topic="Concurrent canonical row",
+            start_time=concurrent_start,
+            duration=25,
+            join_url=f"https://zoom.us/j/{meeting_id}?source=concurrent",
+            status=ZoomMeetingStatus.scheduled,
+        ).save()
+        return {
+            "id": meeting_id,
+            "host_id": HOST_ID,
+            "topic": "Stale provider fetch",
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "duration": 30,
+            "join_url": f"https://zoom.us/j/{meeting_id}?source=fetch",
+        }
+
+    monkeypatch.setattr(zoom_service, "get_meeting", detail_after_concurrent_import)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    meeting = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert meeting is not None
+    assert meeting.status == ZoomMeetingStatus.started
+    assert meeting.topic == "Concurrent canonical row"
+    assert meeting.duration == 25
+    assert meeting.join_url.endswith("source=concurrent")
+    assert mock_recall["create_bot"] == []
 
 
 def test_meeting_started_denied_access_does_not_register_or_dispatch(

@@ -1,6 +1,31 @@
 from unittest import mock
 
-from app.services.zoom import get_user_meetings
+from app.services.zoom import get_meeting, get_user_meetings
+
+
+def test_get_meeting_fetches_provider_owned_detail():
+    doctor = mock.Mock(id="doctor-test-id")
+    integration = mock.Mock(provider_user_id="zoom-user-id")
+    detail = {
+        "id": 81054466452,
+        "host_id": "zoom-user-id",
+        "topic": "Live meeting",
+    }
+
+    with (
+        mock.patch(
+            "app.services.zoom.get_zoom_integration",
+            return_value=integration,
+        ),
+        mock.patch("app.services.zoom._zoom_get", return_value=detail) as zoom_get,
+    ):
+        assert get_meeting(doctor, "81054466452") == detail
+
+    zoom_get.assert_called_once_with(
+        "/meetings/81054466452",
+        integration=integration,
+        operation="get_meeting",
+    )
 
 
 def test_get_user_meetings_merges_upcoming_and_live_without_duplicates():

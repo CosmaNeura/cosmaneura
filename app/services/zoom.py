@@ -274,16 +274,19 @@ def get_user_display_name(doctor: Doctor) -> str:
     )
 
 
-def get_meeting_join_url(doctor: Doctor, meeting_id: str) -> str:
+def get_meeting(doctor: Doctor, meeting_id: str) -> dict:
     integration = get_zoom_integration(doctor)
     assert integration, "doctor has no zoom integration"
 
-    data = _zoom_get(
+    return _zoom_get(
         f"/meetings/{meeting_id}",
         integration=integration,
         operation="get_meeting",
     )
-    return data["join_url"]
+
+
+def get_meeting_join_url(doctor: Doctor, meeting_id: str) -> str:
+    return get_meeting(doctor, meeting_id)["join_url"]
 
 
 def get_user_meetings(doctor: Doctor) -> list[dict]:
