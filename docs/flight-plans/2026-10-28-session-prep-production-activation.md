@@ -7,21 +7,21 @@ enable production, select a provider, alter Sovereign, or rebuild the frontend.
 ## Source checkpoint
 
 `session_prep_production_rollout` is the only Terraform input allowed to project
-the Core production receiver gates. Its default is disabled with an empty
-cohort and no paired Entra identifiers. When a later reviewed plan explicitly
+the Core production receiver gates. Its default is disabled with no paired
+Entra identifiers. When a later reviewed plan explicitly
 enables it, the same boolean supplies `AUTHORITY_KERNEL_ENABLED`,
 `AGENT_API_ENABLED`, and `SESSION_PREP_PROVIDER_ENABLED`; Core cannot plan one
-of those three gates on while leaving another off. The exact provider subjects
-are projected identically into API, worker, and scheduler. Agent API identity
-settings remain API-only. The non-secret Authority Kernel enabled
+of those three gates on while leaving another off. That global availability
+state is projected identically into API, worker, and scheduler; there is no
+per-user Session Prep allowlist. Agent API identity settings remain API-only.
+The non-secret Authority Kernel enabled
 state and token lifetimes are identical on API and worker because the worker
 revalidates current authority before and after generation. They are not sent to
 the scheduler, and no Agent API identity or record-grant secret reaches the
 worker.
 
-The contract accepts at most 20 exact Clerk `user_...` subjects and no wildcard,
-email, or empty entry. Activation also requires one nonzero canonical Sovereign
-client UUID, one nonzero canonical Agent API audience UUID, the derived
+Activation requires one nonzero canonical Sovereign client UUID, one nonzero
+canonical Agent API audience UUID, the derived
 production Clerk issuer, and an existing record-grant signing secret. The
 issuer must be one canonical HTTPS DNS origin and the signing secret must be an
 exact canonical 44-character Fernet key; malformed variants fail the plan
@@ -30,7 +30,7 @@ is deliberately absent.
 
 `GET /internal/v1/settings` adds `session_prep.eligible` and
 `session_prep.can_review_sources`. The response contains no provider subject,
-cohort contents, chart data, or authorization token. It reports only the
+account list, chart data, or authorization token. It reports only the
 current doctor context selected by the existing authenticated dependency chain.
 View-as may discover that the target is selected but can never advertise source
 review authority. Source review is advertised only while the same current
@@ -41,9 +41,9 @@ execution grant.
 
 The note-detail UI consumes both discovery booleans in addition to the
 build-time Sovereign integration flag. It renders neither the Session Prep
-panel nor prior-visit controls until Core says the current provider is selected
-and can currently review sources. Missing discovery state (including a newly
-onboarded provider or an older cached response) fails closed.
+panel nor prior-visit controls until Core says the current provider is eligible
+and can currently review sources. Missing or older cached discovery state fails
+closed and refreshes through the ordinary settings query.
 
 ## Read-only preflight
 
@@ -54,7 +54,7 @@ Before any activation proposal:
    Sovereign source and with production authority enabled.
 2. Run `tofu -chdir=infra validate -no-color`, then produce a saved **plan only**
    with the proposed `session_prep_production_rollout`. Do not apply it. The
-   plan must show the same Session Prep cohort on API, worker, and scheduler;
+   plan must show the same Session Prep enabled state on API, worker, and scheduler;
    the complete non-secret Authority Kernel runtime on API and worker; Agent
    API identity only on API; and no unrelated resource change.
 3. Read production metadata without chart content. Require a sole Alembic head
@@ -76,10 +76,13 @@ Before any activation proposal:
 ## Founder-only activation inputs
 
 The founder must still choose and authorize all of the following in one release
-record. None is inferred from email domain, existing staging membership, or
-this source checkpoint:
+record. Enabling the global switch makes Session Prep available to every
+existing or future provider whose current persisted authorization satisfies the
+strict provider/practice/BAA/entitlement predicate; email domain or a legacy
+pilot grant alone never qualifies an account.
 
-- exact initial production Clerk subject set (providers' own visits only);
+- aggregate-only production eligibility evidence, including zero integrity
+  violations and an acknowledged eligible-provider count;
 - exact Core and Sovereign source SHAs and immutable image digests;
 - production Sovereign managed-identity client ID, Agent API audience, and
   confirmed app-role assignment;
@@ -99,8 +102,9 @@ Keep the rollout object disabled while images, schema, identity, frontend, and
 recovery evidence are prepared. For an approved cutover, apply schema first if
 needed; update/drain Core worker and scheduler before Core API; deploy the paired
 Sovereign service and frontend only under the same release record; then run the
-provider-owned synthetic acceptance. The cohort may expand only through another
-reviewed source/plan change.
+provider-owned synthetic acceptance. Existing and new providers become eligible
+automatically as their current account, practice, BAA, and entitlement records
+enter the approved states; no feature-specific user-list update is required.
 
 Fast stop is a reviewed plan setting `session_prep_production_rollout.enabled`
 back to `false`, which closes new review, exchange, worker, and real-record read
@@ -109,13 +113,15 @@ Recover application images only to a migration-compatible retained Core and
 Sovereign pair. Never lower correction frontiers or delete Session Prep records
 as rollback.
 
-## Deferred authorization consolidation
+## Current automatic authorization
 
-The current Session Prep cohort key is an exact Clerk subject and several
-execution paths consult it directly. Replacing this with canonical Doctor or
-Practice TypeID cohorts is a separate Tier-2 change: one resolver must combine
-feature state, doctor lifecycle, active authorized practice membership, BAA and
-entitlement state, record ownership, view-as restrictions, and rollout cohort;
-all HTTP, worker, authority, and Scribe-reconciliation callers must migrate in
-one reviewed sequence. Until then, this checkpoint does not add a second cohort
-resolver or broaden eligibility by MyCatholicDoctor email domain.
+One resolver combines Doctor lifecycle, active seat-holding practice membership,
+organization-roster or workforce-attestation authority, an in-force BAA, and
+ordinary current practice entitlement. Discovery and every provider-data
+execution boundary revalidate that decision; record ownership and view-as
+restrictions remain additional independent checks. A revoked legacy pilot grant
+is a denial tombstone unless a current active replacement exists, and a pilot
+grant can never substitute for practice entitlement. The retired
+`SESSION_PREP_PROVIDER_CLERK_SUBJECTS` variable is accepted only under a bounded
+legacy grammar during staging recovery inspection and is removed during the
+deployment; exact post-state evidence rejects it.
