@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import io
 import json
 import os
 import re
@@ -132,7 +133,7 @@ def normalized_scopes(scopes: object) -> set[str]:
     return set(cast(list[str] | tuple[str, ...] | set[str], exact))
 
 
-def validate_argv(argv: list[str], candidate: str = CANDIDATE) -> None:
+def validate_argv(argv: list[str], candidate: str = CANDIDATE) -> str | None:
     require(type(candidate) is str and re.fullmatch(r"[0-9a-f]{40}", candidate))
     require(argv[-2:] == ["--subscription", SUBSCRIPTION])
     command = argv[:-2]
@@ -202,7 +203,44 @@ def validate_argv(argv: list[str], candidate: str = CANDIDATE) -> None:
         ],
     )
     if command in exact_commands:
-        return
+        return None
+    if len(command) > 6 and re.fullmatch(
+        rf"{re.escape(REPOSITORY)}@sha256:[0-9a-f]{{64}}", command[6]
+    ):
+        image = command[6]
+        require(
+            command
+            in (
+                [
+                    "acr",
+                    "repository",
+                    "update",
+                    "--name",
+                    REGISTRY,
+                    "--image",
+                    image,
+                    "--write-enabled",
+                    "false",
+                    "--delete-enabled",
+                    "false",
+                    "--only-show-errors",
+                    "--output",
+                    "none",
+                ],
+                [
+                    "acr",
+                    "manifest",
+                    "show-metadata",
+                    "--registry",
+                    REGISTRY,
+                    "--name",
+                    image,
+                    "--output",
+                    "json",
+                ],
+            )
+        )
+        return image.partition("@")[2]
     require(len(command) == 13)
     require(
         command[:6] == ["acr", "import", "--name", REGISTRY, "--registry", REGISTRY]
@@ -218,6 +256,47 @@ def validate_argv(argv: list[str], candidate: str = CANDIDATE) -> None:
             "none",
         ]
     )
+    return None
+
+
+def invoke_bound_command(cli: Any, argv: list[str], candidate: str) -> int:
+    """Bind digest operations to the already protected candidate tag."""
+    manifest_digest = validate_argv(argv, candidate)
+    if manifest_digest is not None:
+        output = io.StringIO()
+        status = cli.invoke(
+            [
+                "acr",
+                "repository",
+                "show",
+                "--name",
+                REGISTRY,
+                "--image",
+                f"{REPOSITORY}:{candidate}",
+                "--output",
+                "json",
+                "--subscription",
+                SUBSCRIPTION,
+            ],
+            out_file=output,
+        )
+        require(status is None or type(status) is int and status == 0)
+        raw = output.getvalue()
+        require(0 < len(raw.encode()) <= 65536)
+        try:
+            tag = json.loads(raw, object_pairs_hook=unique)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            raise BoundAcrRefused("staging_acr_cli_bound_refused") from None
+        require(type(tag) is dict and tag.get("name") == candidate)
+        require(tag.get("digest") == manifest_digest)
+        attributes = tag.get("changeableAttributes")
+        require(type(attributes) is dict)
+        attributes = cast(dict[str, Any], attributes)
+        require(attributes.get("writeEnabled") is False)
+        require(attributes.get("deleteEnabled") is False)
+        require(attributes.get("readEnabled") is True)
+        require(attributes.get("listEnabled") is True)
+    return int(cli.invoke(argv) or 0)
 
 
 def main() -> int:
@@ -298,7 +377,7 @@ def main() -> int:
 
     Profile.get_login_credentials = get_login_credentials
     Profile.get_raw_token = get_raw_token
-    return int(get_default_cli().invoke(argv) or 0)
+    return invoke_bound_command(get_default_cli(), argv, candidate)
 
 
 if __name__ == "__main__":
