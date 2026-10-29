@@ -32,10 +32,10 @@ is deliberately absent.
 `session_prep.can_review_sources`. The response contains no provider subject,
 account list, chart data, or authorization token. It reports only the
 current doctor context selected by the existing authenticated dependency chain.
-View-as may discover that the target is selected but can never advertise source
-review authority. Source review is advertised only while the same current
-provider/practice/BAA/entitlement decision used by the review route is in
-force. All review, exchange, and read endpoints continue to enforce their
+Both discovery booleans remain false during support view-as. An ordinary
+provider becomes eligible only while the same current provider/practice/BAA/
+entitlement decision used by the review route is in force. All review,
+exchange, and read endpoints continue to enforce their
 existing live record and note ownership checks; this response is not an
 execution grant.
 
