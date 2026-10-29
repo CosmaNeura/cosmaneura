@@ -5,7 +5,7 @@ import { getPractice } from "~/lib/practice-api"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 import { BillingReturnNotice, safeBillingReturnTo } from "./BillingReturnNotice"
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 
 vi.mock("~/lib/practice-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/practice-api")>()),
@@ -63,7 +63,7 @@ function renderNotice(
 
 afterEach(() => {
   vi.useRealTimers()
-  vi.clearAllMocks()
+  vi.resetAllMocks()
 })
 
 describe("BillingReturnNotice", () => {
@@ -176,6 +176,163 @@ describe("BillingReturnNotice", () => {
     expect(screen.getByText(/do not pay a second time/i)).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: /check again/i }),
+    ).toBeInTheDocument()
+  })
+
+  it.each(["active", "trialing"])(
+    "waits for Core entitlement when Stripe still reports %s",
+    (subscription_status) => {
+      renderNotice(
+        "/settings?billing=success",
+        practice({
+          subscription_status,
+          billing_subscription_manageable: true,
+          entitled: false,
+        }),
+      )
+      expect(
+        screen.getByText(/confirming your subscription/i),
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: /continue to cosmas/i }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it.each([
+    { baa_accepted: false },
+    { access_authorized: false },
+    { access_revoked: true },
+    { access_ended: true },
+  ])(
+    "keeps confirmed billing separate from blocked practice access: %j",
+    (blocked) => {
+      renderNotice(
+        "/settings?billing=success",
+        practice({
+          entitled: true,
+          subscription_status: "active",
+          billing_subscription_manageable: true,
+          ...blocked,
+        }),
+      )
+      expect(screen.getByText(/subscription confirmed/i)).toBeInTheDocument()
+      expect(
+        screen.queryByText(/your practice access is ready/i),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByText(
+          /review the remaining practice access requirements below/i,
+        ),
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: /continue to cosmas/i }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it("recovers from a failed status request and waits for current entitlement", async () => {
+    vi.useFakeTimers()
+    const unconfirmed = practice({
+      subscription_status: "trialing",
+      billing_subscription_manageable: true,
+      entitled: false,
+    })
+    const restored = { ...unconfirmed, entitled: true }
+    vi.mocked(getPractice)
+      .mockRejectedValueOnce(new Error("Synthetic status outage"))
+      .mockResolvedValueOnce(unconfirmed)
+      .mockResolvedValueOnce(restored)
+    const changed = renderNotice("/settings?billing=success", practice())
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+    expect(changed).not.toHaveBeenCalled()
+    expect(
+      screen.queryByText(/your practice access is ready/i),
+    ).not.toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    expect(changed).toHaveBeenCalledExactlyOnceWith(restored)
+    expect(
+      screen.getByText(/your practice access is ready/i),
+    ).toBeInTheDocument()
+  })
+
+  it("starts a fresh bounded check after delayed confirmation", async () => {
+    vi.useFakeTimers()
+    vi.mocked(getPractice).mockResolvedValue(practice())
+    const changed = renderNotice("/settings?billing=success", practice())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(getPractice).toHaveBeenCalledTimes(24)
+    expect(changed).not.toHaveBeenCalled()
+
+    const restored = practice({
+      entitled: true,
+      subscription_status: "active",
+      billing_subscription_manageable: true,
+    })
+    vi.mocked(getPractice).mockResolvedValue(restored)
+    fireEvent.click(screen.getByRole("button", { name: /check again/i }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    expect(getPractice).toHaveBeenCalledTimes(25)
+    expect(changed).toHaveBeenCalledExactlyOnceWith(restored)
+    expect(
+      screen.getByText(/your practice access is ready/i),
+    ).toBeInTheDocument()
+  })
+
+  it("uses the polled access requirements before offering continuation", async () => {
+    vi.useFakeTimers()
+    const confirmed = practice({
+      entitled: true,
+      subscription_status: "active",
+      billing_subscription_manageable: true,
+      baa_accepted: false,
+    })
+    vi.mocked(getPractice).mockResolvedValue(confirmed)
+    const changed = renderNotice("/settings?billing=success", practice())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    expect(changed).toHaveBeenCalledExactlyOnceWith(confirmed)
+    expect(screen.getByText(/subscription confirmed/i)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /continue to cosmas/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("removes continuation when access changes after confirmation", () => {
+    const current = practice({
+      entitled: true,
+      subscription_status: "active",
+      billing_subscription_manageable: true,
+    })
+    const changed = vi.fn()
+    const notice = (value: PracticeStatus) => (
+      <MemoryRouter initialEntries={["/settings?billing=success"]}>
+        <BillingReturnNotice practice={value} onPracticeChange={changed} />
+      </MemoryRouter>
+    )
+    const view = render(notice(current))
+    expect(
+      screen.getByRole("button", { name: /continue to cosmas/i }),
+    ).toBeInTheDocument()
+    view.rerender(notice({ ...current, access_revoked: true }))
+    expect(
+      screen.queryByRole("button", { name: /continue to cosmas/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /review the remaining practice access requirements below/i,
+      ),
     ).toBeInTheDocument()
   })
 })
