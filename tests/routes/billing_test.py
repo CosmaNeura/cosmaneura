@@ -980,3 +980,127 @@ def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
     )
     assert again.status_code == status.HTTP_200_OK
     assert again.json()["duplicate"] is True
+
+
+@pytest.mark.usefixtures("stripe_configured")
+@pytest.mark.committed_database
+def test_checkout_return_waits_for_durable_processing_and_recovers_clinical_access(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Real routes, signatures, inbox and access gates; fake only Stripe I/O."""
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    notes_path = api_app.url_path_for("note_list")
+    practice_path = api_app.url_path_for("practice_status")
+    checkout_path = api_app.url_path_for("create_billing_checkout")
+    assert (
+        authenticated_client.post(
+            api_app.url_path_for("complete_onboarding")
+        ).status_code
+        == 200
+    )
+    assert authenticated_client.get(notes_path).status_code == 402
+
+    first = authenticated_client.post(
+        checkout_path, json={}, headers={"origin": VALID_ORIGIN}
+    )
+    again = authenticated_client.post(
+        checkout_path, json={}, headers={"origin": VALID_ORIGIN}
+    )
+    assert first.status_code == again.status_code == 200
+    assert first.json() == again.json()
+    practice.refresh()
+    assert practice.stripe_checkout_session_id == "cs_route_test"
+    calls = [call for call in route_stripe.calls if call[1] == "/checkout/sessions"]
+    assert len(calls) == 1
+    assert calls[0][3] is not None
+    checkout_data = calls[0][2]
+    assert checkout_data is not None
+    subscription = _subscription(practice, status_value="active")
+    subscription["metadata"] = {
+        key.removeprefix("subscription_data[metadata][").removesuffix("]"): value
+        for key, value in checkout_data.items()
+        if key.startswith("subscription_data[metadata][")
+    }
+    route_stripe.subscriptions[subscription["id"]] = subscription
+    checkout = route_stripe.sessions["cs_route_test"]
+    checkout.update(
+        status="complete",
+        subscription=subscription["id"],
+        customer=subscription["customer"],
+    )
+
+    def broker_unavailable(*_args, **_kwargs):
+        raise RuntimeError("Synthetic broker outage")
+
+    monkeypatch.setattr(app.jobs.stripe_events.process, "delay", broker_unavailable)
+
+    def deliver(event_type: str, payload: dict, sequence: int):
+        event_id = f"evt_journey_{sequence}"
+        body = json.dumps(
+            {
+                "id": event_id,
+                "type": event_type,
+                "created": int(time.time()) + sequence,
+                "api_version": "2025-09-30.clover",
+                "livemode": False,
+                "data": {"object": payload},
+            }
+        ).encode()
+        headers = {
+            "content-type": "application/json",
+            "stripe-signature": _sign(body),
+        }
+        accepted = authenticated_client.post(
+            STRIPE_WEBHOOK_PATH, content=body, headers=headers
+        )
+        assert accepted.status_code == 200, accepted.text
+        duplicate = authenticated_client.post(
+            STRIPE_WEBHOOK_PATH, content=body, headers=headers
+        )
+        assert duplicate.status_code == 200 and duplicate.json()["duplicate"] is True
+        inbox = StripeEventInbox.get(event_id=event_id)
+        assert inbox is not None and inbox.state == "pending"
+        return inbox
+
+    inbox = deliver("checkout.session.completed", checkout, 1)
+    # A successful browser return or webhook acknowledgement grants no access.
+    pending = authenticated_client.get(practice_path).json()
+    assert pending["entitled"] is False
+    assert authenticated_client.get(notes_path).status_code == 402
+    assert stripe_billing.reconcile_pending_stripe_events() == (1, 0)
+    inbox.refresh()
+    assert inbox.state == "processed"
+    confirmed = authenticated_client.get(practice_path).json()
+    assert confirmed["entitled"] is True
+    assert confirmed["billing_subscription_manageable"] is True
+    assert authenticated_client.get(notes_path).status_code == 200
+
+    subscription["status"] = "past_due"
+    deliver("customer.subscription.updated", subscription, 2)
+    assert stripe_billing.reconcile_pending_stripe_events() == (1, 0)
+    assert authenticated_client.get(notes_path).status_code == 402
+    portal = authenticated_client.post(
+        api_app.url_path_for("create_billing_portal"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+    assert portal.status_code == 200
+
+    subscription["status"] = "active"
+    deliver("customer.subscription.updated", subscription, 3)
+    assert stripe_billing.reconcile_pending_stripe_events() == (1, 0)
+    assert authenticated_client.get(notes_path).status_code == 200
+
+    subscription["status"] = "canceled"
+    deliver("customer.subscription.deleted", subscription, 4)
+    assert stripe_billing.reconcile_pending_stripe_events() == (1, 0)
+    final = authenticated_client.get(practice_path).json()
+    assert final["entitled"] is False
+    assert final["billing_subscription_manageable"] is False
+    assert authenticated_client.get(notes_path).status_code == 402
+    assert [
+        call for call in route_stripe.calls if call[1] == "/checkout/sessions"
+    ] == calls
