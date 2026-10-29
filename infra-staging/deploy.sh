@@ -828,6 +828,12 @@ collect_workload_state() {
 			--arg expected_image "$STAGING_IMAGE_REFERENCE" \
 			--arg mode "$mode" '
 			def secret_ref($name): $name | ascii_downcase | gsub("_"; "-");
+			def strip: gsub("^\\s+|\\s+$"; "");
+			def retired_provider_cohort:
+			  type == "string" and length > 0 and length <= 8192 and
+			  (split(",") | map(strip) |
+			   length > 0 and length <= 128 and
+			   all(.[]; test("^user_[A-Za-z0-9_-]{1,128}$")));
 			.[0] as $workload | .[1] as $revision | .[2] as $configuration |
 			select(($revision.containers | type == "array") and
 			 ($revision.containers | length) == 1) |
@@ -850,9 +856,7 @@ collect_workload_state() {
 			     (.value | type == "string" and length > 0) and .secretRef == null and
 			     .value == $configuration.CLERK_DEPLOYMENT_PUBLISHABLE_KEY
 			   elif $mode == "safe" and ($retired_public_names | index($name)) != null then
-			     (.value | type == "string" and length > 0) and .secretRef == null and
-			     (($configuration[$name] // "") | type == "string" and length > 0) and
-			     .value == $configuration[$name]
+			     (.value | retired_provider_cohort) and .secretRef == null
 			   else false end)) |
 			($environment | map(select(.secretRef != null) |
 			 {key: .name, value: .secretRef}) | from_entries) as $secret_refs |
