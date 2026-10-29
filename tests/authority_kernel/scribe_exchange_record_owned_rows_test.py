@@ -9,7 +9,7 @@ import pytest
 
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
-from app.services import authority
+from app.services import authority, doctor_access
 from app.services import doctor_access_row_ownership as owned
 from app.services import provider_record_authority as records
 from app.services import scribe_native_capture as service
@@ -305,7 +305,7 @@ def test_real_writer_remains_blocked_by_exchange_locks_then_revokes(
     )
 
     original_lookup_access = companion_encounters.doctor_access_in_force
-    original_record_access = records.doctor_access_in_force
+    original_record_access = records.resolve_session_prep_provider_access
 
     def lookup_access(doctor, **kwargs):
         if owned._RECORD_ROWS.get() is None:
@@ -315,11 +315,23 @@ def test_real_writer_remains_blocked_by_exchange_locks_then_revokes(
     def record_access(doctor, **kwargs):
         proof = owned._CAPTURE_ROWS.get()
         if proof is not None and owned._RECORD_ROWS.get() is not None:
-            kwargs = kwargs | {"_ownership": proof, "_practice_id": proof._practice_id}
+            # Exercise the legacy product-access decision with the retained
+            # lock evidence so the shared writer-race helper can still prove
+            # the lock. The provider-record result itself always comes from
+            # the stricter Session Prep decision below.
+            doctor_access.doctor_access_in_force(
+                doctor,
+                _ownership=proof,
+                _practice_id=proof._practice_id,
+            )
         return original_record_access(doctor, **kwargs)
 
     monkeypatch.setattr(companion_encounters, "doctor_access_in_force", lookup_access)
-    monkeypatch.setattr(records, "doctor_access_in_force", record_access)
+    monkeypatch.setattr(
+        records,
+        "resolve_session_prep_provider_access",
+        record_access,
+    )
     test_actual_writer_waits_then_commits_and_next_native_open_denies(
         native,
         engine,
