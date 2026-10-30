@@ -14,6 +14,7 @@ from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
+from app.services import reviewed_excerpt_citations as citations
 from app.services.provider_database_deadline import provider_database_deadline
 
 from activemodel.session_manager import get_session
@@ -155,7 +156,8 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if (
             not required
             <= set(payload)
-            <= required | {"provider_context_ref", "history_context_ref"}
+            <= required
+            | {"provider_context_ref", "history_context_ref", "reviewed_excerpts"}
         ):
             raise ConversationInvariantError
         history_ref = payload.get("history_context_ref")
@@ -197,12 +199,26 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
             suppress_set != SUPPRESSION_NAMES or contact is None
         ):
             raise ConversationInvariantError
+        selection = None
+        if "reviewed_excerpts" in payload:
+            if (
+                context_ref is None
+                or outcome != "completed"
+                or mode != "standard"
+                or "citations" in suppress_set
+            ):
+                raise ConversationInvariantError
+            try:
+                selection = citations.canonical_selection(payload["reviewed_excerpts"])
+            except ValueError:
+                raise ConversationInvariantError from None
         return {
             "phase": phase,
             **(
                 {"provider_context_ref": context_ref} if context_ref is not None else {}
             ),
             **({"history_context_ref": history_ref} if history_ref is not None else {}),
+            **({"reviewed_excerpts": selection} if selection is not None else {}),
             "outcome": outcome,
             "response": _canonical_message(payload.get("response")),
             "presentation": {
@@ -214,7 +230,14 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
     raise ConversationInvariantError
 
 
-def _request_digest(payload: dict[str, Any]) -> str:
+def _request_digest(payload: dict[str, Any], citation_bindings: object = None) -> str:
+    if citation_bindings is not None:
+        payload = {
+            "payload": payload,
+            "reviewed_excerpt_bindings": citations.canonical_bindings(
+                citation_bindings
+            ),
+        }
     canonical_json = json.dumps(
         payload,
         ensure_ascii=False,
@@ -300,6 +323,7 @@ def _receipt_for_existing(
     workload_client_id: str,
     client_turn_id: UUID,
     interaction_id: TypeIDType,
+    citation_bindings: dict[str, Any] | None = None,
 ) -> ConversationWriteResult:
     if (
         turn is None
@@ -326,6 +350,19 @@ def _receipt_for_existing(
         state = "completed"
     if stored_phase is None or stored_phase.request_digest != record.request_digest:
         raise ConversationStateError
+    if phase == "final_response":
+        if not isinstance(stored_phase, CanonicalConversationFinalPhase):
+            raise ConversationStateError
+        try:
+            stored_bindings = stored_phase.reviewed_excerpt_bindings
+            if (
+                citations.canonical_bindings(stored_bindings)
+                if stored_bindings is not None
+                else None
+            ) != citation_bindings:
+                raise ConversationStateError
+        except ValueError:
+            raise ConversationStateError from None
     recorded_at = stored_phase.recorded_at
     if recorded_at.tzinfo is None:
         recorded_at = recorded_at.replace(tzinfo=UTC)
@@ -444,6 +481,7 @@ def _write_final_phase(
     payload: dict[str, Any],
     request_digest: str,
     idempotency_key: str,
+    citation_bindings: dict[str, Any] | None = None,
 ) -> ConversationWriteResult:
     turn = _turn_for_interaction(session, authorized.lineage.id)
     if turn is None:
@@ -497,6 +535,7 @@ def _write_final_phase(
             human_contact_fallback_text=(contact["fallback_text"] if contact else None),
             request_digest=request_digest,
             recorded_at=recorded_at,
+            reviewed_excerpt_bindings=citation_bindings,
         )
     )
     session.add(
@@ -577,10 +616,11 @@ def write_conversation_turn(
         raise ConversationInvariantError
     canonical_payload = _canonical_payload(payload)
     phase = cast(str, canonical_payload["phase"])
+    citation_bindings = None
     if phase == "final_response":
         from app.services.provider_question_context import validate_final_context
 
-        validate_final_context(
+        context_result = validate_final_context(
             session, authorized=authorized, payload=canonical_payload, settings=settings
         )
         from app.services.authority_conversation_read import validate_final_history
@@ -588,8 +628,14 @@ def write_conversation_turn(
         validate_final_history(
             session, authorized=authorized, payload=canonical_payload, settings=settings
         )
+        try:
+            citation_bindings = citations.resolve_final_bindings(
+                session=session, payload=canonical_payload, result=context_result
+            )
+        except ValueError:
+            raise ConversationInvariantError from None
     operation = _operation_for_phase(phase)
-    request_digest = _request_digest(canonical_payload)
+    request_digest = _request_digest(canonical_payload, citation_bindings)
     key_record, logical_record = _idempotency_records(
         session,
         workload_client_id=workload_client_id,
@@ -612,6 +658,7 @@ def write_conversation_turn(
             workload_client_id=workload_client_id,
             client_turn_id=client_turn_id,
             interaction_id=authorized.lineage.id,
+            citation_bindings=citation_bindings,
         )
     if logical_record is not None:
         raise authority.ClientTurnConflictError
@@ -664,6 +711,7 @@ def write_conversation_turn(
             payload=canonical_payload,
             request_digest=request_digest,
             idempotency_key=idempotency_key,
+            citation_bindings=citation_bindings,
         )
     session.commit()
     return result
