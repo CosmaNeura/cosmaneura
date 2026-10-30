@@ -379,8 +379,11 @@ def assignments(value: Any, principal: str | None = None) -> list[dict[str, Any]
         text(item["id"], 160)
         require(item["id"] not in ids)
         ids.add(item["id"])
-        for key in ("principalId", "resourceId", "appRoleId"):
+        for key in ("principalId", "resourceId"):
             uuid(item[key])
+        # Graph's default assignment uses zero, but never matches the fixed role.
+        role_id = item["appRoleId"]
+        require(type(role_id) is str and str(UUID(role_id)) == role_id)
         require(item["principalType"] in {"ServicePrincipal", "User", "Group"})
         if principal is not None:
             require(
@@ -407,7 +410,9 @@ def other_roles(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [role for role in values if role["id"] != ROLE_ID]
 
 
-def snapshot(client: Client, targets: Targets) -> dict[str, Any]:
+def snapshot(
+    client: Client, targets: Targets, *, target_assignment_lag: bool = False
+) -> dict[str, Any]:
     identities = []
     for resource in (PROVIDER_UAI, PUBLIC_UAI):
         identity = object_value(
@@ -475,7 +480,14 @@ def snapshot(client: Client, targets: Targets) -> dict[str, Any]:
     require(not matching_assignments(public_assignments))
     selected = matching_assignments(provider_assignments)
     require(len(selected) <= 1 and (not selected or app_ready and resource_ready))
-    require(matching_assignments(grants, targets.provider_principal_id) == selected)
+    projected = matching_assignments(grants, targets.provider_principal_id)
+    require(len(projected) <= 1 and (not projected or app_ready and resource_ready))
+    # Only one missing target view may lag after this invocation's single POST.
+    # Conflicting visible IDs/metadata and duplicate assignments never retry.
+    require(
+        projected == selected
+        or (target_assignment_lag and (not projected or not selected))
+    )
     require(not matching_assignments(grants, public["principalId"]))
     require(
         all(
@@ -552,6 +564,13 @@ def preserve(before: dict[str, Any], after: dict[str, Any], targets: Targets) ->
     )
     require(before["public_assignments"] == after["public_assignments"])
     require(without_assignment(before["grants"]) == without_assignment(after["grants"]))
+    for key in ("provider_assignments", "grants"):
+        existing = matching_assignments(before[key], targets.provider_principal_id)
+        if existing:
+            require(
+                matching_assignments(after[key], targets.provider_principal_id)
+                == existing
+            )
 
 
 def apply(
@@ -613,6 +632,7 @@ def apply(
             ]
             + [ROLE]
         }
+        require(plan["created_at"] <= time.time() < plan["expires_at"])
         client.graph(f"applications/{APPLICATION}", "PATCH", payload, before["etag"])
     for attempt in range(6):
         current = snapshot(client, targets)
@@ -625,21 +645,36 @@ def apply(
     require(client.source(targets) == plan["source"])
     immediately_before = snapshot(client, targets)
     require(immediately_before == current)
-    if not matching_assignments(current["provider_assignments"]):
+    posted = not matching_assignments(current["provider_assignments"])
+    if posted:
         body = {
             "principalId": targets.provider_principal_id,
             "resourceId": RESOURCE,
             "appRoleId": ROLE_ID,
         }
+        require(plan["created_at"] <= time.time() < plan["expires_at"])
         client.graph(
             f"servicePrincipals/{targets.provider_principal_id}/appRoleAssignments",
             "POST",
             body,
         )
-    after = snapshot(client, targets)
-    preserve(before, after, targets)
-    require(agent_role(after["roles"]) and agent_role(after["resource_roles"]))
-    require(len(matching_assignments(after["provider_assignments"])) == 1)
+    after = current
+    observed_target: dict[str, Any] | None = None
+    for attempt in range(6):
+        after = snapshot(client, targets, target_assignment_lag=posted)
+        preserve(before, after, targets)
+        require(agent_role(after["roles"]) and agent_role(after["resource_roles"]))
+        selected = matching_assignments(after["provider_assignments"])
+        projected = matching_assignments(after["grants"], targets.provider_principal_id)
+        visible = selected + projected
+        if visible:
+            if observed_target is None:
+                observed_target = visible[0]
+            require(all(item == observed_target for item in visible))
+        if len(selected) == 1 and projected == selected:
+            break
+        require(posted and attempt < 5)
+        time.sleep(2)
     require(client.source(targets) == plan["source"])
     return {
         "contract": CONTRACT,

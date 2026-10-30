@@ -32,6 +32,11 @@ TARGETS = role_plan.Targets(CLIENT, PRINCIPAL, FOUNDER)
 NOW = 1_800_000_000
 
 
+@pytest.fixture(autouse=True)
+def fixed_wall_clock(monkeypatch):
+    monkeypatch.setattr(role_plan.time, "time", lambda: NOW + 1)
+
+
 def assignment(
     identifier: str, principal: str, resource: str, role: str
 ) -> dict[str, Any]:
@@ -440,6 +445,253 @@ def test_post_write_unrelated_change_is_refused_without_automatic_rollback() -> 
     with pytest.raises(role_plan.Refused):
         role_plan.apply(client, TARGETS, plan, NOW + 1, True)
     assert [write[0] for write in client.writes] == ["POST"]
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_admission_reads_cannot_outlive_plan_before_first_write(
+    monkeypatch, ready
+) -> None:
+    client = FakeClient(fixture(ready=ready))
+    plan = prepared(client)
+    wall = [plan["expires_at"] - 1]
+    monkeypatch.setattr(role_plan.time, "time", lambda: wall[0])
+
+    def advance(fake, path):
+        wall[0] = plan["expires_at"]
+
+    client.before_read = advance
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, plan["expires_at"] - 1, True)
+    assert not client.writes
+
+
+def test_expiry_after_role_patch_prevents_assignment_post(monkeypatch) -> None:
+    client = FakeClient()
+    plan = prepared(client)
+    wall = [plan["expires_at"] - 1]
+    monkeypatch.setattr(role_plan.time, "time", lambda: wall[0])
+
+    def advance(fake, path):
+        if fake.writes:
+            wall[0] = plan["expires_at"]
+
+    client.before_read = advance
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, plan["expires_at"] - 1, True)
+    assert [write[0] for write in client.writes] == ["PATCH"]
+
+
+def test_admitted_post_may_finish_read_only_after_expiry(monkeypatch) -> None:
+    client = FakeClient(fixture(ready=True))
+    plan = prepared(client)
+    wall = [plan["expires_at"] - 1]
+    monkeypatch.setattr(role_plan.time, "time", lambda: wall[0])
+
+    def advance(fake, path):
+        if fake.writes:
+            wall[0] = plan["expires_at"] + 1
+
+    client.before_read = advance
+    result = role_plan.apply(client, TARGETS, plan, plan["expires_at"] - 1, True)
+    assert [write[0] for write in client.writes] == ["POST"]
+    assert result["assignment_count"] == 1 and wall[0] > plan["expires_at"]
+
+
+class LaggingAssignmentClient(FakeClient):
+    """One successful POST, followed by independently lagging read projections."""
+
+    def __init__(self, views: set[str], observations: int = 2) -> None:
+        super().__init__(fixture(ready=True))
+        self.views = views
+        self.hidden_observations = observations
+        self.observations = 0
+
+    def graph(self, path, method="GET", body=None, etag=None) -> Any:
+        result = super().graph(path, method, body, etag)
+        posted = any(write[0] == "POST" for write in self.writes)
+        if method != "GET" or not posted:
+            return result
+        if path == f"servicePrincipals/{role_plan.RESOURCE}":
+            self.observations += 1
+        collection = {
+            f"servicePrincipals/{PRINCIPAL}/appRoleAssignments": "provider",
+            f"servicePrincipals/{role_plan.RESOURCE}/appRoleAssignedTo": "resource",
+        }.get(path)
+        if collection in self.views and self.observations <= self.hidden_observations:
+            result["value"] = [
+                item
+                for item in result["value"]
+                if item not in role_plan.matching_assignments(result["value"], PRINCIPAL)
+            ]
+        return result
+
+
+@pytest.mark.parametrize("views", [{"provider"}, {"resource"}, {"provider", "resource"}])
+def test_assignment_projection_lag_reconciles_with_reads_and_one_post(
+    monkeypatch, views
+) -> None:
+    client = LaggingAssignmentClient(views)
+    before = copy.deepcopy(client.state)
+    plan = prepared(client)
+    sleeps = []
+    monkeypatch.setattr(role_plan.time, "sleep", sleeps.append)
+    result = role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert [write[0] for write in client.writes] == ["POST"]
+    assert sleeps == [2, 2] and client.observations == 3
+    assert result["assignment_count"] == 1
+    assert client.state["provider_assignments"][0] == before["provider_assignments"][0]
+    assert client.state["public_assignments"] == before["public_assignments"]
+    assert client.state["grants"][0] == before["grants"][0]
+
+
+def test_assignment_projection_wait_exhaustion_never_repeats_post(monkeypatch) -> None:
+    client = LaggingAssignmentClient({"resource"}, observations=100)
+    plan = prepared(client)
+    sleeps = []
+    monkeypatch.setattr(role_plan.time, "sleep", sleeps.append)
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert [write[0] for write in client.writes] == ["POST"]
+    assert sleeps == [2] * 5 and client.observations == 6
+
+
+def test_assignment_read_budget_timeout_does_not_repeat_post(monkeypatch) -> None:
+    client = LaggingAssignmentClient({"resource"}, observations=100)
+    plan = prepared(client)
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_args, **_kwargs: pytest.fail("live CLI reached")
+    )
+
+    def exhaust_budget(fake, path):
+        if fake.writes:
+            fake.deadline = role_plan.time.monotonic() - 1
+            role_plan.Client.command(fake, ["az", "account", "show"])
+
+    client.before_read = exhaust_budget
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert [write[0] for write in client.writes] == ["POST"]
+
+
+def test_missing_unrelated_grant_is_not_hidden_by_target_view_lag(monkeypatch) -> None:
+    client = LaggingAssignmentClient({"resource"})
+    plan = prepared(client)
+    sleeps = []
+    monkeypatch.setattr(role_plan.time, "sleep", sleeps.append)
+
+    def drift(fake, path):
+        if fake.writes:
+            fake.state["grants"].pop(0)
+            fake.before_read = None
+
+    client.before_read = drift
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert [write[0] for write in client.writes] == ["POST"] and not sleeps
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda state: state["grants"][-1].update(id="conflicting-visible-target"),
+        lambda state: state["grants"].append(
+            {**state["grants"][-1], "id": "duplicate-visible-target"}
+        ),
+        lambda state: state["provider_assignments"].pop(0),
+        lambda state: state["grants"].pop(0),
+        lambda state: state["public_assignments"][0].update(appRoleId=role_plan.ROLE_ID),
+        lambda state: state["provider"].update(clientId=OTHER_RESOURCE),
+    ],
+)
+def test_replication_wait_does_not_retry_conflicts_or_unrelated_drift(
+    monkeypatch, change
+) -> None:
+    client = LaggingAssignmentClient(set())
+    plan = prepared(client)
+    sleeps = []
+    monkeypatch.setattr(role_plan.time, "sleep", sleeps.append)
+
+    def drift(fake, path):
+        if fake.writes:
+            change(fake.state)
+            fake.before_read = None
+
+    client.before_read = drift
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert [write[0] for write in client.writes] == ["POST"]
+    assert not sleeps
+
+
+def test_existing_assignment_inconsistent_views_are_not_replication_allowance() -> None:
+    client = FakeClient(fixture(ready=True, assigned=True))
+    client.state["grants"].pop()
+    with pytest.raises(role_plan.Refused):
+        prepared(client)
+    assert not client.writes
+
+
+def test_observed_new_target_id_cannot_change_while_other_view_lags(monkeypatch) -> None:
+    client = LaggingAssignmentClient({"resource"}, observations=100)
+    plan = prepared(client)
+    sleeps = []
+    monkeypatch.setattr(role_plan.time, "sleep", sleeps.append)
+
+    def drift(fake, path):
+        if path == f"servicePrincipals/{role_plan.RESOURCE}" and fake.observations >= 1:
+            fake.state["provider_assignments"][-1]["id"] = "replaced-target"
+            fake.state["grants"][-1]["id"] = "replaced-target"
+            fake.before_read = None
+
+    client.before_read = drift
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert [write[0] for write in client.writes] == ["POST"] and sleeps == [2]
+
+
+def test_preexisting_target_assignment_id_remains_immutable() -> None:
+    client = FakeClient(fixture(ready=True, assigned=True))
+    plan = prepared(client)
+    observations = [0]
+
+    def drift(fake, path):
+        if path == f"applications/{role_plan.APPLICATION}":
+            observations[0] += 1
+            if observations[0] == 5:
+                fake.state["provider_assignments"][-1]["id"] = "replaced-existing"
+                fake.state["grants"][-1]["id"] = "replaced-existing"
+
+    client.before_read = drift
+    with pytest.raises(role_plan.Refused):
+        role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert not client.writes and observations[0] == 5
+
+
+def test_default_unrelated_assignment_ids_remain_preserved_without_authority() -> None:
+    client = FakeClient(fixture(ready=True))
+    zero = "00000000-0000-0000-0000-000000000000"
+    client.state["provider_assignments"][0]["appRoleId"] = zero
+    client.state["public_assignments"][0]["appRoleId"] = zero
+    client.state["grants"].append(
+        assignment("default-existing", PUBLIC_PRINCIPAL, role_plan.RESOURCE, zero)
+    )
+    before = copy.deepcopy(client.state)
+    plan = prepared(client)
+    result = role_plan.apply(client, TARGETS, plan, NOW + 1, True)
+    assert result["assignment_count"] == 1
+    assert [write[0] for write in client.writes] == ["POST"]
+    assert client.writes[0][2]["appRoleId"] == role_plan.ROLE_ID != zero
+    assert client.state["provider_assignments"][0] == before["provider_assignments"][0]
+    assert client.state["public_assignments"] == before["public_assignments"]
+    assert client.state["grants"][:-1] == before["grants"]
+
+
+@pytest.mark.parametrize("key", ["principalId", "resourceId"])
+def test_default_role_metadata_cannot_weaken_assignment_identity(key) -> None:
+    item = assignment("invalid-identity", PRINCIPAL, OTHER_RESOURCE, OTHER_ROLE)
+    item[key] = "00000000-0000-0000-0000-000000000000"
+    with pytest.raises(role_plan.Refused):
+        role_plan.assignments({"value": [item]})
 
 
 def test_real_graph_builder_uses_valid_fixed_api_shapes_and_no_secret_files(
