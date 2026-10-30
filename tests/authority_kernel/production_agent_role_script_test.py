@@ -521,12 +521,15 @@ class LaggingAssignmentClient(FakeClient):
             result["value"] = [
                 item
                 for item in result["value"]
-                if item not in role_plan.matching_assignments(result["value"], PRINCIPAL)
+                if item
+                not in role_plan.matching_assignments(result["value"], PRINCIPAL)
             ]
         return result
 
 
-@pytest.mark.parametrize("views", [{"provider"}, {"resource"}, {"provider", "resource"}])
+@pytest.mark.parametrize(
+    "views", [{"provider"}, {"resource"}, {"provider", "resource"}]
+)
 def test_assignment_projection_lag_reconciles_with_reads_and_one_post(
     monkeypatch, views
 ) -> None:
@@ -599,7 +602,9 @@ def test_missing_unrelated_grant_is_not_hidden_by_target_view_lag(monkeypatch) -
         ),
         lambda state: state["provider_assignments"].pop(0),
         lambda state: state["grants"].pop(0),
-        lambda state: state["public_assignments"][0].update(appRoleId=role_plan.ROLE_ID),
+        lambda state: state["public_assignments"][0].update(
+            appRoleId=role_plan.ROLE_ID
+        ),
         lambda state: state["provider"].update(clientId=OTHER_RESOURCE),
     ],
 )
@@ -631,7 +636,9 @@ def test_existing_assignment_inconsistent_views_are_not_replication_allowance() 
     assert not client.writes
 
 
-def test_observed_new_target_id_cannot_change_while_other_view_lags(monkeypatch) -> None:
+def test_observed_new_target_id_cannot_change_while_other_view_lags(
+    monkeypatch,
+) -> None:
     client = LaggingAssignmentClient({"resource"}, observations=100)
     plan = prepared(client)
     sleeps = []
