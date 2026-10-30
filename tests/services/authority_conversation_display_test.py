@@ -7,7 +7,6 @@ import pytest
 
 from app.services import authority_conversation as conversation
 from app.services import authority_conversation_read as history
-from app.services.session_prep_note_corrections import correct_source_note
 from app.services.session_prep_note_sources import note_content_sha256
 
 from activemodel.session_manager import get_session
@@ -25,6 +24,7 @@ from tests.services.provider_question_context_test import scope as _scope_fixtur
 from tests.services.reviewed_excerpt_citation_display_test import (
     accepted,
     browser,
+    correct_uploaded_source,
     final_body,
     read,
     write,
@@ -66,16 +66,9 @@ def test_accepted_snapshot_hydration_preserves_original_answer_dates_and_map(sco
 def test_retained_display_survives_correction_but_never_becomes_inference_memory(scope):
     client, token, turn, body, citation, _ = accepted(scope)
     before = retained(client, token, turn).json()["history"]["messages"][1]
-    with get_session() as session:
-        replacement = correct_source_note(
-            session=cast(Any, session),
-            doctor=scope[0],
-            note_id=scope[2].id,
-            expected_content_sha256=note_content_sha256(scope[2].note),
-            fields={**scope[2].note, "Labs": "Fictional corrected canceled lab order."},
-        )
-        assert replacement.id != scope[2].id
-        session.commit()
+    correct_uploaded_source(
+        scope, {**scope[2].note, "Labs": "Fictional corrected canceled lab order."}
+    )
     result = retained(client, token, turn)
     assert result.status_code == 200, result.text
     answer = result.json()["history"]["messages"][1]
@@ -269,15 +262,9 @@ def test_exact_nonempty_history_and_inherited_source_survive_only_for_display(sc
     assert write(client, token, second, body).status_code == 201
     before = retained(client, token).json()["history"]["messages"]
     assert len(before) == 4
-    with get_session() as session:
-        correct_source_note(
-            session=cast(Any, session),
-            doctor=scope[0],
-            note_id=scope[2].id,
-            expected_content_sha256=note_content_sha256(scope[2].note),
-            fields={**scope[2].note, "Labs": "Fictional order corrected; no result."},
-        )
-        session.commit()
+    correct_uploaded_source(
+        scope, {**scope[2].note, "Labs": "Fictional order corrected; no result."}
+    )
     restored = retained(client, token)
     assert restored.status_code == 200, restored.text
     after = restored.json()["history"]["messages"]

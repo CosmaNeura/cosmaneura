@@ -11,13 +11,13 @@ from app.routes.agent import get_agent_authority_settings
 from app.routes.session_prep_review import session_prep_review_api
 from app.services.provider_question_context import ProviderQuestionSourcesOnlyResult
 from app.services.reviewed_excerpt_citations import enumeration_digest, render_quotes
-from app.services.session_prep_note_corrections import correct_source_note
 from app.services.session_prep_note_sources import note_content_sha256
 
 from activemodel.session_manager import get_session
 from app.models.authority_conversation import CanonicalConversationFinalPhase as Final
+from app.models.visit_audio_file import VisitAudioFile
 from sqlalchemy import text, update
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from tests.factories import DoctorFactory
 from tests.services.provider_question_context_test import (
@@ -100,6 +100,13 @@ def browser(doctor, *, view_as=False):
 
 
 def accepted(scope):
+    # This is an owned synthetic web-upload source, matching the real edit gate.
+    VisitAudioFile(
+        doctor_id=scope[0].id,
+        patient_id=scope[1].patient_id,
+        appointment_id=scope[2].appointment_id,
+        azure_file_name="fictional-retained-citation.wav",
+    ).save()
     token, client = scope[3], _client()
     turn = _chat(token)
     response = _read(client, token, turn, "1.2.0")
@@ -120,6 +127,20 @@ def accepted(scope):
         citation,
         f"/session-prep/citations/{final_ref}/{ordinal}",
     )
+
+
+def correct_uploaded_source(scope, fields):
+    response = browser(scope[0]).post(
+        f"/notes/revisions/{scope[2].id}/source-correction",
+        json={
+            "expected_content_sha256": note_content_sha256(scope[2].note),
+            "fields": fields,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["note_id"] != str(scope[2].id)
+    return response.json()["note_id"]
 
 
 def test_actual_atomic_acceptance_replay_and_opt_in_hydration_preserve_legacy(scope):
@@ -150,16 +171,7 @@ def test_exact_retained_review_survives_supersession_without_rebinding(scope):
         **scope[2].note,
         "Labs": "Fictional amended lab status; no completed result.",
     }
-    with get_session() as managed:
-        replacement = correct_source_note(
-            session=cast(Session, managed),
-            doctor=scope[0],
-            note_id=scope[2].id,
-            expected_content_sha256=note_content_sha256(scope[2].note),
-            fields=changed,
-        )
-        assert replacement.id != scope[2].id
-        managed.commit()
+    correct_uploaded_source(scope, changed)
     after = browser(scope[0]).get(url)
     assert after.status_code == 200, after.text
     assert after.json() == before
