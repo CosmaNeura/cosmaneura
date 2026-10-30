@@ -5,16 +5,17 @@ import { Route } from "./+types/schedule"
 import { AppSidebar, type SidebarEntry } from "@/components/app-sidebar"
 import type { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { scheduleList } from "~/configuration/client"
+import { ScheduleLoadBoundary } from "~/components/ScheduleLoadBoundary"
 import type { ZoomMeetingResponse } from "~/configuration/client"
 import { calendarDayOffset, meetingTimeLabel } from "~/lib/date"
+import { loadSchedule } from "~/lib/schedule-load"
 
-import { invariant } from "@epic-web/invariant"
+export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  return loadSchedule(request)
+}
 
-export async function clientLoader(_args: Route.ClientLoaderArgs) {
-  const { data } = await scheduleList()
-  invariant(data, "schedule data failed to load")
-  return data
+export function ErrorBoundary({ error }: { error: unknown }) {
+  return <ScheduleLoadBoundary error={error} list />
 }
 
 const MEETING_STATUS_LABELS: Record<StatusBadgeOptions, string> = {

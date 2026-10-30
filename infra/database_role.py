@@ -25,6 +25,7 @@ SYSTEM_SCHEMAS = {"information_schema", "pg_catalog", "pg_toast"}
 PRODUCTION_DATABASE_HOST = "cosmaneura-prod-postgres.postgres.database.azure.com"
 PRODUCTION_DATABASE_NAME = "production"
 PRODUCTION_SCHEMA_NAME = "public"
+LINUX_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 APPLICATION_OWNER_ROLE = "cosmaneura_app_owner"
 APPLICATION_LOGIN_ROLE = "cosmaneura_app"
 
@@ -181,7 +182,26 @@ def validate_admin_database_url(database_url: str, *, expected_database: str) ->
         raise RolePreparationError("administrative database host is unexpected")
     if port not in {None, 5432} or parsed.path != f"/{expected_database}":
         raise RolePreparationError("administrative database target is unexpected")
-    if parsed.query != "sslmode=require" or parsed.fragment:
+    try:
+        pairs = urllib.parse.parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError as error:
+        raise RolePreparationError(
+            "administrative database URL options are invalid"
+        ) from error
+    query = dict(pairs)
+    if (
+        len(pairs) != len(query)
+        or query
+        != {
+            "sslmode": "verify-full",
+            "sslrootcert": LINUX_CA_BUNDLE,
+        }
+        or parsed.fragment
+    ):
         raise RolePreparationError("administrative database URL options are unexpected")
 
 

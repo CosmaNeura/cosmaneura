@@ -207,6 +207,63 @@
         ]
       }
     },
+    "/internal/v1/notes/revisions/{note_id}/source-correction": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Correct Session Prep Source Note",
+        "operationId": "correct_session_prep_source_note",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectSessionPrepSourceNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectSessionPrepSourceNoteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/notes/revisions/{note_id}/session-prep-review": {
       "post": {
         "tags": [
@@ -4385,6 +4442,51 @@
         ],
         "title": "ConfirmedBillingVisit"
       },
+      "CorrectSessionPrepSourceNoteRequest": {
+        "properties": {
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Content Sha256"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "maxProperties": 64,
+            "minProperties": 1,
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_content_sha256",
+          "fields"
+        ],
+        "title": "CorrectSessionPrepSourceNoteRequest"
+      },
+      "CorrectSessionPrepSourceNoteResponse": {
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "title": "Note Id"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "note_id",
+          "content_sha256"
+        ],
+        "title": "CorrectSessionPrepSourceNoteResponse"
+      },
       "CreateLabPanel": {
         "properties": {
           "collected_on": {
@@ -6085,6 +6187,13 @@
               }
             ],
             "title": "Session Prep Reviews"
+          },
+          "session_prep_editable_note_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Session Prep Editable Note Ids"
           },
           "session_prep_prior_notes": {
             "anyOf": [
