@@ -126,6 +126,143 @@ def _environment() -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C"}
 
 
+def _configuration_evidence_fixture(integration, billing, key_kind):
+    flags = (
+        "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED "
+        "AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED "
+        "STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED "
+        "AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED"
+    ).split()
+    configuration = {name: "false" for name in flags}
+    configuration.update(
+        PYTHON_ENV="staging",
+        API_BASE_URL="https://staging-app.cosmaneura.com",
+        ZOOM_REDIRECT_URI="https://staging-app.cosmaneura.com/external/v1/zoom-oauth-callback",
+        ZOOM_SUCCESS_REDIRECT="https://staging-app.cosmaneura.com/settings",
+        COOKIE_DOMAIN="staging-app.cosmaneura.com",
+        RECALL_API_BASE="https://us-west-2.recall.ai/api/v1",
+        ALLOWED_HOST_LIST="staging-app.cosmaneura.com,staging-chat.cosmaneura.com",
+        INTAKE_CHAT_DOMAIN="staging-chat.cosmaneura.com",
+        AUTHORITY_CLERK_ISSUER="https://resolved-emu-53.clerk.accounts.dev",
+        DATABASE_URL=(
+            "postgresql://synthetic:synthetic@"
+            "cosmaneura-staging-postgres.postgres.database.azure.com:5432/"
+            "staging?sslmode=verify-full"
+        ),
+        CLERK_DEPLOYMENT_PUBLISHABLE_KEY="pk_test_synthetic",
+        CLERK_PRIVATE_KEY="sk_test_synthetic",
+        ZOOM_CLIENT_ID="synthetic-zoom-client",
+        ZOOM_CLIENT_SECRET="synthetic-zoom-secret",
+        ZOOM_SECRET_TOKEN="synthetic-zoom-token",
+        RECALL_API_KEY="synthetic-recall-api",
+        RECALL_WEBHOOK_SECRET="synthetic-recall-webhook",
+        SCRIBE_WORKFLOW_ENABLED="true",
+        AGENT_API_ENABLED="true",
+        AUTHORITY_KERNEL_ENABLED="true",
+        STRIPE_INTEGRATION_ENABLED=integration,
+        STRIPE_BILLING_ENABLED=billing,
+        STRIPE_ACCOUNT_ID="acct_synthetic" if integration == "true" else key_kind,
+        STRIPE_SECRET_KEY=key_kind + "synthetic" if integration == "true" else key_kind,
+        STRIPE_WEBHOOK_SECRET="whsec_synthetic" if integration == "true" else key_kind,
+    )
+    fields = dict(
+        pair.split(":")
+        for pair in (
+            "clerk_publishable:CLERK_DEPLOYMENT_PUBLISHABLE_KEY "
+            "clerk_private:CLERK_PRIVATE_KEY zoom_client:ZOOM_CLIENT_ID "
+            "zoom_secret:ZOOM_CLIENT_SECRET zoom_token:ZOOM_SECRET_TOKEN "
+            "recall_api:RECALL_API_KEY recall_webhook:RECALL_WEBHOOK_SECRET "
+            "stripe_account:STRIPE_ACCOUNT_ID stripe_key:STRIPE_SECRET_KEY "
+            "stripe_webhook:STRIPE_WEBHOOK_SECRET"
+        ).split()
+    )
+    fingerprints = {
+        label + "_sha256": hashlib.sha256(configuration[name].encode()).hexdigest()
+        if configuration[name]
+        else None
+        for label, name in fields.items()
+    }
+    expected = "sha256:" + hashlib.sha256(
+        json.dumps(fingerprints, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return configuration, expected
+
+
+def _configuration_evidence_result(configuration, fingerprint, preservation, release=""):
+    source = DEPLOY.read_text()
+    start = source.index("\nbuild_configuration_evidence() {") + 1
+    # The embedded Python contains its own unindented closing braces.
+    end = source.index("\n}\n\nif ! CONFIGURATION_EVIDENCE_JSON", start) + 2
+    actual_function = source[start:end]
+    return subprocess.run(
+        ["bash", "-c", actual_function + "\nbuild_configuration_evidence"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **_environment(),
+            "PYTHON_BIN": sys.executable,
+            "ENV_JSON": json.dumps(configuration),
+            "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256": fingerprint,
+            "STAGING_PRESERVE_EFFECTIVE_CONFIGURATION": preservation,
+            "RELEASE_V2_JSON": release,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("integration", "billing", "key_kind"),
+    [
+        ("false", "false", None),
+        ("false", "false", ""),
+        ("true", "false", "sk_test_"),
+        ("true", "false", "rk_test_"),
+        ("true", "true", "sk_test_"),
+        ("true", "true", "rk_test_"),
+    ],
+)
+def test_full_preservation_retains_enabled_scribe_and_existing_test_billing(
+    integration, billing, key_kind
+):
+    configuration, fingerprint = _configuration_evidence_fixture(
+        integration, billing, key_kind
+    )
+    result = _configuration_evidence_result(configuration, fingerprint, "true")
+    assert result.returncode == 0
+    evidence = json.loads(result.stdout)
+    assert evidence["flags"]["SCRIBE_WORKFLOW_ENABLED"] == "true"
+    assert evidence["flags"]["STRIPE_INTEGRATION_ENABLED"] == integration
+    assert evidence["flags"]["STRIPE_BILLING_ENABLED"] == billing
+    assert evidence["identity_fingerprint_set_sha256"] == fingerprint
+    assert evidence["deployment_blockers"] == []
+    assert "synthetic-recall-api" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("preservation", "release", "scribe", "accepted"),
+    [
+        ("false", "", "false", True),
+        ("false", "", "true", False),
+        ("true", "", "false", False),
+        ("false", "v2", "true", True),
+        ("false", "v2", "false", False),
+    ],
+)
+def test_configuration_guard_retains_legacy_and_v2_scribe_boundaries(
+    preservation, release, scribe, accepted
+):
+    configuration, fingerprint = _configuration_evidence_fixture(
+        "true", "false", "sk_test_"
+    )
+    configuration["SCRIBE_WORKFLOW_ENABLED"] = scribe
+    result = _configuration_evidence_result(
+        configuration, fingerprint, preservation, release
+    )
+    assert (result.returncode == 0) == accepted
+    if not accepted:
+        assert result.stderr == "Staging configuration evidence validation failed.\n"
+
+
 def _cli(mode: str, payload: dict | str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-I", "-S", "-B", str(SCRIPT), mode],
