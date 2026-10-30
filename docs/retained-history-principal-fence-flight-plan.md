@@ -24,3 +24,7 @@ No migration rung, production operation or new deployment authority is implied.
 
 Both read lanes include first/final SDK checks and token acquisition in one
 existing 30-second deadline; shorter caller cancellation remains effective.
+
+A pending or failed principal/session-token SDK check is terminal for the mount
+and cannot enter the panel's answer fallback. A verified map/transport failure
+retains its existing fallback, subject to the live principal fence.

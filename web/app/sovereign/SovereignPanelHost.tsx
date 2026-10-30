@@ -84,6 +84,11 @@ type MountContextCredential = {
   expiresAt: number
 }
 
+type AuthenticationReader = <T>(
+  read: () => Promise<T>,
+  signal?: AbortSignal,
+) => Promise<T>
+
 type MountContextTokenProvider = {
   getToken: (
     request?: AuthTokenRequest,
@@ -272,15 +277,17 @@ function loadPinnedPanel(signal: AbortSignal): Promise<PanelApi> {
 
 async function platformSessionToken(
   checkPrincipal: (signal?: AbortSignal) => Promise<void>,
+  authenticate: AuthenticationReader,
   signal?: AbortSignal,
 ): Promise<string> {
   await checkPrincipal(signal)
-  const clerk = await getClient()
+  const clerk = await authenticate(() => getClient(), signal)
   await checkPrincipal(signal)
   if (!clerk?.user || !clerk.session) {
     throw new Error("Provider session unavailable")
   }
-  const token = await clerk.session.getToken()
+  const session = clerk.session
+  const token = await authenticate(() => session.getToken(), signal)
   if (!token) throw new Error("Provider session unavailable")
   await checkPrincipal(signal)
   return token
@@ -369,6 +376,7 @@ async function requestProviderMountContext(
 function createProviderMountContextTokenProvider(
   appointmentId: string,
   checkPrincipal: (signal?: AbortSignal) => Promise<void>,
+  authenticate: AuthenticationReader,
 ): MountContextTokenProvider {
   let credential: MountContextCredential | null = null
   let pending: {
@@ -431,7 +439,7 @@ function createProviderMountContextTokenProvider(
             )
           : await requestProviderMountContext(
               "exchange",
-              await platformSessionToken(checkPrincipal, signal),
+              await platformSessionToken(checkPrincipal, authenticate, signal),
               appointmentId,
               controller.signal,
             )
@@ -567,9 +575,26 @@ export function SovereignPanelHost({
     let accessLost = false
     let mounted: PanelInstance | null = null
     const statusController = new AbortController()
+    const readAuthentication = new Map<
+      AbortSignal,
+      { pending: number; failed: boolean }
+    >()
+    const authenticate: AuthenticationReader = async (read, signal) => {
+      const state = signal ? readAuthentication.get(signal) : undefined
+      if (state) state.pending++
+      try {
+        return await read()
+      } catch (error) {
+        if (state) state.failed = true
+        throw error
+      } finally {
+        if (state) state.pending--
+      }
+    }
     const mountTokenProvider = createProviderMountContextTokenProvider(
       appointmentId,
       checkPrincipal,
+      authenticate,
     )
     setRecovery(mountAttempt > 0 ? "connecting" : null)
     const finishBootstrap = () => clearTimeout(bootstrapTimeout)
@@ -607,7 +632,10 @@ export function SovereignPanelHost({
     async function checkPrincipal(signal?: AbortSignal) {
       signal?.throwIfAborted()
       assertPrincipal()
-      readSdkPrincipal = await identity.readCurrent()
+      readSdkPrincipal = await authenticate(
+        () => identity.readCurrent(),
+        signal,
+      )
       signal?.throwIfAborted()
       assertPrincipal()
     }
@@ -663,6 +691,8 @@ export function SovereignPanelHost({
           },
           loadHistory: async (recordId, { signal }) => {
             const controller = new AbortController()
+            const authentication = { pending: 0, failed: false }
+            let readSignal: AbortSignal | undefined
             const abort = () => controller.abort()
             const signals = [signal, statusController.signal]
             signals.forEach((source) =>
@@ -679,6 +709,8 @@ export function SovereignPanelHost({
             try {
               return await withReadDeadline(
                 async (signal) => {
+                  readSignal = signal
+                  readAuthentication.set(signal, authentication)
                   const check = () => {
                     signal.throwIfAborted()
                     assertCurrent()
@@ -700,6 +732,22 @@ export function SovereignPanelHost({
                 { signal: controller.signal },
               )
             } catch (error) {
+              if (authentication.pending > 0 || authentication.failed) {
+                if (!cancelled && !accessLost) {
+                  discardMounted()
+                  setRecovery("unavailable")
+                }
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.name = error instanceof Error ? error.name : "Error"
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              // A verified transport/map failure keeps its existing fallback,
+              // but cannot bypass a synchronously changed live/SDK principal.
+              if (controller.signal.aborted) throw error
+              assertPrincipal()
               if (
                 !cancelled &&
                 !accessLost &&
@@ -710,6 +758,7 @@ export function SovereignPanelHost({
               }
               throw error
             } finally {
+              if (readSignal) readAuthentication.delete(readSignal)
               signals.forEach((source) =>
                 source.removeEventListener("abort", abort),
               )
@@ -718,6 +767,8 @@ export function SovereignPanelHost({
           citationHref,
           loadCitationHistory: async (recordId, options) => {
             const controller = new AbortController()
+            const authentication = { pending: 0, failed: false }
+            let readSignal: AbortSignal | undefined
             const abort = () => controller.abort()
             const signals = [options.signal, statusController.signal]
             signals.forEach((source) =>
@@ -733,6 +784,8 @@ export function SovereignPanelHost({
             try {
               return await withReadDeadline(
                 async (signal) => {
+                  readSignal = signal
+                  readAuthentication.set(signal, authentication)
                   const check = () => {
                     signal.throwIfAborted()
                     assertCurrent()
@@ -754,6 +807,22 @@ export function SovereignPanelHost({
                 { signal: controller.signal },
               )
             } catch (error) {
+              if (authentication.pending > 0 || authentication.failed) {
+                if (!cancelled && !accessLost) {
+                  discardMounted()
+                  setRecovery("unavailable")
+                }
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.name = error instanceof Error ? error.name : "Error"
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              // A verified transport/map failure keeps its existing fallback,
+              // but cannot bypass a synchronously changed live/SDK principal.
+              if (controller.signal.aborted) throw error
+              assertPrincipal()
               if (
                 !cancelled &&
                 !accessLost &&
@@ -769,6 +838,7 @@ export function SovereignPanelHost({
               }
               throw error
             } finally {
+              if (readSignal) readAuthentication.delete(readSignal)
               signals.forEach((source) =>
                 source.removeEventListener("abort", abort),
               )

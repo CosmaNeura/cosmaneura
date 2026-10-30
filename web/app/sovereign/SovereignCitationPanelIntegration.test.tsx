@@ -60,6 +60,7 @@ async function fixture(
   const control = {
     retained: first,
     fresh: async () => json(citationFixture("1.1.0")),
+    answer: excerptAnswer,
     exchange: null as (() => Promise<Response>) | null,
     rotate: null as (() => Promise<Response>) | null,
   }
@@ -99,7 +100,7 @@ async function fixture(
       if (url.endsWith("/chat"))
         return json({
           client_turn_id: JSON.parse(String(init.body)).client_turn_id,
-          answer: excerptAnswer,
+          answer: control.answer,
           presentation: { mode: "standard", suppress: [], human_contact: null },
           citations: [],
           structured: {},
@@ -742,4 +743,84 @@ it("read deadline cancels rotation and cannot install its late credential", asyn
   vi.setSystemTime(start)
   expect(await f.mounts[0].getAuthToken()).toBe("mctx_" + "a".repeat(48))
   expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+})
+
+it.each(["stall", "reject"])(
+  "actual pinned post-chat %s principal lookup is terminal, with no canonical answer fallback",
+  async (kind) => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    vi.useFakeTimers()
+    const answer =
+      "Synthetic canonical answer withheld until principal verification."
+    f.control.answer = answer
+    let resolve!: (value: unknown) => void
+    f.control.fresh = async () => {
+      const request = f.requests.find((r) => r.url.endsWith("/chat"))!
+      const id = JSON.parse(String(request.init.body)).client_turn_id
+      const response = citationFixture("1.1.0", answer)
+      response.turns[0].client_turn_id = id
+      response.history.messages.forEach((m) => {
+        m.client_turn_id = id
+      })
+      authority.getClient.mockImplementation(() =>
+        kind === "reject"
+          ? Promise.reject(new Error("Synthetic SDK unavailable"))
+          : new Promise((r) => {
+              resolve = r
+            }),
+      )
+      return json(response)
+    }
+    document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value =
+      "A complete synthetic factual question."
+    await act(async () => {
+      fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
+    if (kind === "stall") {
+      expect(resolve).toBeTypeOf("function")
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000)
+      })
+    }
+    expect(document.querySelector(".cnp-root")).toBeNull()
+    expect(document.body.textContent).not.toContain(answer)
+    await expect(f.mounts[0].getAuthToken()).rejects.toThrow()
+    if (kind === "stall") await act(async () => resolve(originalPrincipal()))
+    expect(document.body.textContent).not.toContain(answer)
+    expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
+    expect(f.requests.some((r) => r.url.endsWith("/rotate"))).toBe(false)
+  },
+)
+it("actual pinned post-chat verified map transport timeout preserves the canonical answer fallback", async () => {
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  vi.useFakeTimers()
+  const answer =
+    "Synthetic canonical answer after a verified map transport failure."
+  f.control.answer = answer
+  f.control.fresh = () => new Promise<Response>(() => {})
+  document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value =
+    "A complete synthetic factual question."
+  await act(async () => {
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(
+    f.requests.some((r) => r.url.endsWith("/embed/history-with-citations")),
+  ).toBe(true)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30000)
+  })
+  expect(document.querySelector(".cnp-root")).not.toBeNull()
+  expect(document.body.textContent).toContain(answer)
+  expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
 })
