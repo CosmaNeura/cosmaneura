@@ -19,4 +19,8 @@ bound statically afterward. No ID or unrelated migration was changed.
 Recovery: revert application images and leave the column and accepted values
 intact. Never drop, backfill or rebind this column as immediate rollback.
 
-The ORM uses `JSONB(none_as_null=True)` so legacy Python `None` remains SQL NULL; JSON `null` is refused by the unchanged binding check.
+The PostgreSQL ORM variant uses `JSONB(none_as_null=True)` so legacy Python
+`None` remains SQL NULL; JSON `null` is refused by the unchanged binding check.
+The generic JSON variant lets isolated SQLite authority-kernel fixtures create
+their metadata. The PostgreSQL-specific ORM check is emitted only on PostgreSQL;
+the production JSONB type, check expression and Alembic migration remain intact.
