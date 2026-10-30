@@ -677,12 +677,23 @@ export function SovereignPanelHost({
     <>
       <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
       {presentationTarget &&
-        patientName &&
+        (patientName ||
+          priorNotes?.newer_prior_note_awaiting_review === true) &&
         createPortal(
           <div className="py-3">
-            <p className="font-semibold">{patientName}</p>
+            {patientName && <p className="font-semibold">{patientName}</p>}
             {appointmentDate && (
               <p>Visit · {appointmentDateFormat(appointmentDate)}</p>
+            )}
+            {priorNotes?.newer_prior_note_awaiting_review === true && (
+              <p
+                role="status"
+                className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+              >
+                A newer prior-visit note is awaiting your review. Session Prep
+                still shows earlier reviewed history. Review the newer note,
+                then refresh Session Prep to include it.
+              </p>
             )}
             {includedNotes.length > 0 && (
               <details className="mt-2">
