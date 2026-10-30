@@ -157,7 +157,7 @@ class CanonicalConversationFinalPhase(
             "AND jsonb_array_length(reviewed_excerpt_bindings -> 'excerpts') BETWEEN 1 AND 64 "
             "AND octet_length(reviewed_excerpt_bindings::text) <= 65536) IS TRUE",
             name="ck_conversation_reviewed_excerpt_bindings",
-        ),
+        ).ddl_if(dialect="postgresql"),
     )
 
     # This foreign key targets the unique accepted-phase turn key, rather than
@@ -171,7 +171,12 @@ class CanonicalConversationFinalPhase(
     outcome: str = Field(max_length=16)
     reviewed_excerpt_bindings: dict | None = Field(
         default=None,
-        sa_column=sa.Column(JSONB(none_as_null=True), nullable=True),
+        sa_column=sa.Column(
+            sa.JSON(none_as_null=True).with_variant(
+                JSONB(none_as_null=True), "postgresql"
+            ),
+            nullable=True,
+        ),
         exclude=True,
         repr=False,
     )
