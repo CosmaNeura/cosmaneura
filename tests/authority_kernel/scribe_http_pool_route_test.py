@@ -20,6 +20,8 @@ from app.services.scribe_workflow import (
     build_scribe_workflow_client,
 )
 
+from tests.authority_kernel.capture_deadline_clock import coordinated_deadline
+
 ORIGIN = "https://scribe.internal.example"
 PATH = "/synthetic-capture"
 
@@ -151,40 +153,62 @@ async def test_real_route_factory_uses_parent_pool_with_private_credentials(
 async def test_deadline_retains_worker_slot_until_parent_response_close_joins(
     monkeypatch, outer
 ):
-    release = asyncio.Event()
+    release, entered = asyncio.Event(), asyncio.Event()
     stream = Stream(read_gate=asyncio.Event(), close_gate=release)
     calls = []
 
     async def downstream(request):
         calls.append(request)
         result = stream if len(calls) == 1 else Stream()
+        entered.set()
         return httpx.Response(
             201, headers={"content-type": "application/json"}, stream=result
         )
 
     slots = BoundedSemaphore(1)
     monkeypatch.setattr(boundary, "_workers", slots)
-    app, _, _ = application(monkeypatch, downstream, outer=outer, seconds=0.08)
+    app, _, _ = application(monkeypatch, downstream, outer=outer, seconds=1)
     async with app.router.lifespan_context(app):
         pool = app.state.scribe_http_pool
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app), base_url="http://test"
             ) as client:
-                first = await client.post(PATH, content=b"{}")
-                assert first.status_code == 504
-                await asyncio.wait_for(stream.close_entered.wait(), 1)
-                assert not stream.closed and len(pool._operations) == 1
-                second = await client.post(PATH, content=b"{}")
-                assert second.status_code == 503 and len(calls) == 1
-                release.set()
-                expires = time.monotonic() + 1
-                while not slots.acquire(blocking=False):
-                    assert time.monotonic() < expires
-                    await asyncio.sleep(0.002)
-                slots.release()
-                third = await client.post(PATH, content=b"{}")
-                assert third.status_code == 200 and len(calls) == 2
+                with monkeypatch.context() as timers:
+                    clock = coordinated_deadline(timers, seconds=1, control_send=True)
+                    first_request = asyncio.create_task(
+                        client.post(PATH, content=b"{}")
+                    )
+                    try:
+                        await asyncio.wait_for(entered.wait(), 2)
+                        await asyncio.wait_for(clock.waiting.wait(), 2)
+                        clock.expire()
+                        first = await asyncio.wait_for(first_request, 2)
+                        assert first.status_code == 504
+                        await asyncio.wait_for(stream.close_entered.wait(), 1)
+                        assert not stream.closed and len(pool._operations) == 1
+                        second = await asyncio.wait_for(
+                            client.post(PATH, content=b"{}"), 2
+                        )
+                        assert second.status_code == 503 and len(calls) == 1
+                        release.set()
+                        expires = time.monotonic() + 1
+                        while not slots.acquire(blocking=False):
+                            assert time.monotonic() < expires
+                            await asyncio.sleep(0.002)
+                        slots.release()
+                    finally:
+                        release.set()
+                        if not first_request.done():
+                            first_request.cancel()
+                            await asyncio.wait_for(
+                                asyncio.gather(first_request, return_exceptions=True), 2
+                            )
+                # The expired request timer must not expire the recovered request.
+                with monkeypatch.context() as timers:
+                    coordinated_deadline(timers, seconds=1)
+                    third = await asyncio.wait_for(client.post(PATH, content=b"{}"), 2)
+                    assert third.status_code == 200 and len(calls) == 2
             assert stream.closed and not pool._operations
         finally:
             release.set()
