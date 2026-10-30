@@ -19,7 +19,7 @@ from app.services import authority, provider_context_exchange
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_native_capture as service
 from app.services.scribe_capture_deadline import CaptureBudget, capture_budget
-from app.services.scribe_capture_protocol import ProviderEncounter
+from app.services.scribe_capture_protocol import ProviderEncounter, ReadOperation
 from app.services.scribe_workflow import DisabledScribeWorkflowClient
 
 from activemodel import session_manager
@@ -159,6 +159,7 @@ async def test_uncertain_admission_opens_only_bound_recovery_after_final_access_
 
     monkeypatch.setattr(service, "execute_capture_operation", uncertain)
     result = (await invoke())["result"]
+    assert isinstance(result, dict)
     assert "opening_review" not in result
     assert result["opening_recovery"] == {
         "contract_version": "1",
@@ -203,7 +204,7 @@ async def test_uncertain_ordinary_read_never_becomes_opening_recovery(
         request_nonce=uuid4(),
         expected_actor_ref=ACTOR,
         expected_tenant_ref=TENANT,
-        operation={"kind": kind},
+        operation=ReadOperation(kind=kind),
     )
     with pytest.raises(admission.AdmissionUnconfirmed):
         await invoke(operation)
