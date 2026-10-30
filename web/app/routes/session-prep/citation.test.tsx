@@ -203,6 +203,35 @@ describe("authenticated retained-source viewer", () => {
     )
   })
 
+  it("refuses an SDK account change during the deferred integrity digest while Clerk hook notifications lag", async () => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle)
+    let release!: () => void
+    vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      (algorithm, bytes) =>
+        new Promise<ArrayBuffer>((resolve, reject) => {
+          release = () => {
+            void digest(algorithm, bytes).then(resolve, reject)
+          }
+        }),
+    )
+    fixture()
+    await waitFor(() => expect(crypto.subtle.digest).toHaveBeenCalledTimes(1))
+    // Live hook/resources remain A, simulating delayed Clerk notifications;
+    // the actual SDK authentication source has already moved to B.
+    auth.state.sdkOverride = {
+      user: { id: "user_synthetic_b" },
+      session: { id: "session_synthetic_b" },
+    }
+    await act(async () => release())
+    await screen.findByText(
+      "This reviewed source is unavailable for your current account or has expired.",
+    )
+    expect(document.body.textContent).not.toContain(
+      "Original reviewed synthetic version",
+    )
+    expect(control.read).toHaveBeenCalledTimes(1)
+  })
+
   it("clears displayed source immediately when Clerk replaces the account session", async () => {
     const view = fixture()
     await screen.findByText(

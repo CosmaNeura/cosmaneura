@@ -49,13 +49,16 @@ export default function ReviewedCitationPage() {
       signal.throwIfAborted()
       if (!current || !authMatches()) throw new Error()
     }
+    const sdkMatches = (client: Awaited<ReturnType<typeof getClient>>) => {
+      const session = client?.session as { id?: unknown } | undefined
+      return client?.user?.id === userId && session?.id === sessionId
+    }
     const checkSdkIdentity = async (signal: AbortSignal) => {
       check(signal)
       const client = await getClient()
       check(signal)
-      const session = client?.session as { id?: unknown } | undefined
-      if (client?.user?.id !== userId || session?.id !== sessionId)
-        throw new Error()
+      if (!sdkMatches(client)) throw new Error()
+      return client
     }
     // Subscribe before any async auth/status/source read. Inactive support
     // status is shared by real users and cannot bind this response to an account.
@@ -95,7 +98,10 @@ export default function ReviewedCitationPage() {
         check(signal)
         if (currentStatus.active || !current) throw new Error()
         const data = await parseRetainedCitation(result.data, reference)
+        const sdkClient = await checkSdkIdentity(signal)
         check(signal)
+        // No await separates this live SDK-resource check from committing bytes.
+        if (!sdkMatches(sdkClient)) throw new Error()
         setDisplay({ reference, data, userId, sessionId })
       },
       { signal: controller.signal },
