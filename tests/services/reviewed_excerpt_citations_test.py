@@ -1,27 +1,31 @@
-"""Actual receiver/DB guards with synthetic accounts; no external credentials."""
+"""Real admission and immutable witness regressions with synthetic accounts."""
 
 import copy
-from typing import Any, cast
+from datetime import UTC, datetime
+from typing import cast
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from app.routes.agent import get_agent_authority_settings
-from app.routes.session_prep_review import session_prep_review_api
-from app.services.provider_question_context import ProviderQuestionSourcesOnlyResult
-from app.services.reviewed_excerpt_citations import enumeration_digest, render_quotes
+from app.services.provider_question_context import (
+    ProviderQuestionSourcesOnlyResult,
+    ProviderQuestionSourcesResult,
+)
+from app.services.reviewed_excerpt_citations import (
+    CitationBindings,
+    enumeration_digest,
+    render_quotes,
+    retained_context_result,
+)
 from app.services.session_prep_note_corrections import correct_source_note
 from app.services.session_prep_note_sources import note_content_sha256
 
 from activemodel.session_manager import get_session
 from app.models.authority_conversation import CanonicalConversationFinalPhase as Final
-from sqlalchemy import text, update
+from app.models.authority_conversation import CanonicalConversationTurn as Turn
+from app.models.provider_record_authority import ProviderRecordAuthority
 from sqlmodel import Session, select
 
-from tests.factories import DoctorFactory
 from tests.services.provider_question_context_test import (
-    AUTHORITY_SETTINGS,
     _chat,
     _client,
     _headers,
@@ -32,11 +36,16 @@ from tests.services.provider_question_context_test import scope as _scope_fixtur
 scope = _scope_fixture
 
 
-def final_body(response, *, section=0):
-    result = ProviderQuestionSourcesOnlyResult.model_validate(response["result"])
+def final_body(response):
+    schema = (
+        ProviderQuestionSourcesResult
+        if response["result"]["schema_version"] == "1.1.0"
+        else ProviderQuestionSourcesOnlyResult
+    )
+    result = schema.model_validate(response["result"])
     assert result.current_through is not None
     source = result.reviewed_sources[0]
-    title, quote = list(source.sections.items())[section]
+    title, quote = next(iter(source.sections.items()))
     return {
         "phase": "final_response",
         "outcome": "completed",
@@ -55,7 +64,7 @@ def final_body(response, *, section=0):
             "schema_version": "1.0.0",
             "enumeration_sha256": enumeration_digest(result.reviewed_sources),
             "mode": "selected",
-            "excerpts": [{"ordinal": 1, "source_index": 0, "section_index": section}],
+            "excerpts": [{"ordinal": 1, "source_index": 0, "section_index": 0}],
         },
     }
 
@@ -68,159 +77,86 @@ def write(client, token, turn, body):
     )
 
 
-def read(client, token, turn, version="1.1.0"):
-    path = "/service/v1/agent/conversation-turns/read" + (
-        "-with-citations" if version == "1.1.0" else ""
-    )
-    return client.post(
-        path,
-        headers={"X-Cosmaneura-Mount-Context": token},
-        json={
-            "schema_version": version,
-            "mode": "turn",
-            "client_turn_id": str(turn[0]),
-        },
-    )
-
-
-def browser(doctor, *, view_as=False):
-    app = FastAPI()
-    app.include_router(session_prep_review_api)
-    app.dependency_overrides[get_agent_authority_settings] = lambda: AUTHORITY_SETTINGS
-
-    @app.middleware("http")
-    async def synthetic_authenticated_state(request, call_next):
-        request.state.doctor = doctor
-        request.scope["session"] = (
-            {"view_as_session_id": "synthetic-view"} if view_as else {}
-        )
-        return await call_next(request)
-
-    return TestClient(app)
-
-
 def accepted(scope):
     token, client = scope[3], _client()
     turn = _chat(token)
     response = _read(client, token, turn, "1.2.0")
-    assert response.status_code == 200, response.text
+    assert response.status_code == 200
     assert response.headers.get_list("x-cosmaneura-reviewed-excerpts") == ["1.0.0"]
     body = final_body(response.json())
     saved = write(client, token, turn, body)
     assert saved.status_code == 201, saved.text
-    hydrated = read(client, token, turn)
-    assert hydrated.status_code == 200, hydrated.text
-    citation = hydrated.json()["history"]["messages"][1]["reviewed_citations"][0]
-    final_ref, ordinal = citation["citation_ref"].rsplit(".", 1)
-    return (
-        client,
-        token,
-        turn,
-        body,
-        citation,
-        f"/session-prep/citations/{final_ref}/{ordinal}",
+    return client, token, turn, body, response.json()["result"]
+
+
+def reconstruct(session, note):
+    final = session.exec(select(Final)).one()
+    turn = session.get(Turn, final.turn_id)
+    scope = session.exec(
+        select(ProviderRecordAuthority).where(
+            ProviderRecordAuthority.appointment_id == note.appointment_id
+        )
+    ).one()
+    return retained_context_result(
+        session=session,
+        scope=scope,
+        turn=turn,
+        final=final,
+        bindings=CitationBindings.model_validate(final.reviewed_excerpt_bindings),
+        now=datetime.now(UTC),
     )
 
 
-def test_actual_atomic_acceptance_replay_and_opt_in_hydration_preserve_legacy(scope):
-    client, token, turn, body, citation, url = accepted(scope)
+def test_atomic_full_witness_replay_and_unchanged_legacy_read(scope):
+    client, token, turn, body, result = accepted(scope)
     assert write(client, token, turn, copy.deepcopy(body)).status_code == 201
     assert Final.count() == 1
-    reread = read(client, token, turn)
-    assert reread.json()["history"]["messages"][1]["reviewed_citations"] == [citation]
-    legacy = read(client, token, turn, "1.0.0")
-    assert legacy.status_code == 200 and legacy.json()["schema_version"] == "1.0.0"
-    assert all(
-        "reviewed_citations" not in message
-        for message in legacy.json()["history"]["messages"]
+    with get_session() as session:
+        assert reconstruct(session, scope[2]).model_dump(mode="json") == result
+        final = session.exec(select(Final)).one()
+        witness = CitationBindings.model_validate(final.reviewed_excerpt_bindings)
+        assert len(witness.context_witness.sources) == len(result["reviewed_sources"])
+        assert "sections" not in str(witness.context_witness.model_dump())
+    read = client.post(
+        "/service/v1/agent/conversation-turns/read",
+        headers={"X-Cosmaneura-Mount-Context": token},
+        json={
+            "schema_version": "1.0.0",
+            "mode": "turn",
+            "client_turn_id": str(turn[0]),
+        },
     )
-    opened = browser(scope[0]).get(url)
-    assert opened.status_code == 200, opened.text
-    assert opened.headers["cache-control"] == "no-store"
-    assert {part["title"]: part["text"] for part in opened.json()["sections"]} == scope[
-        2
-    ].note
-    assert opened.json()["citation"] == citation
+    assert read.status_code == 200 and read.json()["schema_version"] == "1.0.0"
+    assert all(
+        "reviewed_citations" not in item for item in read.json()["history"]["messages"]
+    )
 
 
-def test_exact_retained_review_survives_supersession_without_rebinding(scope):
-    client, token, turn, body, citation, url = accepted(scope)
-    before = browser(scope[0]).get(url).json()
-    changed = {
-        **scope[2].note,
-        "Labs": "Fictional amended lab status; no completed result.",
-    }
+def test_retained_witness_reconstructs_original_after_source_correction(scope):
+    client, token, turn, body, result = accepted(scope)
     with get_session() as managed:
-        replacement = correct_source_note(
+        correct_source_note(
             session=cast(Session, managed),
             doctor=scope[0],
             note_id=scope[2].id,
             expected_content_sha256=note_content_sha256(scope[2].note),
-            fields=changed,
+            fields={**scope[2].note, "Labs": "Fictional amended lab status."},
         )
-        assert replacement.id != scope[2].id
         managed.commit()
-    after = browser(scope[0]).get(url)
-    assert after.status_code == 200, after.text
-    assert after.json() == before
-    assert after.json()["citation"] == citation
+    with get_session() as session:
+        assert reconstruct(session, scope[2]).model_dump(mode="json") == result
     assert write(client, token, turn, body).status_code == 409
-    history = read(client, token, turn)
-    assert history.json()["turns"][0]["state"] == "stale"
-    assert len(history.json()["history"]["messages"]) == 1
 
 
-def test_other_account_and_read_only_impersonation_cannot_open_retained_quote(scope):
-    _, _, _, _, _, url = accepted(scope)
-    assert browser(DoctorFactory.build().save()).get(url).status_code == 404
-    assert browser(scope[0], view_as=True).get(url).status_code == 403
-    assert browser(scope[0]).get(url.rsplit("/", 1)[0] + "/2").status_code == 404
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        "refused",
-        "unavailable",
-        "forged_identity",
-        "wrong_section",
-        "incomplete_quote",
-        "duplicate_key",
-    ],
-)
-def test_invalid_final_cannot_leave_an_accepted_identity_map(scope, change):
-    token, client = scope[3], _client()
-    turn = _chat(token)
-    response = _read(client, token, turn, "1.2.0").json()
-    body = final_body(response)
-    if change in {"refused", "unavailable"}:
-        body["outcome"] = change
-    elif change == "forged_identity":
-        body["reviewed_excerpts"]["excerpts"][0]["note_ref"] = "visit_note_forged"
-    elif change == "wrong_section":
-        body["reviewed_excerpts"]["excerpts"][0]["section_index"] = 63
-    elif change == "incomplete_quote":
-        body["response"]["content"] += " Take 99 mg."
-    if change == "duplicate_key":
-        import json
-
-        raw = json.dumps(body).replace('"ordinal": 1', '"ordinal": 1, "ordinal": 2')
-        denied = client.post(
-            "/service/v1/agent/conversation-turns/write",
-            headers={
-                **_headers(token, turn, "final"),
-                "Content-Type": "application/json",
-            },
-            content=raw,
-        )
-    else:
-        denied = write(client, token, turn, body)
-    assert denied.status_code == 422, denied.text
+def test_caller_cannot_supply_internal_witness_or_alter_retained_map(scope):
+    token, client, turn = scope[3], _client(), _chat(scope[3])
+    response = _read(client, token, turn, "1.2.0")
+    body = final_body(response.json())
+    body["reviewed_excerpts"]["context_witness"] = {"permission": "invented"}
+    assert write(client, token, turn, body).status_code == 422
     assert Final.count() == 0
-
-
-def test_orm_cannot_mutate_the_accepted_map(scope):
-    accepted(scope)
+    body["reviewed_excerpts"].pop("context_witness")
+    assert write(client, token, turn, body).status_code == 201
     with get_session() as session:
         final = session.exec(select(Final)).one()
         final.reviewed_excerpt_bindings = None
@@ -229,106 +165,65 @@ def test_orm_cannot_mutate_the_accepted_map(scope):
         session.rollback()
 
 
-def test_forged_stored_binding_cannot_hydrate_or_open(scope):
-    client, token, turn, _, _, url = accepted(scope)
-    # Explicit test-owner corruption only; restore the normal append-only trigger
-    # in finally. No ordinary caller receives this test authority.
+@pytest.mark.parametrize("association_change", [None, "retarget"])
+@pytest.mark.parametrize("version", ["1.1.0", "1.2.0"])
+@pytest.mark.committed_database
+def test_real_matched_source_artifact_and_changed_identity_admission(
+    scope, monkeypatch, association_change, version
+):
+    from tests.services import provider_question_context_test as existing
+
+    captured, original_read = {}, existing._read
+
+    def capture(client, token, turn, wire_version="1.0.0"):
+        response = original_read(client, token, turn, wire_version)
+        if response.status_code == 200:
+            captured[str(turn[0])] = response.json()
+        return response
+
+    def selected_final(client, token, turn, reference=None, outcome="completed"):
+        body = final_body(captured[str(turn[0])])
+        body["provider_context_ref"], body["outcome"] = reference, outcome
+        return write(client, token, turn, body)
+
+    monkeypatch.setattr(existing, "_read", capture)
+    monkeypatch.setattr(existing, "_final", selected_final)
+    existing.test_explicit_scribe_patient_match_can_finalize_selected_prior_source(
+        scope, association_change, version
+    )
+
+
+def test_original_ordered_history_members_are_retained_and_replayed(scope):
+    from tests.services.authority_conversation_read_test import memory
+
+    client, token, first, _, _ = accepted(scope)
+    second = _chat(token)
+    source = _read(client, token, second, "1.2.0")
+    response = memory(client, token, second)
+    assert response.status_code == 200
+    body = final_body(source.json())
+    body["history_context_ref"] = response.json()["tool_call_ref"]
+    assert write(client, token, second, body).status_code == 201
     with get_session() as session:
-        final = session.exec(select(Final)).one()
-        value = copy.deepcopy(final.reviewed_excerpt_bindings)
-        assert value is not None
-        value["excerpts"][0]["content_sha256"] = "f" * 64
-        session.execute(
-            text(
-                "ALTER TABLE canonical_conversation_final_phase DISABLE TRIGGER canonical_conversation_final_phase_append_only"
-            )
-        )
-        try:
-            session.execute(
-                update(Final)
-                .where(cast(Any, Final.id) == final.id)
-                .values(reviewed_excerpt_bindings=value)
-            )
-        finally:
-            session.execute(
-                text(
-                    "ALTER TABLE canonical_conversation_final_phase ENABLE TRIGGER canonical_conversation_final_phase_append_only"
-                )
-            )
-        session.commit()
-    assert read(client, token, turn).json()["turns"][0]["state"] == "stale"
-    assert browser(scope[0]).get(url).status_code == 404
+        final = session.exec(select(Final).where(Final.turn_id == second[2])).one()
+        bound = CitationBindings.model_validate(final.reviewed_excerpt_bindings)
+        assert bound.history_witness is not None
+        assert [member.turn_ref for member in bound.history_witness.members] == [
+            first[2]
+        ]
+    assert write(client, token, second, body).status_code == 201
 
 
-def test_same_day_same_quote_actual_source_actions_stay_distinct(scope):
-    from datetime import timedelta
+def test_unrelated_owned_reviewed_patient_is_not_in_the_witness(scope):
+    from tests.factories import PatientFactory
+    from tests.services.session_prep_note_sources_test import _finalize, _note
 
-    from app.services.session_prep_note_sources import finalize_note_for_session_prep
-
-    from app.models.appointment import Appointment
-    from app.models.patient import Patient
-
-    from tests.services.session_prep_note_sources_test import _note
-    from tests.services.session_prep_runtime_test import NOW
-
-    doctor, target, baseline, token, _ = scope
-    patient = Patient.get(id=target.patient_id)
-    assert patient is not None
-    other = _note(
-        doctor,
-        patient,
-        content={
-            **baseline.note,
-            "Labs": "Fictional later laboratory documentation gap.",
-        },
-    )
-    original_visit = Appointment.get(id=baseline.appointment_id)
-    other_visit = Appointment.get(id=other.appointment_id)
-    assert original_visit and other_visit
-    other_visit.appointment_date = original_visit.appointment_date + timedelta(
-        minutes=10
-    )
-    other_visit.save()
+    patient = PatientFactory.build(doctor_id=scope[0].id).save()
+    note = _note(scope[0], patient)
     with get_session() as session:
-        finalize_note_for_session_prep(
-            session=session,
-            doctor_id=doctor.id,
-            note_id=other.id,
-            expected_content_sha256=note_content_sha256(other.note),
-            observed_at=NOW - timedelta(hours=1),
-        )
+        _finalize(session, scope[0], note)
         session.commit()
-    client, turn = _client(), _chat(token)
-    response = _read(client, token, turn, "1.2.0").json()
-    result = ProviderQuestionSourcesOnlyResult.model_validate(response["result"])
-    assert len(result.reviewed_sources) == 2
-    body = final_body(response)
-    quotes = [
-        (
-            next(iter(source.sections.values())),
-            source.source_at,
-            next(iter(source.sections)),
-        )
-        for source in result.reviewed_sources
-    ]
-    assert result.current_through is not None
-    body["response"]["content"] = render_quotes(
-        quotes, mode="selected", source_count=2, current_through=result.current_through
-    )
-    body["reviewed_excerpts"]["excerpts"] = [
-        {"ordinal": index + 1, "source_index": index, "section_index": 0}
-        for index in range(2)
-    ]
-    assert write(client, token, turn, body).status_code == 201
-    cited = read(client, token, turn).json()["history"]["messages"][1][
-        "reviewed_citations"
-    ]
-    assert cited[0]["citation_ref"] != cited[1]["citation_ref"]
-    assert cited[0]["source_at"][:10] == cited[1]["source_at"][:10]
-    for reference, source in zip(cited, result.reviewed_sources, strict=True):
-        final_ref, ordinal = reference["citation_ref"].rsplit(".", 1)
-        opened = browser(doctor).get(f"/session-prep/citations/{final_ref}/{ordinal}")
-        assert opened.status_code == 200, opened.text
-        assert {
-            section["title"]: section["text"] for section in opened.json()["sections"]
-        } == source.sections
+    _, _, _, _, result = accepted(scope)
+    assert str(note.id) not in {
+        item["source_ref"] for item in result["reviewed_sources"]
+    }

@@ -625,12 +625,16 @@ def write_conversation_turn(
         )
         from app.services.authority_conversation_read import validate_final_history
 
-        validate_final_history(
+        history_witness = validate_final_history(
             session, authorized=authorized, payload=canonical_payload, settings=settings
         )
         try:
             citation_bindings = citations.resolve_final_bindings(
-                session=session, payload=canonical_payload, result=context_result
+                session=session,
+                payload=canonical_payload,
+                result=context_result,
+                authorized=authorized,
+                history_witness=history_witness,
             )
         except ValueError:
             raise ConversationInvariantError from None

@@ -71,20 +71,6 @@ class ConversationReadRequest(Closed):
         return self
 
 
-class ConversationCitationReadRequest(Closed):
-    schema_version: Literal["1.1.0"]
-    mode: Literal["recent", "turn"]
-    client_turn_id: UUID | None
-
-    @model_validator(mode="after")
-    def selection(self):
-        if (self.mode == "turn") != (self.client_turn_id is not None) or (
-            self.client_turn_id is not None and self.client_turn_id.version != 4
-        ):
-            raise ValueError("Invalid turn selection")
-        return self
-
-
 class HistoryArguments(Closed):
     source_turn_ref: OpaqueRef
     detail: Literal["recent"]
@@ -172,22 +158,6 @@ class TurnStatus(Closed):
 class ConversationReadResponse(Closed):
     schema_version: Literal["1.0.0"] = "1.0.0"
     history: Projection
-    turns: list[TurnStatus] = Field(max_length=6)
-
-
-class CitationDisplayMessage(DisplayMessage):
-    reviewed_citations: list[citations.DisplayCitation] = Field(max_length=64)
-
-
-class CitationProjection(Closed):
-    thread_ref: OpaqueRef
-    messages: list[CitationDisplayMessage] = Field(max_length=12)
-    next_cursor: None
-
-
-class ConversationCitationReadResponse(Closed):
-    schema_version: Literal["1.1.0"]
-    history: CitationProjection
     turns: list[TurnStatus] = Field(max_length=6)
 
 
@@ -698,6 +668,15 @@ def validate_final_history(
         != f"h1|{cutoff.isoformat()}|{dependency.id if dependency else '-'}"
     ):
         raise ConversationContextChanged
+    return {
+        "context_ref": str(receipt.id),
+        "response_ref": receipt.response_ref,
+        "request_digest": receipt.request_digest,
+        "cutoff": cutoff.isoformat(),
+        "dependency_ref": str(dependency.id) if dependency else None,
+        "source_version_digest": result.source_version_digest,
+        "members": members,
+    }
 
 
 @provider_database_deadline
@@ -706,7 +685,7 @@ def read_conversation(
     session: Session,
     workload_client_id: str,
     mount_context_token: str,
-    request: ConversationReadRequest | ConversationCitationReadRequest,
+    request: ConversationReadRequest,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
 ) -> dict[str, Any]:
     context, mount = authority.authorize_mount_read(
@@ -725,7 +704,6 @@ def read_conversation(
     if request.mode == "turn" and not selected:
         raise ConversationNotFound
     messages, statuses = [], []
-    include_citations = request.schema_version == "1.1.0"
     for (turn, user, final), state, _ in selected:
         common = {"turn_ref": str(turn.id), "client_turn_id": str(turn.client_turn_id)}
         messages.append(
@@ -735,7 +713,6 @@ def read_conversation(
                 "content": user.content,
                 "recorded_at": _utc(user.recorded_at).isoformat(),
                 "presentation": None,
-                **({"reviewed_citations": []} if include_citations else {}),
             }
         )
         if state == "completed":
@@ -746,15 +723,6 @@ def read_conversation(
                     "content": final.content,
                     "recorded_at": _utc(final.recorded_at).isoformat(),
                     "presentation": _presentation(final),
-                    **(
-                        {
-                            "reviewed_citations": citations.display_citations(
-                                str(final.id), final.reviewed_excerpt_bindings
-                            )
-                        }
-                        if include_citations
-                        else {}
-                    ),
                 }
             )
         statuses.append(
@@ -774,7 +742,7 @@ def read_conversation(
         removed = statuses.pop(0)["turn_ref"]
         messages = [message for message in messages if message["turn_ref"] != removed]
     result = {
-        "schema_version": request.schema_version,
+        "schema_version": "1.0.0",
         "history": {
             "thread_ref": str(scope.binding_id),
             "messages": messages,
@@ -782,11 +750,6 @@ def read_conversation(
         },
         "turns": statuses,
     }
-    model = (
-        ConversationCitationReadResponse
-        if include_citations
-        else ConversationReadResponse
-    )
-    validated = model.model_validate(result).model_dump(mode="json")
+    validated = ConversationReadResponse.model_validate(result).model_dump(mode="json")
     session.commit()
     return validated

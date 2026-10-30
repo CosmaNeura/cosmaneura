@@ -8,11 +8,13 @@ import json
 import re
 import sys
 import types
+import typing
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pydantic
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +44,92 @@ def extracted(path, names, namespace):
         namespace,
     )
     return namespace
+
+
+def actual_context_schemas():
+    module = types.ModuleType("citation_context_exact_ast")
+    sys.modules[module.__name__] = module
+    ns = module.__dict__
+    ns.update(
+        {**vars(typing), **globals()},
+        __name__=module.__name__,
+        MAX_FINALIZED_NOTES=5,
+        MAX_SOURCE_CHARACTERS=18_000,
+        OPERATION="provider-question.context.read",
+    )
+    ns.update(
+        {
+            name: getattr(pydantic, name)
+            for name in (
+                "BaseModel",
+                "ConfigDict",
+                "Field",
+                "field_validator",
+                "model_validator",
+            )
+        }
+    )
+
+    def load(path, names):
+        tree = ast.parse((ROOT / path).read_text())
+        nodes: list[ast.stmt] = [
+            n
+            for n in tree.body
+            if (isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names)
+            or (
+                isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id in names for t in n.targets)
+            )
+        ]
+        future = ast.ImportFrom(
+            module="__future__", names=[ast.alias(name="annotations")], level=0
+        )
+        exec(
+            compile(
+                ast.fix_missing_locations(
+                    ast.Module(body=[future] + nodes, type_ignores=[])
+                ),
+                path,
+                "exec",
+            ),
+            ns,
+        )
+
+    load(
+        "app/services/session_prep.py",
+        {
+            "OpaqueRef",
+            "SourceClass",
+            "AuthorClass",
+            "ProvenanceReason",
+            "_ClosedModel",
+            "_aware",
+            "_unique_refs",
+            "SessionPrepBriefText",
+            "SessionPrepRecap",
+            "SessionPrepPatientReported",
+            "SessionPrepPreparedBrief",
+            "SessionPrepProvenance",
+        },
+    )
+    load(
+        "app/services/session_prep_note_sources.py",
+        {"NoteSourceDenied", "canonical_note_content"},
+    )
+    load(
+        "app/services/provider_question_context.py",
+        {
+            "_Closed",
+            "ProviderReviewedSource",
+            "ProviderQuestionSourcesOnlyResult",
+            "_binding_digest",
+        },
+    )
+    ns["ProviderQuestionSourcesOnlyResult"].model_rebuild(_types_namespace=ns)
+    return module
+
+
+CONTEXT_SCHEMA = actual_context_schemas()
 
 
 @pytest.fixture
@@ -131,7 +219,12 @@ def resolve(*, payload, result):
         else {}
     )
     return citations.resolve_bindings(
-        payload=payload, result=result, review_times=review_times
+        payload=payload,
+        result=result,
+        review_times=review_times,
+        context_witness=witness(result)
+        if result is not None and hasattr(result, "reviewed_sources")
+        else None,
     )
 
 
@@ -155,6 +248,7 @@ def payload(selected=None, mode="selected"):
                 ],
                 mode=mode,
                 source_count=len(source),
+                current_through=max(item.source_at for item in source),
             ),
         },
         "presentation": {"mode": "standard", "suppress": [], "human_contact": None},
@@ -171,11 +265,84 @@ def payload(selected=None, mode="selected"):
 
 
 def result(source=None):
-    return SimpleNamespace(
+    supplied = sources() if source is None else source
+    provenance = [
+        dict(
+            source_class="clinician_finalized_note",
+            included=True,
+            source_ref=item.source_ref,
+            source_version=item.source_version,
+            source_at=item.source_at,
+            author_class="clinician",
+            reason_code="eligible_finalized_note",
+        )
+        for item in supplied
+    ]
+    return CONTEXT_SCHEMA.ProviderQuestionSourcesOnlyResult(
+        schema_version="1.2.0",
         state="ready",
-        reviewed_sources=sources() if source is None else source,
+        reason_code=None,
         source_version_digest="sha256_" + "d" * 64,
+        brief_state="unavailable",
+        prepared_brief=None,
+        provenance=provenance,
+        completeness="complete",
+        current_through=max(item.source_at for item in supplied),
+        generated_at=None,
+        reviewed_sources=[
+            dict(
+                source_ref=item.source_ref,
+                source_version=item.source_version,
+                source_at=item.source_at,
+                sections=item.sections,
+            )
+            for item in supplied
+        ],
     )
+
+
+def witness(context):
+    return dict(
+        schema_version="1.0.0",
+        context_ref="context_receipt_abcdefgh",
+        response_ref="reviewed_sources_only|brief_unavailable:" + "d" * 64,
+        request_digest=CONTEXT_SCHEMA._binding_digest(
+            "turn_synthetic_abcdefgh", context
+        ),
+        result_scalars=context.model_dump(
+            mode="json", exclude={"reviewed_sources", "prepared_brief"}
+        ),
+        artifact_ref=None,
+        sources=[
+            dict(
+                note_ref=item.source_ref,
+                source_version=item.source_version,
+                source_at=item.source_at,
+                reviewed_at=datetime(2026, 10, 30, tzinfo=UTC),
+                content_sha256=citations.content_digest(item.sections),
+                review_ref="review_ref_" + str(index) * 26,
+            )
+            for index, item in enumerate(context.reviewed_sources)
+        ],
+    )
+
+
+@pytest.mark.parametrize("change", ["missing", "count", "cutoff", "duplicate"])
+def test_source_scope_notice_is_locked_and_mandatory(pure, change):
+    body, context = payload(), result()
+    assert resolve(payload=body, result=context) is not None
+    notice = "Source: 2 selected reviewed prior notes through 2026-10-29."
+    content = body["response"]["content"]
+    assert notice in content
+    altered = {
+        "missing": "",
+        "count": notice.replace("2 selected", "1 selected"),
+        "cutoff": notice.replace("2026-10-29", "2026-10-30"),
+        "duplicate": notice + "\n\n" + notice,
+    }[change]
+    body["response"]["content"] = content.replace(notice, altered)
+    with pytest.raises(citations.CitationDenied):
+        resolve(payload=body, result=context)
 
 
 def test_same_day_identical_quotes_bind_distinct_notes_and_versions(pure):
@@ -200,9 +367,8 @@ def test_same_day_identical_quotes_bind_distinct_notes_and_versions(pure):
             swapped["excerpts"][1][name],
             swapped["excerpts"][0][name],
         )
-    assert canonical._request_digest(
-        canonical._canonical_payload(body), bound
-    ) != canonical._request_digest(canonical._canonical_payload(body), swapped)
+    with pytest.raises(citations.CitationDenied):
+        canonical._request_digest(canonical._canonical_payload(body), swapped)
     assert canonical._request_digest(
         canonical._canonical_payload(body), bound
     ) == canonical._request_digest(
@@ -358,6 +524,7 @@ def test_timeline_is_complete_source_ordered_and_injection_literal(pure):
         ],
         mode="selected",
         source_count=2,
+        current_through=max(item.source_at for item in sources()),
     )
     assert (
         "<script>" not in body["response"]["content"]
@@ -533,6 +700,7 @@ def test_receipt_enumeration_rejects_reordered_dto_even_when_quotes_are_identica
             ],
             mode="selected",
             source_count=2,
+            current_through=max(item.source_at for item in sources()),
         ) == citations.render_quotes(
             [
                 (
@@ -544,6 +712,7 @@ def test_receipt_enumeration_rejects_reordered_dto_even_when_quotes_are_identica
             ],
             mode="selected",
             source_count=2,
+            current_through=max(item.source_at for item in sources()),
         )
     else:
         for source in received:
@@ -553,3 +722,115 @@ def test_receipt_enumeration_rejects_reordered_dto_even_when_quotes_are_identica
     )
     with pytest.raises(citations.CitationDenied):
         resolve(payload=payload(), result=result(received))
+
+
+def test_full_context_witness_preserves_unselected_source_and_jsonb_order(pure):
+    canonical, _ = pure
+    supplied = sources()
+    third = copy.deepcopy(supplied[-1])
+    third.source_ref, third.source_version = "visit_note_" + "c" * 26, 3
+    supplied.append(third)
+    context, body = result(supplied), payload()
+    body["reviewed_excerpts"]["enumeration_sha256"] = citations.enumeration_digest(
+        context.reviewed_sources
+    )
+    quotes = [
+        (next(iter(s.sections.values())), s.source_at, next(iter(s.sections)))
+        for s in context.reviewed_sources[:2]
+    ]
+    body["response"]["content"] = citations.render_quotes(
+        quotes, mode="selected", source_count=3, current_through=context.current_through
+    )
+    bound = resolve(payload=body, result=context)
+    roundtrip = citations.canonical_bindings(
+        json.loads(json.dumps(bound, sort_keys=True))
+    )
+    assert [s["note_ref"] for s in roundtrip["context_witness"]["sources"]] == [
+        s.source_ref for s in context.reviewed_sources
+    ]
+    assert len(bound["excerpts"]) == 2 and len(bound["context_witness"]["sources"]) == 3
+    altered = copy.deepcopy(bound)
+    altered["context_witness"]["sources"][2]["review_ref"] = "review_ref_" + "f" * 26
+    assert canonical._request_digest(
+        canonical._canonical_payload(body), bound
+    ) != canonical._request_digest(canonical._canonical_payload(body), altered)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing",
+        "unknown",
+        "marker",
+        "digest",
+        "duplicate_source",
+        "missing_source",
+        "artifact",
+        "review_time",
+        "naive",
+        "integer_included",
+    ],
+)
+def test_closed_full_witness_rejects_missing_forged_or_ambiguous_metadata(pure, change):
+    bound = resolve(payload=payload(), result=result())
+    context = bound["context_witness"]
+    if change == "missing":
+        bound.pop("context_witness")
+    elif change == "unknown":
+        context["result_scalars"]["claimed_authority"] = True
+    elif change == "marker":
+        context["response_ref"] += "extra"
+    elif change == "digest":
+        context["result_scalars"]["source_version_digest"] = "sha256_" + "f" * 64
+    elif change == "duplicate_source":
+        context["sources"][1] = copy.deepcopy(context["sources"][0])
+    elif change == "missing_source":
+        context["sources"].pop()
+    elif change == "artifact":
+        context["artifact_ref"] = "prep_artifact_" + "a" * 26
+    elif change == "review_time":
+        context["sources"][0]["reviewed_at"] = "2026-10-29T21:15:00Z"
+    elif change == "naive":
+        context["result_scalars"]["current_through"] = "2026-10-29T21:25:00"
+    else:
+        context["result_scalars"]["provenance"][0]["included"] = 1
+    with pytest.raises(citations.CitationDenied):
+        citations.canonical_bindings(bound)
+
+
+@pytest.mark.parametrize("change", ["valid", "duplicate", "marker", "pair", "unknown"])
+def test_closed_history_witness_is_ordered_bounded_and_final_digest_bound(pure, change):
+    bound = resolve(payload=payload(), result=result())
+    cutoff = datetime(2026, 10, 30, tzinfo=UTC).isoformat()
+    history: dict[str, Any] = dict(
+        context_ref="history_receipt_abcdefgh",
+        response_ref=f"h1|{cutoff}|context_receipt_abcdefgh",
+        request_digest="a" * 64,
+        cutoff=cutoff,
+        dependency_ref="context_receipt_abcdefgh",
+        source_version_digest="sha256_" + "d" * 64,
+        members=[
+            dict(
+                turn_ref="turn_ref_abcdefgh",
+                user_digest="b" * 64,
+                final_digest="c" * 64,
+            )
+        ],
+    )
+    bound["history_witness"] = history
+    if change == "duplicate":
+        history["members"] *= 2
+    elif change == "marker":
+        history["response_ref"] += "extra"
+    elif change == "pair":
+        history["source_version_digest"] = None
+    elif change == "unknown":
+        history["members"][0]["inferred_member"] = True
+    if change == "valid":
+        parsed = citations.canonical_bindings(bound)
+        history["cutoff"] = cutoff.replace("+00:00", "Z")
+        assert parsed["history_witness"] == history
+        assert len(parsed["history_witness"]["members"]) == 1
+    else:
+        with pytest.raises(citations.CitationDenied):
+            citations.canonical_bindings(bound)

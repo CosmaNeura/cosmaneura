@@ -22,7 +22,7 @@ from sqlmodel import select
 from tests.services.authority_conversation_read_test import memory
 from tests.services.provider_question_context_test import _chat, _client, _read
 from tests.services.provider_question_context_test import scope as _scope_fixture
-from tests.services.reviewed_excerpt_citations_test import (
+from tests.services.reviewed_excerpt_citation_display_test import (
     accepted,
     browser,
     final_body,

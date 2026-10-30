@@ -8,7 +8,15 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 MAX_BINDING_BYTES = 32 * 1024
 REF_PATTERN = r"^[A-Za-z0-9._~-]{8,160}$"
@@ -101,15 +109,156 @@ class BoundExcerpt(ExcerptSelection):
         return self
 
 
+class ReviewedSourceWitness(Closed):
+    note_ref: StrictStr = Field(pattern=REF_PATTERN)
+    source_version: StrictInt = Field(ge=1)
+    source_at: datetime
+    reviewed_at: datetime
+    content_sha256: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    review_ref: StrictStr = Field(pattern=REF_PATTERN)
+
+    @model_validator(mode="after")
+    def aware(self):
+        if self.source_at.tzinfo is None or self.reviewed_at.tzinfo is None:
+            raise CitationDenied
+        self.source_at = self.source_at.astimezone(UTC)
+        self.reviewed_at = self.reviewed_at.astimezone(UTC)
+        return self
+
+
+class ReviewedProvenance(Closed):
+    source_class: Literal["clinician_finalized_note"]
+    included: StrictBool
+    source_ref: StrictStr = Field(pattern=REF_PATTERN)
+    source_version: StrictInt = Field(ge=1)
+    source_at: datetime
+    author_class: Literal["clinician"]
+    reason_code: Literal["eligible_finalized_note"]
+
+
+class ResultScalars(Closed):
+    schema_version: Literal["1.1.0", "1.2.0"]
+    state: Literal["ready"]
+    reason_code: None
+    source_version_digest: StrictStr = Field(pattern=r"^sha256_[a-f0-9]{64}$")
+    provenance: list[ReviewedProvenance] = Field(min_length=1, max_length=5)
+    completeness: Literal["complete", "partial"]
+    current_through: datetime
+    generated_at: datetime | None
+    brief_state: Literal["ready", "pending", "unavailable"] | None = None
+
+    @model_validator(mode="after")
+    def aware(self):
+        dates = [self.current_through, *(p.source_at for p in self.provenance)]
+        if self.generated_at is not None:
+            dates.append(self.generated_at)
+        if any(date.tzinfo is None for date in dates) or any(
+            not p.included for p in self.provenance
+        ):
+            raise CitationDenied
+        return self
+
+
+class ContextWitness(Closed):
+    schema_version: Literal["1.0.0"]
+    context_ref: StrictStr = Field(pattern=REF_PATTERN)
+    response_ref: StrictStr = Field(min_length=1, max_length=500)
+    request_digest: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    result_scalars: ResultScalars
+    artifact_ref: StrictStr | None = Field(default=None, pattern=REF_PATTERN)
+    sources: list[ReviewedSourceWitness] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def correspondence(self):
+        result = self.result_scalars
+        actual = [(s.note_ref, s.source_version, s.source_at) for s in self.sources]
+        expected = [
+            (p.source_ref, p.source_version, p.source_at) for p in result.provenance
+        ]
+        if (
+            len({s.note_ref for s in self.sources}) != len(actual)
+            or len(expected) != len(actual)
+            or set(actual) != set(expected)
+        ):
+            raise CitationDenied
+        if result.current_through != max(s.source_at for s in self.sources):
+            raise CitationDenied
+        if (result.generated_at is not None) != (self.artifact_ref is not None):
+            raise CitationDenied
+        if result.schema_version == "1.1.0":
+            if result.brief_state is not None or self.artifact_ref is None:
+                raise CitationDenied
+            marker = "reviewed_sources|ready:" + self.artifact_ref
+        else:
+            if result.brief_state is None or (result.brief_state == "ready") != (
+                self.artifact_ref is not None
+            ):
+                raise CitationDenied
+            phase = (
+                "ready:" + self.artifact_ref
+                if self.artifact_ref
+                else "brief_" + result.brief_state
+            )
+            marker = (
+                "reviewed_sources_only|"
+                + phase
+                + ":"
+                + result.source_version_digest.removeprefix("sha256_")
+            )
+        if self.response_ref != marker:
+            raise CitationDenied
+        return self
+
+
+class HistoryMember(Closed):
+    turn_ref: StrictStr = Field(pattern=REF_PATTERN)
+    user_digest: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    final_digest: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class HistoryWitness(Closed):
+    context_ref: StrictStr = Field(pattern=REF_PATTERN)
+    response_ref: StrictStr = Field(min_length=1, max_length=500)
+    request_digest: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    cutoff: datetime
+    dependency_ref: StrictStr | None = Field(pattern=REF_PATTERN)
+    source_version_digest: StrictStr | None = Field(pattern=r"^sha256_[a-f0-9]{64}$")
+    members: list[HistoryMember] = Field(max_length=6)
+
+    @model_validator(mode="after")
+    def marker(self):
+        if self.cutoff.tzinfo is None or len({m.turn_ref for m in self.members}) != len(
+            self.members
+        ):
+            raise CitationDenied
+        self.cutoff = self.cutoff.astimezone(UTC)
+        if (
+            self.response_ref
+            != f"h1|{self.cutoff.isoformat()}|{self.dependency_ref or '-'}"
+        ):
+            raise CitationDenied
+        if (self.dependency_ref is None) != (self.source_version_digest is None):
+            raise CitationDenied
+        return self
+
+
 class CitationBindings(Closed):
     schema_version: Literal["1.0.0"]
     selection: ReviewedExcerptSelection
     context_ref: StrictStr = Field(pattern=REF_PATTERN)
     source_version_digest: StrictStr = Field(pattern=r"^sha256_[a-f0-9]{64}$")
     excerpts: list[BoundExcerpt] = Field(min_length=1, max_length=64)
+    context_witness: ContextWitness
+    history_witness: HistoryWitness | None = None
 
     @model_validator(mode="after")
     def correspondence(self):
+        if (
+            self.context_ref != self.context_witness.context_ref
+            or self.source_version_digest
+            != self.context_witness.result_scalars.source_version_digest
+        ):
+            raise CitationDenied
         if [item.model_dump() for item in self.selection.excerpts] != [
             ExcerptSelection(
                 **{name: getattr(item, name) for name in ExcerptSelection.model_fields}
@@ -117,6 +266,21 @@ class CitationBindings(Closed):
             for item in self.excerpts
         ]:
             raise CitationDenied
+        for item in self.excerpts:
+            if item.source_index >= len(self.context_witness.sources):
+                raise CitationDenied
+            source = self.context_witness.sources[item.source_index]
+            if any(
+                getattr(item, key) != getattr(source, key)
+                for key in (
+                    "note_ref",
+                    "source_version",
+                    "source_at",
+                    "reviewed_at",
+                    "content_sha256",
+                )
+            ):
+                raise CitationDenied
         return self
 
 
@@ -172,8 +336,14 @@ def content_digest(sections: dict[str, str]) -> str:
 
 
 def render_quotes(
-    selected: list[tuple[str, datetime, str]], *, mode: str, source_count: int
+    selected: list[tuple[str, datetime, str]],
+    *,
+    mode: str,
+    source_count: int,
+    current_through: datetime,
 ) -> str:
+    if current_through.tzinfo is None or not 1 <= source_count <= 5:
+        raise CitationDenied
     parts = [TIMELINE_PREFIX if mode == "timeline" else SELECTED_PREFIX]
     if mode == "timeline":
         parts.append(TIMELINE_SCOPE)
@@ -201,7 +371,12 @@ def render_quotes(
         mode == "timeline" and len(answer.encode()) > 64 * 1024
     ):
         raise CitationDenied
-    return answer + "\n\n— " + PROVIDER_DISCLAIMER
+    notice = (
+        f"Source: {source_count} selected reviewed prior "
+        f"{'note' if source_count == 1 else 'notes'} through "
+        f"{current_through.date().isoformat()}."
+    )
+    return answer + "\n\n" + notice + "\n\n— " + PROVIDER_DISCLAIMER
 
 
 def enumeration_digest(sources: list[Any]) -> str:
@@ -225,6 +400,8 @@ def resolve_bindings(
     payload: dict[str, Any],
     result: Any,
     review_times: dict[tuple[str, int], datetime] | None = None,
+    context_witness: dict[str, Any] | None = None,
+    history_witness: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     value = payload.get("reviewed_excerpts")
     if value is None:
@@ -247,6 +424,13 @@ def resolve_bindings(
     if (
         selection.enumeration_sha256 != enumeration_digest(sources)
         or review_times is None
+        or context_witness is None
+        or (payload.get("history_context_ref") is not None)
+        != (history_witness is not None)
+        or (
+            history_witness is not None
+            and history_witness["context_ref"] != payload["history_context_ref"]
+        )
     ):
         raise CitationDenied
     if selection.mode == "timeline":
@@ -287,7 +471,12 @@ def resolve_bindings(
         )
     if sum(len(quote) for quote, _, _ in quotes) > 8000 or payload["response"][
         "content"
-    ] != render_quotes(quotes, mode=selection.mode, source_count=len(sources)):
+    ] != render_quotes(
+        quotes,
+        mode=selection.mode,
+        source_count=len(sources),
+        current_through=result.current_through,
+    ):
         raise CitationDenied
     return canonical_bindings(
         CitationBindings(
@@ -296,12 +485,21 @@ def resolve_bindings(
             context_ref=payload["provider_context_ref"],
             source_version_digest=result.source_version_digest,
             excerpts=entries,
+            context_witness=ContextWitness.model_validate(context_witness),
+            history_witness=HistoryWitness.model_validate(history_witness)
+            if history_witness is not None
+            else None,
         ).model_dump(mode="json")
     )
 
 
 def resolve_final_bindings(
-    *, session: Any, payload: dict[str, Any], result: Any
+    *,
+    session: Any,
+    payload: dict[str, Any],
+    result: Any,
+    authorized: Any,
+    history_witness: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if "reviewed_excerpts" not in payload:
         return None
@@ -311,10 +509,21 @@ def resolve_final_bindings(
         or not hasattr(result, "reviewed_sources")
     ):
         raise CitationDenied
+    from app.services import provider_question_context as prep
+
+    from app.models.authority import AuthorityIdempotencyRecord
+    from app.models.authority_conversation import CanonicalConversationTurn as Turn
     from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
     from sqlmodel import select
 
-    times = {}
+    receipt = session.get(AuthorityIdempotencyRecord, payload["provider_context_ref"])
+    if receipt is None or receipt.request_digest != prep._binding_digest(
+        receipt.logical_ref, result
+    ):
+        raise CitationDenied
+    scope = prep._turn_and_scope(session, authorized, receipt.logical_ref)
+    turn = session.get(Turn, receipt.logical_ref)
+    times, identities = {}, []
     for source in result.reviewed_sources:
         evidence = session.exec(
             select(SessionPrepNoteFinalization).where(
@@ -327,7 +536,51 @@ def resolve_final_bindings(
         ):
             raise CitationDenied
         times[(source.source_ref, source.source_version)] = evidence.finalized_at
-    return resolve_bindings(payload=payload, result=result, review_times=times)
+        identities.append(
+            ReviewedSourceWitness(
+                note_ref=source.source_ref,
+                source_version=source.source_version,
+                source_at=source.source_at,
+                reviewed_at=evidence.finalized_at,
+                content_sha256=evidence.content_sha256,
+                review_ref=str(evidence.id),
+            )
+        )
+    marker = receipt.response_ref
+    if not isinstance(marker, str):
+        raise CitationDenied
+    parts = marker.split("|")[-1].split(":")
+    artifact_ref = parts[1] if parts[0] == "ready" and len(parts) in {2, 3} else None
+    witness = ContextWitness(
+        schema_version="1.0.0",
+        context_ref=str(receipt.id),
+        response_ref=marker,
+        request_digest=receipt.request_digest,
+        artifact_ref=artifact_ref,
+        result_scalars=ResultScalars.model_validate(
+            result.model_dump(
+                mode="json",
+                exclude={"reviewed_sources", "prepared_brief"},
+            )
+        ),
+        sources=identities,
+    )
+    bindings = resolve_bindings(
+        payload=payload,
+        result=result,
+        review_times=times,
+        context_witness=witness.model_dump(mode="json"),
+        history_witness=history_witness,
+    )
+    retained_context_result(
+        session=session,
+        scope=scope,
+        turn=turn,
+        final=type("AdmissionTime", (), {"recorded_at": datetime.now(UTC)})(),
+        bindings=CitationBindings.model_validate(bindings),
+        now=datetime.now(UTC),
+    )
+    return bindings
 
 
 def display_citations(final_ref: str, bindings: object) -> list[dict[str, Any]]:
@@ -346,9 +599,167 @@ def display_citations(final_ref: str, bindings: object) -> list[dict[str, Any]]:
     ]
 
 
+def retained_context_result(
+    *,
+    session: Any,
+    scope: Any,
+    turn: Any,
+    final: Any,
+    bindings: CitationBindings,
+    now: datetime,
+) -> Any:
+    """Reconstruct the original direct context using only retained reviewed rows.
+
+    Admission calls this under existing source locks; the display consumer must
+    also prove its current own-record and canonical user/final/history receipts.
+    This helper neither selects current notes nor grants record access.
+    """
+    from app.services import provider_question_context as prep
+    from app.services.session_prep_note_sources import (
+        _owned_appointment,
+        _prior_patient_scope,
+        _utc,
+    )
+    from app.services.session_prep_runtime import artifact_result
+
+    from app.models.ai_visit_note import AIVisitNote
+    from app.models.appointment import Appointment
+    from app.models.authority import AuthorityIdempotencyRecord
+    from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
+    from app.models.session_prep_runtime import SessionPrepArtifact
+    from sqlmodel import select
+
+    witness = bindings.context_witness
+    target = _owned_appointment(
+        session, doctor_id=scope.doctor_id, appointment_id=scope.appointment_id
+    )
+    if target.patient_id != scope.patient_id:
+        raise CitationDenied
+    patient_scope = _prior_patient_scope(session, scope.doctor_id, target)
+    receipt = session.get(AuthorityIdempotencyRecord, witness.context_ref)
+    if (
+        turn is None
+        or receipt is None
+        or (
+            receipt.operation != prep.OPERATION
+            or receipt.status != "complete"
+            or receipt.workload_client_id != turn.workload_client_id
+            or receipt.interaction_id != turn.interaction_id
+            or receipt.logical_ref != str(turn.id)
+            or receipt.response_ref != witness.response_ref
+            or receipt.request_digest != witness.request_digest
+            or _utc(receipt.retain_until) <= _utc(now)
+        )
+    ):
+        raise CitationDenied
+    sources, manifest = [], []
+    for item in witness.sources:
+        evidence = session.get(SessionPrepNoteFinalization, item.review_ref)
+        note = session.get(AIVisitNote, item.note_ref)
+        appointment = (
+            _owned_appointment(
+                session, doctor_id=scope.doctor_id, appointment_id=note.appointment_id
+            )
+            if note
+            else None
+        )
+        if appointment is None:
+            raise CitationDenied
+        sections = retained_excerpt(
+            binding=item,
+            evidence=evidence,
+            note=note,
+            appointment=appointment,
+            doctor_id=scope.doctor_id,
+            accepted_at=final.recorded_at,
+        )
+        if (
+            session.exec(
+                select(Appointment).where(
+                    Appointment.id == appointment.id, patient_scope
+                )
+            ).one_or_none()
+            is None
+        ):
+            raise CitationDenied
+        sources.append(
+            dict(
+                source_ref=item.note_ref,
+                source_version=item.source_version,
+                source_at=item.source_at.isoformat(),
+                sections=sections,
+            )
+        )
+        manifest.append(
+            dict(
+                source_ref=item.note_ref,
+                source_version=item.source_version,
+                source_at=item.source_at.isoformat(),
+                content_sha256=item.content_sha256,
+                clinician_action_ref=item.review_ref,
+            )
+        )
+    metadata = witness.result_scalars.model_dump(mode="json")
+    if metadata["schema_version"] == "1.1.0":
+        metadata.pop("brief_state")
+    metadata["prepared_brief"] = None
+    if witness.artifact_ref is not None:
+        artifact = session.get(SessionPrepArtifact, witness.artifact_ref)
+        if (
+            artifact is None
+            or artifact.record_scope_id != scope.id
+            or (
+                artifact.source_manifest != manifest
+                or "sha256_" + artifact.source_digest != bindings.source_version_digest
+            )
+        ):
+            raise CitationDenied
+        stored = artifact_result(artifact)
+        metadata["prepared_brief"] = (
+            stored.prepared_brief.model_dump(mode="json")
+            if stored.prepared_brief is not None
+            else None
+        )
+        if stored.brief_generated_at is None or _utc(
+            stored.brief_generated_at
+        ).isoformat() != metadata["generated_at"].replace("Z", "+00:00"):
+            raise CitationDenied
+    metadata["reviewed_sources"] = sources
+    model = (
+        prep.ProviderQuestionSourcesResult
+        if metadata["schema_version"] == "1.1.0"
+        else prep.ProviderQuestionSourcesOnlyResult
+    )
+    result = model.model_validate(metadata)
+    if prep._binding_digest(str(turn.id), result) != witness.request_digest or (
+        enumeration_digest(result.reviewed_sources)
+        != bindings.selection.enumeration_sha256
+        or result.source_version_digest != bindings.source_version_digest
+    ):
+        raise CitationDenied
+    for item in bindings.excerpts:
+        source = witness.sources[item.source_index]
+        sections = sources[item.source_index]["sections"]
+        if any(
+            getattr(item, key) != getattr(source, key)
+            for key in (
+                "note_ref",
+                "source_version",
+                "source_at",
+                "reviewed_at",
+                "content_sha256",
+            )
+        ) or (
+            item.section_index >= len(sections)
+            or list(sections)[item.section_index] != item.section
+        ):
+            raise CitationDenied
+    return result
+
+
 def retained_excerpt(
     *,
-    binding: BoundExcerpt,
+    binding: BoundExcerpt | ReviewedSourceWitness,
     evidence: Any,
     note: Any,
     appointment: Any,
@@ -377,121 +788,12 @@ def retained_excerpt(
     ):
         raise CitationDenied
     sections = _snapshot_content(evidence.reviewed_content)
-    if (
-        content_digest(sections) != binding.content_sha256
-        or binding.section_index >= len(sections)
-        or list(sections)[binding.section_index] != binding.section
+    if content_digest(sections) != binding.content_sha256 or (
+        isinstance(binding, BoundExcerpt)
+        and (
+            binding.section_index >= len(sections)
+            or list(sections)[binding.section_index] != binding.section
+        )
     ):
         raise CitationDenied
     return sections
-
-
-def read_retained_citation(
-    *, session: Any, doctor: Any, final_ref: Any, ordinal: int
-) -> dict[str, Any]:
-    from app.services import authority_conversation as conversation
-    from app.services import authority_conversation_read as history
-    from app.services.provider_record_authority import validate_provider_record_scope
-    from app.services.session_prep_note_sources import _owned_appointment
-
-    from app.models.ai_visit_note import AIVisitNote
-    from app.models.authority import (
-        AuthorityPersonBinding,
-        InteractionLineage,
-        MountContextSession,
-    )
-    from app.models.authority_conversation import (
-        CanonicalConversationFinalPhase as Final,
-    )
-    from app.models.authority_conversation import CanonicalConversationTurn as Turn
-    from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
-    from sqlmodel import select
-
-    final = session.get(Final, final_ref)
-    turn = session.get(Turn, final.turn_id) if final else None
-    lineage = session.get(InteractionLineage, turn.interaction_id) if turn else None
-    mount = session.get(MountContextSession, lineage.session_id) if lineage else None
-    binding = (
-        session.get(AuthorityPersonBinding, mount.person_binding_id) if mount else None
-    )
-    if binding is None or turn is None or final is None or mount is None:
-        raise CitationDenied
-    scope = validate_provider_record_scope(
-        session=session,
-        binding=binding,
-        actor_id=turn.actor_id,
-        clerk_subject=doctor.clerk_id,
-    )
-    if scope is None or scope.doctor_id != doctor.id:
-        raise CitationDenied
-    row = session.exec(
-        history._query(turn.workload_client_id, mount, scope).where(
-            Final.id == final.id
-        )
-    ).one_or_none()
-    if (
-        row is None
-        or final.outcome != "completed"
-        or final.presentation_mode != "standard"
-        or final.suppress_citations
-    ):
-        raise CitationDenied
-    bindings = CitationBindings.model_validate(
-        canonical_bindings(final.reviewed_excerpt_bindings)
-    )
-    payload: dict[str, Any] = {
-        "phase": "final_response",
-        "outcome": final.outcome,
-        "response": {"content_type": final.content_type, "content": final.content},
-        "presentation": history._presentation(final),
-        "reviewed_excerpts": bindings.selection.model_dump(mode="json"),
-    }
-    for operation, key in (
-        (history.prep.OPERATION, "provider_context_ref"),
-        (history.OPERATION, "history_context_ref"),
-    ):
-        receipt = history._receipt(session, turn, operation)
-        if receipt is not None:
-            payload[key] = str(receipt.id)
-    if (
-        payload.get("provider_context_ref") != bindings.context_ref
-        or final.request_digest
-        != conversation._request_digest(
-            conversation._canonical_payload(payload), final.reviewed_excerpt_bindings
-        )
-        or not 1 <= ordinal <= len(bindings.excerpts)
-    ):
-        raise CitationDenied
-    item = bindings.excerpts[ordinal - 1]
-    evidence = session.exec(
-        select(SessionPrepNoteFinalization).where(
-            SessionPrepNoteFinalization.note_id == item.note_ref,
-            SessionPrepNoteFinalization.source_version == item.source_version,
-        )
-    ).one_or_none()
-    note = session.get(AIVisitNote, item.note_ref)
-    appointment = (
-        _owned_appointment(
-            session, doctor_id=doctor.id, appointment_id=note.appointment_id
-        )
-        if note
-        else None
-    )
-    sections = retained_excerpt(
-        binding=item,
-        evidence=evidence,
-        note=note,
-        appointment=appointment,
-        doctor_id=doctor.id,
-        accepted_at=final.recorded_at,
-    )
-    return {
-        "schema_version": "1.0.0",
-        "citation": display_citations(str(final.id), bindings.model_dump(mode="json"))[
-            ordinal - 1
-        ],
-        "content_sha256": item.content_sha256,
-        "sections": [
-            {"title": title, "text": text} for title, text in sections.items()
-        ],
-    }
