@@ -139,7 +139,9 @@ class BackendAggregateTest(unittest.TestCase):
     def test_recovery_skips_aggregate_but_normal_failure_still_aggregates(self):
         app = WORKFLOW.read_text().split("  app:\n", 1)[1].split("\n  web:", 1)[0]
         self.assertIn("needs: [authorize, backend-quality, backend-tests]", app)
-        expression = re.search(r"if: \$\{\{ (.+) \}\}", app).group(1)
+        matched = re.search(r"if: \$\{\{ (.+) \}\}", app)
+        assert matched is not None
+        expression = matched.group(1)
         for recovered, should_run in (("true", False), ("", True)):
             substituted = (
                 expression.replace("always()", "True")
