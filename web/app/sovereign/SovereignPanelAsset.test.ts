@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "f4e47585c2aaae81da2e2207490853eec03fc010",
+      "287c64c6327998cef4907825f2c48e3b3e29af4e",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
@@ -75,7 +75,7 @@ describe("pinned Sovereign panel asset", () => {
 
   it("retains the prior immutable asset for already-open dashboard sessions", async () => {
     const previousSha =
-      "030b3854b0d9b5a385624ce8f786c7aca4fcc88aa3c2b05e8d6963f85f7ea4a4"
+      "6e76aed8811dc662ed2a84a108f9247d6213d5670af7bb059f3eed2f07e345fe"
     const bytes = await readFile(
       resolve(
         process.cwd(),
