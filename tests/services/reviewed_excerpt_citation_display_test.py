@@ -297,8 +297,8 @@ def test_same_day_same_quote_actual_source_actions_stay_distinct(scope):
     original_visit = Appointment.get(id=baseline.appointment_id)
     other_visit = Appointment.get(id=other.appointment_id)
     assert original_visit and other_visit
-    other_visit.appointment_date = original_visit.appointment_date + timedelta(
-        minutes=10
+    other_visit.appointment_date = original_visit.appointment_date.replace(
+        hour=12, minute=10, second=0, microsecond=0
     )
     other_visit.save()
     with get_session() as session:
