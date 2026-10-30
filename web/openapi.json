@@ -7148,6 +7148,11 @@
               }
             ],
             "title": "Selected Source Fingerprint"
+          },
+          "newer_prior_note_awaiting_review": {
+            "type": "boolean",
+            "title": "Newer Prior Note Awaiting Review",
+            "default": false
           }
         },
         "type": "object",
