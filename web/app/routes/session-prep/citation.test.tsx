@@ -12,6 +12,58 @@ const control = vi.hoisted(() => ({
   reference: "",
   invalidate: () => {},
 }))
+const auth = vi.hoisted(() => {
+  const state = {
+    isLoaded: true,
+    userId: "user_synthetic_a" as string | null,
+    sessionId: "session_synthetic_a" as string | null,
+    sdkOverride: null as {
+      user: { id: string } | null
+      session: { id: string } | null
+    } | null,
+    listeners: new Set<
+      (resources: {
+        user: { id: string } | null
+        session: { id: string } | null
+      }) => void
+    >(),
+  }
+  const clerk = {
+    get user() {
+      return state.userId ? { id: state.userId } : null
+    },
+    get session() {
+      return state.sessionId ? { id: state.sessionId } : null
+    },
+    addListener: (
+      callback: (resources: {
+        user: { id: string } | null
+        session: { id: string } | null
+      }) => void,
+    ) => {
+      state.listeners.add(callback)
+      return () => {
+        state.listeners.delete(callback)
+      }
+    },
+  }
+  return { state, clerk }
+})
+vi.mock("~/configuration/clerk", () => ({
+  getClient: async () =>
+    auth.state.sdkOverride ?? {
+      user: auth.clerk.user,
+      session: auth.clerk.session,
+    },
+}))
+vi.mock("@clerk/clerk-react", () => ({
+  useClerk: () => auth.clerk,
+  useAuth: () => ({
+    isLoaded: auth.state.isLoaded,
+    userId: auth.state.userId,
+    sessionId: auth.state.sessionId,
+  }),
+}))
 vi.mock("~/configuration/client", () => ({
   retainedSessionPrepCitation: control.read,
 }))
@@ -30,6 +82,11 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   vi.restoreAllMocks()
+  auth.state.isLoaded = true
+  auth.state.userId = "user_synthetic_a"
+  auth.state.sessionId = "session_synthetic_a"
+  auth.state.listeners.clear()
+  auth.state.sdkOverride = null
 })
 function fixture() {
   control.reference = `${finalReference}.1`
@@ -83,6 +140,90 @@ describe("authenticated retained-source viewer", () => {
       "Visit · 2026-10-01T09:00:00Z",
     )
   })
+  it.each(["account", "session", "missed_notification", "signout"])(
+    "fences a late old200 on real Clerk %s change despite inactive support status",
+    async (kind) => {
+      let resolve!: (value: unknown) => void
+      control.reference = `${finalReference}.1`
+      control.status.mockResolvedValue({ active: false })
+      control.read.mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            resolve = r
+          }),
+      )
+      const view = render(<Citation />)
+      await waitFor(() => expect(control.read).toHaveBeenCalledTimes(1))
+      const oldSignal = control.read.mock.calls[0][0].signal as AbortSignal
+      control.read.mockResolvedValue({ error: { status: 403 } })
+      act(() => {
+        if (kind !== "session")
+          auth.state.userId = kind === "signout" ? null : "user_synthetic_b"
+        auth.state.sessionId = kind === "signout" ? null : "session_synthetic_b"
+        if (kind !== "missed_notification")
+          for (const callback of auth.state.listeners)
+            callback({ user: auth.clerk.user, session: auth.clerk.session })
+      })
+      // A missing Clerk notification is also fenced by direct live resource checks
+      // after await; the transport intentionally ignores the abort signal.
+      if (kind !== "missed_notification") {
+        view.rerender(<Citation />)
+        expect(oldSignal.aborted).toBe(true)
+      }
+      await act(async () => resolve({ data: retainedFixture() }))
+      await screen.findByText(
+        "This reviewed source is unavailable for your current account or has expired.",
+      )
+      expect(document.body.textContent).not.toContain(
+        "Original reviewed synthetic version",
+      )
+      expect(
+        control.status.mock.results.every((result) => result.type === "return"),
+      ).toBe(true)
+    },
+  )
+
+  it("refuses stale SDK auth resources even when the live Clerk hook is already on the new account", async () => {
+    control.reference = `${finalReference}.1`
+    auth.state.userId = "user_synthetic_b"
+    auth.state.sessionId = "session_synthetic_b"
+    auth.state.sdkOverride = {
+      user: { id: "user_synthetic_a" },
+      session: { id: "session_synthetic_a" },
+    }
+    control.status.mockResolvedValue({ active: false })
+    control.read.mockResolvedValue({ data: retainedFixture() })
+    render(<Citation />)
+    await screen.findByText(
+      "This reviewed source is unavailable for your current account or has expired.",
+    )
+    expect(control.read).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain(
+      "Original reviewed synthetic version",
+    )
+  })
+
+  it("clears displayed source immediately when Clerk replaces the account session", async () => {
+    const view = fixture()
+    await screen.findByText(
+      "Original reviewed synthetic version. Literal <script> text. Ω",
+    )
+    control.read.mockResolvedValue({ error: { status: 403 } })
+    act(() => {
+      auth.state.userId = "user_synthetic_b"
+      auth.state.sessionId = "session_synthetic_b"
+      for (const callback of auth.state.listeners)
+        callback({ user: auth.clerk.user, session: auth.clerk.session })
+    })
+    view.rerender(<Citation />)
+    expect(document.body.textContent).not.toContain(
+      "Original reviewed synthetic version",
+    )
+    await screen.findByText(
+      "This reviewed source is unavailable for your current account or has expired.",
+    )
+  })
+
   it.each(["denied", "tampered", "view_as", "late_view_as"])(
     "keeps %s unavailable without a current-note fallback",
     async (kind) => {

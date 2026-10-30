@@ -12,7 +12,10 @@ Core checks the current real account/record and immutable retained proof. The
 browser verifies the exact reference, original section order and UTF-8 content
 digest, shows visit and review clocks separately, and displays a generic denial
 on missing/expired/corrupt proof. It does not substitute a current note. Record
-changes, authority transitions and focus revalidation clear or fence old bytes.
+changes, actual Clerk user/session replacement, authority transitions and focus
+revalidation clear or fence old bytes. The viewer captures live Clerk identity
+and verifies the SDK auth source before and after reading; retained bytes never
+rebind through the shared inactive support-view status. Auth IDs stay in memory.
 
 Deploy reviewed Core admission/display first, provider display bridges second,
 and this pinned consumer last. The new delivery is ordinary script/SRI loaded

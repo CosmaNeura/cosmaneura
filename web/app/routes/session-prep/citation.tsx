@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState } from "react"
 import { useParams } from "react-router"
 
+import { getClient } from "~/configuration/clerk"
 import { retainedSessionPrepCitation } from "~/configuration/client"
 import { withReadDeadline } from "~/lib/read-deadline"
 import { getViewAsStatus } from "~/lib/view-as-api"
@@ -11,11 +12,17 @@ import {
   parseRetainedCitation,
 } from "~/sovereign/RetainedCitation"
 
+import { useAuth, useClerk } from "@clerk/clerk-react"
+
 export default function ReviewedCitationPage() {
   const { citation_ref: reference } = useParams()
+  const clerk = useClerk()
+  const { isLoaded, userId, sessionId } = useAuth()
   const [display, setDisplay] = useState<{
     reference: string
     data: RetainedCitation
+    userId: string
+    sessionId: string
   } | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [refresh, setRefresh] = useState(0)
@@ -30,6 +37,31 @@ export default function ReviewedCitationPage() {
       setDisplay(null)
       setUnavailable(true)
     }
+    const authMatches = () =>
+      Boolean(
+        isLoaded &&
+          userId &&
+          sessionId &&
+          clerk.user?.id === userId &&
+          clerk.session?.id === sessionId,
+      )
+    const check = (signal: AbortSignal) => {
+      signal.throwIfAborted()
+      if (!current || !authMatches()) throw new Error()
+    }
+    const checkSdkIdentity = async (signal: AbortSignal) => {
+      check(signal)
+      const client = await getClient()
+      check(signal)
+      const session = client?.session as { id?: unknown } | undefined
+      if (client?.user?.id !== userId || session?.id !== sessionId)
+        throw new Error()
+    }
+    // Subscribe before any async auth/status/source read. Inactive support
+    // status is shared by real users and cannot bind this response to an account.
+    const unsubscribeAuth = clerk.addListener(({ user, session }) => {
+      if (user?.id !== userId || session?.id !== sessionId) invalidate()
+    })
     const unsubscribe = subscribeToViewAsStateChanges(invalidate)
     const onFocus = () => {
       invalidate()
@@ -43,25 +75,28 @@ export default function ReviewedCitationPage() {
     document.addEventListener("visibilitychange", onVisibility)
     void withReadDeadline(
       async (signal) => {
-        if (!reference) throw new Error()
+        if (!reference || !userId || !sessionId) throw new Error()
+        check(signal)
         const path = citationCoordinates(reference)
         const status = await getViewAsStatus(signal)
-        signal.throwIfAborted()
+        check(signal)
         if (status.active || !current) throw new Error()
+        await checkSdkIdentity(signal)
         const result = await retainedSessionPrepCitation({
           path,
           signal,
           throwOnError: false,
           cache: "no-store",
         })
-        signal.throwIfAborted()
+        check(signal)
+        await checkSdkIdentity(signal)
         if (!result.data) throw new Error()
         const currentStatus = await getViewAsStatus(signal)
-        signal.throwIfAborted()
+        check(signal)
         if (currentStatus.active || !current) throw new Error()
         const data = await parseRetainedCitation(result.data, reference)
-        signal.throwIfAborted()
-        if (current) setDisplay({ reference, data })
+        check(signal)
+        setDisplay({ reference, data, userId, sessionId })
       },
       { signal: controller.signal },
     ).catch(() => {
@@ -71,11 +106,21 @@ export default function ReviewedCitationPage() {
       current = false
       controller.abort()
       unsubscribe()
+      unsubscribeAuth()
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisibility)
     }
-  }, [reference, refresh])
-  const data = display && display.reference === reference ? display.data : null
+  }, [reference, refresh, clerk, isLoaded, userId, sessionId])
+  const data =
+    display &&
+    display.reference === reference &&
+    isLoaded &&
+    display.userId === userId &&
+    display.sessionId === sessionId &&
+    clerk.user?.id === userId &&
+    clerk.session?.id === sessionId
+      ? display.data
+      : null
   return (
     <main className="mx-auto max-w-4xl p-6">
       <h1 className="text-xl font-semibold">
