@@ -27,6 +27,16 @@ on:
         description: "Attest that a real provider-signed non-PHI Recall callback passed immediately before production deploy"
         required: true
         default: false
+      production_session_prep_frontend_enabled:
+        type: boolean
+        description: "Compile the provider Session Prep panel for this reviewed production release; backend activation remains separate"
+        required: false
+        default: false
+      production_session_prep_reviewed_core_sha:
+        type: string
+        description: "Full reviewed Core SHA equal to this exact master release; required only when compiling Session Prep"
+        required: false
+        default: ""
 
 # Deployment validation belongs only to explicit manual promotions, not pushes.
 # Hosted execution requires explicit founder opt-in; automatic PR jobs stay disabled.
@@ -135,7 +145,9 @@ jobs:
               .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
-            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
+            scripts/session_prep_production_frontend_admission.py \
+            scripts/superadmin_capability_config_preflight.py; then
               production_infra_changed=true
             fi
           fi
@@ -430,7 +442,9 @@ jobs:
             .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
-            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
+            scripts/session_prep_production_frontend_admission.py \
+            scripts/superadmin_capability_config_preflight.py; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
           fi
@@ -449,6 +463,9 @@ jobs:
         env:
           FRONTEND_ENV_SOURCE: .env.production.frontend
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
+          SESSION_PREP_FRONTEND_ENABLED: ${{ inputs.production_session_prep_frontend_enabled && 'true' || 'false' }}
+          SESSION_PREP_REVIEWED_SOURCE_SHA: ${{ inputs.production_session_prep_reviewed_core_sha }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
         run: |
           set -euo pipefail
@@ -468,6 +485,12 @@ jobs:
             } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+          python3 scripts/session_prep_production_frontend_admission.py prepare \
+            --configuration "$JAVASCRIPT_BUILD_ENV_JSON" \
+            --admission "$JAVASCRIPT_SESSION_PREP_ADMISSION_JSON" \
+            --enabled "$SESSION_PREP_FRONTEND_ENABLED" \
+            --source-sha "$GITHUB_SHA" \
+            --reviewed-source-sha "$SESSION_PREP_REVIEWED_SOURCE_SHA"
 
       # NOTE registry/Azure vars resolve at step level so the environment scope
       # is active during evaluation — job-level env blocks miss environment vars
@@ -481,12 +504,16 @@ jobs:
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
           PYTHON_ENV: production
       - name: Remove resolved production frontend configuration
         if: always()
         env:
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
-        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+          JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
+        run: |
+          rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+          rm -f -- "$JAVASCRIPT_SESSION_PREP_ADMISSION_JSON"
       - name: Reverify current master before publishing production images
         env:
           GH_TOKEN: ${{ github.token }}
