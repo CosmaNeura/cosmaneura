@@ -34,6 +34,7 @@ set -u
 RESOURCE_GROUP=test-resource-group
 {image_variable}=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+PRODUCTION_IMAGE_REF=registry.example/cosmaneura@{DIGEST}
 az() {{
     if [[ "$1" == "containerapp" && "$2" == "show" ]]; then
         printf '%s\\n' "$TEST_ACTIVE_REVISIONS_MODE"
@@ -93,7 +94,7 @@ def test_deploy_blocks_api_until_old_worker_replicas_are_drained(
     expected_image = (
         'expected_image="$STAGING_IMAGE_REFERENCE"'
         if deploy_path == "infra-staging/deploy.sh"
-        else 'expected_image="${PRODUCTION_IMAGE}:${git_sha}"'
+        else 'expected_image="$PRODUCTION_IMAGE_REF"'
     )
     assert expected_image in drain_function
     assert ".image == $expected_image" in drain_function
@@ -179,7 +180,7 @@ def test_worker_drain_accepts_the_expected_revision_after_old_replicas_drain(
     expected_image = (
         f"registry.example/cosmaneura@{DIGEST}"
         if deploy_path == "infra-staging/deploy.sh"
-        else "registry.example/cosmaneura:rollout-sha"
+        else f"registry.example/cosmaneura@{DIGEST}"
     )
     result = _run_worker_drain(
         deploy_path,

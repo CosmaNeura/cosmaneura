@@ -13,6 +13,27 @@ on:
         description: "Authorize paid hosted execution for this manual release after local execution failed"
         required: false
         default: false
+      release_action:
+        type: choice
+        description: "Prepare an immutable Core candidate, or promote a previously successful candidate without rebuilding"
+        options: [prepare, promote]
+        required: true
+        default: prepare
+      producer_run_id:
+        type: string
+        description: "Successful candidate-producing run (promotion only)"
+        required: false
+        default: ""
+      producer_run_attempt:
+        type: string
+        description: "Exact successful producer attempt (promotion only)"
+        required: false
+        default: ""
+      candidate_artifact_id:
+        type: string
+        description: "Immutable GitHub candidate artifact ID (promotion only)"
+        required: false
+        default: ""
       debug_enabled:
         type: boolean
         description: "Run with tmate enabled (https://github.com/marketplace/actions/debugging-with-tmate)"
@@ -83,8 +104,22 @@ jobs:
           PROMOTION_EVENT: ${{ github.event_name }}
           PROMOTION_REF: ${{ github.ref }}
           PROMOTION_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          PROMOTION_REPOSITORY: ${{ github.repository }}
+          RELEASE_ACTION: ${{ inputs.release_action }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PRODUCER_ATTEMPT: ${{ inputs.producer_run_attempt }}
+          ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
         run: |
           set -euo pipefail
+          test "$PROMOTION_REPOSITORY" = "CosmaNeura/cosmaneura"
+          if [[ "$RELEASE_ACTION" == "promote" ]]; then
+            [[ "$PRODUCER_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+            [[ "$PRODUCER_ATTEMPT" =~ ^[1-9][0-9]{0,9}$ ]]
+            [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          else
+            test "$RELEASE_ACTION" = "prepare"
+            test -z "$PRODUCER_RUN_ID$PRODUCER_ATTEMPT$ARTIFACT_ID"
+          fi
           if [[ "$PROMOTION_EVENT" != "workflow_dispatch" ]]; then
             echo "::error::Production promotion must be started manually with workflow_dispatch."
             exit 1
@@ -334,8 +369,8 @@ jobs:
       - run: just js_lint
       - run: just js_test
 
-  deploy:
-    name: 🚀 Deploy
+  release-gates:
+    name: Production release gates
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
@@ -357,8 +392,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      # TODO why exactly do we need id-token here?
-      id-token: write
     steps:
       - name: Reject unreviewed durable webhook activation
         env:
@@ -430,21 +463,50 @@ jobs:
             .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
-            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
+            scripts/production_core_candidate.py scripts/superadmin_capability_config_preflight.py; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
           fi
+
+  production-candidate:
+    name: Prepare production candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: [release-gates]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.repository == 'CosmaNeura/cosmaneura' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        inputs.github_hosted_fallback_authorized &&
+        inputs.release_action == 'prepare' &&
+        needs.release-gates.result == 'success'
+      }}
+    environment: production
+    env:
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify founder context and exact current source before credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/production_core_candidate.py context
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
-          # deploy only builds/pushes the image + calls Azure; ffmpeg & friends
-          # are baked into the image, not needed on the host (only zsh, for `just`)
           apt-packages: zsh
-
-      # This verified tool install runs before registry authentication and
-      # before any production secret is bound to a build/deploy step.
       - uses: ./.github/actions/install-nixpacks
-
       - name: Resolve production frontend build configuration
         env:
           FRONTEND_ENV_SOURCE: .env.production.frontend
@@ -469,64 +531,148 @@ jobs:
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
 
-      # NOTE registry/Azure vars resolve at step level so the environment scope
-      # is active during evaluation — job-level env blocks miss environment vars
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-      - name: Build production images from resolved public configuration
+      - name: Build the combined production frontend and Core image
         run: just build
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
           PYTHON_ENV: production
-      - name: Remove resolved production frontend configuration
-        if: always()
-        env:
-          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
-        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
-      - name: Reverify current master before publishing production images
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          current_master_sha=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
-            --jq '.object.sha')
-          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
-            echo "Master advanced during the build; refusing to publish stale images." >&2
-            exit 1
-          fi
-      - run: just build_push
-        env:
-          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
-          PYTHON_ENV: production
-
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Reverify current master before production deployment
+      - name: Verify, publish and protect the immutable Core candidate
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          current_master_sha=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
-            --jq '.object.sha')
-          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
-            echo "Master advanced before deployment; refusing to mutate Azure from a stale commit." >&2
-            exit 1
-          fi
+          umask 077
+          mkdir "$RUNNER_TEMP/core-production-candidate"
+          python3 scripts/production_core_candidate.py publish \
+            --configuration "$RUNNER_TEMP/production-frontend-build.json" \
+            --output "$RUNNER_TEMP/core-production-candidate/candidate.json"
+      - name: Retain the immutable candidate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-core-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}/core-production-candidate/candidate.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: false
+      - name: Remove resolved production frontend configuration
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json"
 
-      - name: Deploy to Azure
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: [release-gates]
+    concurrency:
+      group: cosmaneura-production-container-apps
+      cancel-in-progress: false
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.repository == 'CosmaNeura/cosmaneura' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        inputs.github_hosted_fallback_authorized &&
+        inputs.release_action == 'promote' &&
+        needs.release-gates.result == 'success'
+      }}
+    environment: production
+    env:
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Authenticate the previously successful immutable candidate before credentials
         env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PRODUCER_ATTEMPT: ${{ inputs.producer_run_attempt }}
+          ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/production_core_candidate.py admit \
+            --producer-run-id "$PRODUCER_RUN_ID" \
+            --producer-attempt "$PRODUCER_ATTEMPT" \
+            --artifact-id "$ARTIFACT_ID"
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: zsh
+      - name: Resolve fresh production frontend configuration for comparison
+        env:
+          FRONTEND_ENV_SOURCE: .env.production.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV,
+              OPENAPI_JSON_PATH,
+              VITE_CLERK_PUBLIC_KEY,
+              VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST,
+              VITE_POSTHOG_KEY,
+              VITE_PYTHON_URL,
+              VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false",
+              VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Reauthenticate candidate, configuration and retained digest immediately before deployment
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PRODUCER_ATTEMPT: ${{ inputs.producer_run_attempt }}
+          ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+        run: |
+          set -euo pipefail
+          image=$(python3 scripts/production_core_candidate.py check \
+            --producer-run-id "$PRODUCER_RUN_ID" \
+            --producer-attempt "$PRODUCER_ATTEMPT" \
+            --artifact-id "$ARTIFACT_ID" \
+            --configuration "$RUNNER_TEMP/production-frontend-build.json")
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+      - name: Deploy the previously verified Core digest without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_PRODUCTION_IMAGE_REF: ${{ steps.candidate.outputs.image }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
@@ -534,4 +680,7 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
           RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
         run: |
-          cd infra && bash deploy.sh ${{ github.sha }}
+          cd infra && bash deploy.sh "$GITHUB_SHA" "$CORE_PRODUCTION_IMAGE_REF"
+      - name: Remove resolved production frontend configuration
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json"
