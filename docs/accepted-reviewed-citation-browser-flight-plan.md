@@ -35,3 +35,8 @@ Recovery selects the prior byte-pinned consumer and provider source. The older
 asset/read1.0 regressions remain unchanged in behavior. A negotiated malformed
 map fails closed, canonical text stays useful, and unverified attributed export
 is unavailable; no silent current-source fallback or vendor replay is allowed.
+
+Browser account/session/loading and listener state are normalized only in the
+existing Clerk configuration adapter. The viewer checks its actual mutable SDK
+resource again after asynchronous digest validation, immediately before display.
+The Host principal-bound mount/delegation fence is a separate dependent outcome.

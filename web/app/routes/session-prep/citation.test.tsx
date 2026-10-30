@@ -49,20 +49,37 @@ const auth = vi.hoisted(() => {
   }
   return { state, clerk }
 })
-vi.mock("~/configuration/clerk", () => ({
-  getClient: async () =>
-    auth.state.sdkOverride ?? {
-      user: auth.clerk.user,
-      session: auth.clerk.session,
-    },
-}))
-vi.mock("@clerk/clerk-react", () => ({
-  useClerk: () => auth.clerk,
-  useAuth: () => ({
+const identity = {
+  current: () => ({
     isLoaded: auth.state.isLoaded,
     userId: auth.state.userId,
     sessionId: auth.state.sessionId,
   }),
+  subscribe: (
+    callback: (principal: {
+      isLoaded: boolean
+      userId: string | null
+      sessionId: string | null
+    }) => void,
+  ) =>
+    auth.clerk.addListener(({ user, session }) =>
+      callback({
+        isLoaded: auth.state.isLoaded,
+        userId: user?.id ?? null,
+        sessionId: session?.id ?? null,
+      }),
+    ),
+  readCurrent: async () => {
+    const client = auth.state.sdkOverride ?? auth.clerk
+    return () => ({
+      isLoaded: auth.state.isLoaded,
+      userId: client.user?.id ?? null,
+      sessionId: client.session?.id ?? null,
+    })
+  },
+}
+vi.mock("~/configuration/clerk", () => ({
+  useBrowserPrincipal: () => ({ ...identity.current(), identity }),
 }))
 vi.mock("~/configuration/client", () => ({
   retainedSessionPrepCitation: control.read,

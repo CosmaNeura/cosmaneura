@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState } from "react"
 import { useParams } from "react-router"
 
-import { getClient } from "~/configuration/clerk"
+import { useBrowserPrincipal } from "~/configuration/clerk"
 import { retainedSessionPrepCitation } from "~/configuration/client"
 import { withReadDeadline } from "~/lib/read-deadline"
 import { getViewAsStatus } from "~/lib/view-as-api"
@@ -12,12 +12,9 @@ import {
   parseRetainedCitation,
 } from "~/sovereign/RetainedCitation"
 
-import { useAuth, useClerk } from "@clerk/clerk-react"
-
 export default function ReviewedCitationPage() {
   const { citation_ref: reference } = useParams()
-  const clerk = useClerk()
-  const { isLoaded, userId, sessionId } = useAuth()
+  const { isLoaded, userId, sessionId, identity } = useBrowserPrincipal()
   const [display, setDisplay] = useState<{
     reference: string
     data: RetainedCitation
@@ -42,28 +39,37 @@ export default function ReviewedCitationPage() {
         isLoaded &&
           userId &&
           sessionId &&
-          clerk.user?.id === userId &&
-          clerk.session?.id === sessionId,
+          identity.current().userId === userId &&
+          identity.current().sessionId === sessionId,
       )
     const check = (signal: AbortSignal) => {
       signal.throwIfAborted()
       if (!current || !authMatches()) throw new Error()
     }
-    const sdkMatches = (client: Awaited<ReturnType<typeof getClient>>) => {
-      const session = client?.session as { id?: unknown } | undefined
-      return client?.user?.id === userId && session?.id === sessionId
+    const sdkMatches = (read: () => ReturnType<typeof identity.current>) => {
+      const principal = read()
+      return (
+        principal.isLoaded &&
+        principal.userId === userId &&
+        principal.sessionId === sessionId
+      )
     }
     const checkSdkIdentity = async (signal: AbortSignal) => {
       check(signal)
-      const client = await getClient()
+      const read = await identity.readCurrent()
       check(signal)
-      if (!sdkMatches(client)) throw new Error()
-      return client
+      if (!sdkMatches(read)) throw new Error()
+      return read
     }
     // Subscribe before any async auth/status/source read. Inactive support
     // status is shared by real users and cannot bind this response to an account.
-    const unsubscribeAuth = clerk.addListener(({ user, session }) => {
-      if (user?.id !== userId || session?.id !== sessionId) invalidate()
+    const unsubscribeAuth = identity.subscribe((principal) => {
+      if (
+        !principal.isLoaded ||
+        principal.userId !== userId ||
+        principal.sessionId !== sessionId
+      )
+        invalidate()
     })
     const unsubscribe = subscribeToViewAsStateChanges(invalidate)
     const onFocus = () => {
@@ -116,15 +122,15 @@ export default function ReviewedCitationPage() {
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisibility)
     }
-  }, [reference, refresh, clerk, isLoaded, userId, sessionId])
+  }, [reference, refresh, identity, isLoaded, userId, sessionId])
   const data =
     display &&
     display.reference === reference &&
     isLoaded &&
     display.userId === userId &&
     display.sessionId === sessionId &&
-    clerk.user?.id === userId &&
-    clerk.session?.id === sessionId
+    identity.current().userId === userId &&
+    identity.current().sessionId === sessionId
       ? display.data
       : null
   return (

@@ -1,8 +1,8 @@
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 
 import { forgetPendingInvitationOnSignOut } from "~/lib/pending-invitation"
 
-import { ClerkProvider, useClerk } from "@clerk/clerk-react"
+import { ClerkProvider, useAuth, useClerk } from "@clerk/clerk-react"
 import { loadClerkJsScript } from "@clerk/shared/loadClerkJsScript"
 import { invariant } from "@epic-web/invariant"
 
@@ -40,6 +40,7 @@ type ClerkClient = {
   load: () => Promise<void>
   user?: ClerkUser
   session?: {
+    id?: string
     getToken: (options?: {
       template?: string
       skipCache?: boolean
@@ -177,4 +178,60 @@ export default function withClerkProvider(Component: React.ComponentType) {
       <Component {...props} />
     </ClerkProvider>
   )
+}
+
+/** Browser identity is ephemeral; never serialize these values into record metadata. */
+export type BrowserPrincipal = Readonly<{
+  isLoaded: boolean
+  userId: string | null
+  sessionId: string | null
+}>
+export type BrowserPrincipalIdentity = Readonly<{
+  current: () => BrowserPrincipal
+  subscribe: (listener: (principal: BrowserPrincipal) => void) => () => void
+  // The returned reader observes the actual mutable SDK resource after later awaits.
+  readCurrent: () => Promise<() => BrowserPrincipal>
+}>
+function browserPrincipal(
+  resources:
+    | {
+        loaded?: boolean
+        user?: { id?: string } | null
+        session?: { id?: string } | null
+      }
+    | undefined,
+): BrowserPrincipal {
+  return {
+    isLoaded: resources?.loaded === true,
+    userId: resources?.user?.id ?? null,
+    sessionId: resources?.session?.id ?? null,
+  }
+}
+
+/** Normalize React, listener and actual SDK identity at the vendor boundary. */
+export function useBrowserPrincipal(): BrowserPrincipal & {
+  identity: BrowserPrincipalIdentity
+} {
+  const clerk = useClerk()
+  const { isLoaded, userId, sessionId } = useAuth()
+  const identity = useMemo<BrowserPrincipalIdentity>(
+    () => ({
+      current: () => browserPrincipal(clerk),
+      subscribe: (listener) =>
+        clerk.addListener((resources) =>
+          listener(browserPrincipal({ ...resources, loaded: clerk.loaded })),
+        ),
+      readCurrent: async () => {
+        const client = await getClient()
+        return () => browserPrincipal(client)
+      },
+    }),
+    [clerk],
+  )
+  return {
+    isLoaded,
+    userId: userId ?? null,
+    sessionId: sessionId ?? null,
+    identity,
+  }
 }
