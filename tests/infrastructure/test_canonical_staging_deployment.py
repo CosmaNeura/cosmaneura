@@ -103,6 +103,8 @@ def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() 
         "synthetic_only_confirmed",
         "synthetic_evidence_sha256",
         "staging_identity_fingerprints_sha256",
+        "staging_effective_configuration_sha256",
+        "staging_runtime_public_json",
         "expected_schema_before",
         "expected_schema_after",
         "recovery_digest",
@@ -507,6 +509,67 @@ def test_identity_fingerprint_digest_contract_is_canonical_across_files() -> Non
         "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256: "
         "${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}"
     ) in workflow
+
+
+@pytest.mark.parametrize(
+    ("preserved", "observed", "accepted"),
+    [
+        (True, "sha256:" + "a" * 64, True),
+        (False, "sha256:" + "a" * 64, False),
+        (True, "sha256:" + "b" * 64, False),
+        (True, None, False),
+    ],
+)
+def test_terminal_attempt_requires_the_requested_preserved_configuration(
+    preserved: bool,
+    observed: str | None,
+    accepted: bool,
+) -> None:
+    workflow = _source()
+    authorize = _job(workflow, "authorize")
+    deploy = _job(workflow, "deploy")
+    assert (
+        "STAGING_EFFECTIVE_CONFIGURATION_SHA256: "
+        "${{ inputs.staging_effective_configuration_sha256 }}"
+    ) in authorize
+    deployment = _step(deploy, "Deploy candidate digest with protected-master controls")
+    assert 'STAGING_PRESERVE_EFFECTIVE_CONFIGURATION: "true"' in deployment
+    assert (
+        "EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256: "
+        "${{ needs.authorize.outputs.staging_effective_configuration_sha256 }}"
+    ) in deployment
+    assert (
+        "STAGING_RUNTIME_PUBLIC_JSON: "
+        "${{ needs.authorize.outputs.staging_runtime_public_json }}"
+    ) in deployment
+    assert "scripts/staging_release_contract.py --validate-runtime-public" in authorize
+    terminal = _step(
+        _job(workflow, "attempt_evidence"),
+        "Require a complete successful staging attempt",
+    )
+    start = terminal.index('          jq -e --arg expected "$STAGING_EFFECTIVE')
+    end = terminal.index('<<< "$OBSERVED_CONFIGURATION" >/dev/null', start)
+    actual_guard = terminal[
+        start : end + len('<<< "$OBSERVED_CONFIGURATION" >/dev/null')
+    ]
+    result = subprocess.run(
+        ["/bin/bash", "-c", actual_guard],
+        env={
+            "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
+            "STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT": "sha256:" + "a" * 64,
+            "OBSERVED_CONFIGURATION": json.dumps(
+                {
+                    "effective_configuration_preserved": preserved,
+                    "effective_configuration_sha256": observed,
+                }
+            ),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert (result.returncode == 0) == accepted
 
 
 def test_azure_identity_is_pinned_and_legacy_branch_trust_is_rejected() -> None:
