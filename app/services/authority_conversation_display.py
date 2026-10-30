@@ -770,7 +770,13 @@ def read_retained_citation(
     binding = (
         session.get(AuthorityPersonBinding, mount.person_binding_id) if mount else None
     )
-    if binding is None or turn is None or final is None or mount is None:
+    if (
+        binding is None
+        or turn is None
+        or final is None
+        or mount is None
+        or turn.actor_id is None
+    ):
         raise citations.CitationDenied
     scope = validate_provider_record_scope(
         session=session,

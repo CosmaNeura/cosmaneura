@@ -1871,14 +1871,23 @@ async def read_conversation_turns(
 
     def read_in_session():
         with get_session() as managed:
-            reader = (
-                retained_history.read_retained_conversation
-                if body.schema_version == "1.2.0"
-                else retained_history.read_current_with_citations
-                if body.schema_version == "1.1.0"
-                else history.read_conversation
-            )
-            return reader(
+            if isinstance(body, retained_history.RetainedConversationReadRequest):
+                return retained_history.read_retained_conversation(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
+            if isinstance(body, retained_history.ConversationCitationReadRequest):
+                return retained_history.read_current_with_citations(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
+            return history.read_conversation(
                 session=cast(Session, managed),
                 workload_client_id=principal.client_id,
                 mount_context_token=mount_context_token,
