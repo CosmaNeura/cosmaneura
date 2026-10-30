@@ -1,5 +1,6 @@
 """Durability, source invalidation, recovery, and canonical-action authorization."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -8,13 +9,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.configuration.session_prep as configuration
-import app.services.authority as authority
 from app.configuration.session_prep import SessionPrepProviderSettings
 from app.routes.agent import agent_api_app, get_agent_authority_settings
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_sovereign_tool_request,
 )
+from app.services import authority
 from app.services.authority_conversation import write_conversation_turn
 from app.services.session_prep import (
     SessionPrepPreparedBrief,
@@ -86,7 +87,7 @@ def scope(monkeypatch, request):
     # before finalization/exchange schedules the build, preserving its digest.
     prior_prompt = getattr(request, "param", None)
     if prior_prompt is not None:
-        assert prior_prompt == "source_only_prep_v5"
+        assert prior_prompt == "source_only_prep_v6"
         import app.services.session_prep_runtime as runtime
 
         monkeypatch.setattr(runtime, "PROMPT_VERSION", prior_prompt)
@@ -507,12 +508,12 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, _token, record = scope
-    assert generator.PROMPT_VERSION == "source_only_prep_v6"
+    assert generator.PROMPT_VERSION == "source_only_prep_v7"
     with get_session() as session:
         current_selection, current_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
         )
-        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v5")
+        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v6")
         prior_selection, prior_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
         )
@@ -520,26 +521,38 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     assert current_digest != prior_digest
 
 
-@pytest.mark.parametrize("scope", ["source_only_prep_v5"], indirect=True)
+@pytest.mark.parametrize("scope", ["source_only_prep_v6"], indirect=True)
 def test_new_prompt_version_cannot_serve_or_replay_an_old_brief(scope, monkeypatch):
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, token, record = scope
-    assert runtime.PROMPT_VERSION == "source_only_prep_v5"
+    assert runtime.PROMPT_VERSION == "source_only_prep_v6"
     assert _work() == "ready"
     old_action = _action(token)
     old = _read(token, record, old_action)
-    assert old.response.result.brief_prompt_version == "source_only_prep_v5"
+    assert old.response.result.brief_prompt_version == "source_only_prep_v6"
     assert _read(token, record, old_action).replayed
+    old_artifact = SessionPrepArtifact.first()
+    assert old_artifact is not None
+    old_artifact_id = old_artifact.id
+    old_payload = json.dumps(old_artifact.result_payload, sort_keys=True)
 
-    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v6")
+    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v7")
     with pytest.raises(SessionPrepScopeDenied):
         _read(token, record, old_action)
     fresh_action = _action(token)
     assert _read(token, record, fresh_action).response.result.state == "pending"
     assert SessionPrepArtifact.count() == 1
     assert _work() == "ready"
-    fresh = _read(token, record, fresh_action, key="prep-read-key-v6-0002")
-    assert fresh.response.result.brief_prompt_version == "source_only_prep_v6"
+    fresh = _read(token, record, fresh_action, key="prep-read-key-v7-0002")
+    assert fresh.response.result.brief_prompt_version == "source_only_prep_v7"
     assert fresh.response.result.brief_version == 2
     assert fresh.response.result.brief_supersedes_ref == old.response.result.brief_ref
+    assert SessionPrepArtifact.count() == 2
+    with get_session() as session:
+        preserved = session.get(SessionPrepArtifact, old_artifact_id)
+        assert preserved is not None
+        assert json.dumps(preserved.result_payload, sort_keys=True) == old_payload
+    # A successor does not restore a stale receipt's authority to serve v6.
+    with pytest.raises(SessionPrepScopeDenied):
+        _read(token, record, old_action)
