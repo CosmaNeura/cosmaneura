@@ -575,6 +575,19 @@ _DOSE_CHANGE = re.compile(
     r"\b(?:change[ds]?|unchanged)\s+(?:the\s+)?(?:dose|treatment|therapy)\b",
     re.IGNORECASE,
 )
+_FOLLOWUP_INTERVAL = (
+    r"(?:[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    r"\s+(?:days?|weeks?|months?)"
+)
+_FACTUAL_FOLLOWUP = re.compile(
+    r"\s*Follow(?:-|\s+)up\s+in\s+(?P<interval>" + _FOLLOWUP_INTERVAL + r")[.]?\s*",
+    re.IGNORECASE,
+)
+_NONASSERTIVE_FOLLOWUP = re.compile(
+    r"(?:Review|Discuss|Clarify)\s+the\s+follow(?:-|\s+)up\s+plan"
+    r"(?:\s+(?:for|in)\s+(?P<interval>" + _FOLLOWUP_INTERVAL + r"))?[.?]?",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, repr=False)
@@ -771,6 +784,52 @@ def _literal_status_source(
     )
 
 
+def _nonassertive_followup_review(
+    text: str, references: list[str], selection: ReviewedNoteSelection
+) -> bool:
+    """Allow one review question about an agreed, explicitly sourced follow-up.
+
+    The whole item must use a closed nonassertive grammar; a medication, status
+    assertion or extra clause cannot inherit this exception through shared refs.
+    Every cited note must supply the same complete factual follow-up field.
+    """
+    dates = set(_ISO_DATE.findall(text))
+    clean = _ISO_DATE.sub("", _DATE_PHRASE.sub("", text)).strip(" \t:*_`—–-")
+    question = _NONASSERTIVE_FOLLOWUP.fullmatch(clean)
+    if question is None or not references:
+        return False
+    sources = [
+        source for source in selection.sources if source.source_ref in references
+    ]
+    if {source.source_ref for source in sources} != set(references):
+        return False
+    intervals = set()
+    for source in sources:
+        if dates and dates != {source.source_at.date().isoformat()}:
+            return False
+        values = set()
+        for heading, value in source.content.items():
+            if heading.strip().casefold() not in {"follow-up", "follow up"}:
+                continue
+            if (
+                "?" in value
+                or _SOURCE_NONFACTUAL.search(value)
+                or _UNPAIRED_QUOTATION.search(value)
+            ):
+                return False
+            match = _FACTUAL_FOLLOWUP.fullmatch(value)
+            if match is None:
+                return False
+            values.add(" ".join(match["interval"].casefold().split()))
+        if len(values) != 1:
+            return False
+        intervals.update(values)
+    if len(intervals) != 1:
+        return False
+    requested = question["interval"]
+    return requested is None or " ".join(requested.casefold().split()) in intervals
+
+
 def _validate_documented_dose_errors(
     prepared: SessionPrepPreparedBrief, selection: ReviewedNoteSelection
 ) -> None:
@@ -839,6 +898,9 @@ def _validate_documented_dose_errors(
                     and (_MEDICATION_PLAN.search(clause) or _DOSE_CHANGE.search(clause))
                     and not exact_no_change
                     and not _literal_status_source(clause, item.source_refs, selection)
+                    and not _nonassertive_followup_review(
+                        item.text, item.source_refs, selection
+                    )
                 ):
                     raise SessionPrepGenerationError("output_fidelity_rejected")
 
