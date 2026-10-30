@@ -23,6 +23,8 @@ that work; it does not replace decomposition or deployed-state reconciliation.
   a hosted release fallback after local Docker image-pull readiness failed.
   `Build & Publish (manual)` may use hosted Ubuntu only with explicit founder
   opt-in on exact master; its acceptance and promotion gates remain mandatory.
+  Canonical staging uses standard hosted Ubuntu 24.04 with its founder-only,
+  protected-master, immutable-candidate and protected-credential gates intact.
   Other tracked workflows retain their existing compute controls.
   Never rerun retired hosted deployment snapshots.
 - Focused test: `uv run pytest <path>`.
