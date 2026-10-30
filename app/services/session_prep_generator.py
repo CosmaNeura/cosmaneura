@@ -22,7 +22,7 @@ from app.services.session_prep import (
 from app.services.session_prep_note_sources import ReviewedNoteSelection
 
 GENERATOR_VERSION = "reviewed_notes_v1"
-PROMPT_VERSION = "source_only_prep_v7"
+PROMPT_VERSION = "source_only_prep_v8"
 MODEL_PROFILE = DEFAULT_MULTI_MODAL_MODEL
 MAX_OUTPUT_CHARACTERS = 40_000
 # Leave time for source revalidation/storage before the existing Celery task's
@@ -287,6 +287,22 @@ def generate_prepared_brief(
     source_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if not selection.sources or len(source_json) > 96_000:
         raise SessionPrepGenerationError("source_bound_exceeded")
+    required_evidence = _required_literal_correction_evidence(selection)
+    if required_evidence:
+        payload["required_literal_evidence"] = {
+            "allowed_output_fields": ["recap", "trajectory_and_material_changes"],
+            "rule": (
+                "Include every complete clause below in at least one allowed output "
+                "field, with its exact ISO source date and source_ref. These are "
+                "recorded statements and a documentation correction, not evidence "
+                "of an actual treatment change. Preserve all other source-supported "
+                "facts, including laboratory status and follow-up."
+            ),
+            "clauses": required_evidence,
+        }
+        source_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(source_json) > 96_000:
+            raise SessionPrepGenerationError("source_bound_exceeded")
     deadline = monotonic() + MAX_MODEL_WORK_SECONDS
     system_prompt = SYSTEM_PROMPT
     for attempt in range(2):
@@ -572,6 +588,37 @@ class _DocumentedDoseError:
     correction_clause: str
     reason_clause: str
     no_change_clause: str | None
+
+
+def _required_literal_correction_evidence(
+    selection: ReviewedNoteSelection,
+) -> list[dict[str, str]]:
+    """Describe existing literal validation obligations before the first model call.
+
+    All clauses come from the unchanged reviewed sources using the same narrow
+    recognizer as the output guard. This adds no inferred clinical status and
+    never transforms, appends to, or repairs a generated response.
+    """
+    evidence = []
+    for error in _documented_dose_errors(selection):
+        required = [
+            (error.earlier_clause, error.earlier_ref, error.earlier_date),
+            (error.correction_clause, error.corrected_ref, error.corrected_date),
+            (error.reason_clause, error.corrected_ref, error.corrected_date),
+        ]
+        if error.no_change_clause is not None:
+            required.append(
+                (error.no_change_clause, error.corrected_ref, error.corrected_date)
+            )
+        for clause, reference, source_date in required:
+            evidence.append(
+                {
+                    "complete_clause": clause,
+                    "source_ref": reference,
+                    "source_date": source_date,
+                }
+            )
+    return evidence
 
 
 def _dose_pattern(value: str) -> re.Pattern[str]:
