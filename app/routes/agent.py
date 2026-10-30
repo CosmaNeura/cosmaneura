@@ -46,6 +46,7 @@ from app.services.provider_database_connection import (
 )
 from app.services.provider_database_deadline import ProviderDatabaseDeadlineExceeded
 from app.services.provider_thread_admission import provider_thread_slot
+from app.services.reviewed_excerpt_citations import ReviewedExcerptSelection
 from app.services.session_prep_runtime import SessionPrepFactsToolResponse
 
 from activemodel.session_manager import aglobal_session, get_session
@@ -266,6 +267,7 @@ class FinalResponseTurnWrite(BaseModel):
     provider_context_ref: str | None = Field(
         default=None, min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._~-]{8,160}$"
     )
+    reviewed_excerpts: ReviewedExcerptSelection | None = None
 
 
 ConversationTurnWriteRequest = Annotated[
@@ -999,6 +1001,18 @@ async def _invoke_tool(
     response.headers["X-Cosmaneura-Client-Turn-ID"] = str(client_turn_id)
     response.headers["Idempotency-Replayed"] = str(result.replayed).lower()
     response.headers["Cache-Control"] = "no-store"
+    if (
+        isinstance(result, provider_question.ProviderQuestionRead)
+        and isinstance(
+            result.response.result,
+            (
+                provider_question.ProviderQuestionSourcesResult,
+                provider_question.ProviderQuestionSourcesOnlyResult,
+            ),
+        )
+        and result.response.result.state == "ready"
+    ):
+        response.headers["X-Cosmaneura-Reviewed-Excerpts"] = "1.0.0"
     return result.response
 
 
@@ -1298,7 +1312,9 @@ async def write_conversation_turn(
             trace_id=resolved_trace_id,
         )
     try:
-        raw_data = await request.json()
+        raw_data = json.loads(
+            await request.body(), object_pairs_hook=_closed_json_object
+        )
     except (UnicodeDecodeError, ValueError):
         return agent_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1326,6 +1342,12 @@ async def write_conversation_turn(
             trace_id=resolved_trace_id,
         )
 
+    canonical_data = data.model_dump(mode="json")
+    if (
+        isinstance(data, FinalResponseTurnWrite)
+        and "reviewed_excerpts" not in data.model_fields_set
+    ):
+        canonical_data.pop("reviewed_excerpts", None)
     try:
         result = await _run_agent_database(
             app.services.authority_conversation.write_conversation_turn,
@@ -1334,7 +1356,7 @@ async def write_conversation_turn(
             interaction_ref=interaction_ref,
             client_turn_id=client_turn_id,
             idempotency_key=idempotency_key,
-            payload=data.model_dump(mode="json"),
+            payload=canonical_data,
             settings=settings,
         )
     except admission.ProviderChatAdmissionLimited as limited:
