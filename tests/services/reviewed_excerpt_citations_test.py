@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.routes.agent import get_agent_authority_settings
 from app.routes.session_prep_review import session_prep_review_api
 from app.services.provider_question_context import ProviderQuestionSourcesOnlyResult
 from app.services.reviewed_excerpt_citations import enumeration_digest, render_quotes
@@ -20,6 +21,7 @@ from sqlmodel import Session, select
 
 from tests.factories import DoctorFactory
 from tests.services.provider_question_context_test import (
+    AUTHORITY_SETTINGS,
     _chat,
     _client,
     _headers,
@@ -32,6 +34,7 @@ scope = _scope_fixture
 
 def final_body(response, *, section=0):
     result = ProviderQuestionSourcesOnlyResult.model_validate(response["result"])
+    assert result.current_through is not None
     source = result.reviewed_sources[0]
     title, quote = list(source.sections.items())[section]
     return {
@@ -44,6 +47,7 @@ def final_body(response, *, section=0):
                 [(quote, source.source_at, title)],
                 mode="selected",
                 source_count=len(result.reviewed_sources),
+                current_through=result.current_through,
             ),
         },
         "presentation": {"mode": "standard", "suppress": [], "human_contact": None},
@@ -82,6 +86,7 @@ def read(client, token, turn, version="1.1.0"):
 def browser(doctor, *, view_as=False):
     app = FastAPI()
     app.include_router(session_prep_review_api)
+    app.dependency_overrides[get_agent_authority_settings] = lambda: AUTHORITY_SETTINGS
 
     @app.middleware("http")
     async def synthetic_authenticated_state(request, call_next):
@@ -306,7 +311,10 @@ def test_same_day_same_quote_actual_source_actions_stay_distinct(scope):
         )
         for source in result.reviewed_sources
     ]
-    body["response"]["content"] = render_quotes(quotes, mode="selected", source_count=2)
+    assert result.current_through is not None
+    body["response"]["content"] = render_quotes(
+        quotes, mode="selected", source_count=2, current_through=result.current_through
+    )
     body["reviewed_excerpts"]["excerpts"] = [
         {"ordinal": index + 1, "source_index": index, "section_index": 0}
         for index in range(2)

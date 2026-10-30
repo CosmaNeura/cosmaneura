@@ -26,6 +26,7 @@ import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
+import app.services.authority_conversation_display as retained_history
 import app.services.authority_conversation_read as history
 import app.services.authority_usage
 import app.services.provider_chat_admission as admission
@@ -1805,11 +1806,15 @@ async def report_model_usage_event(
 
 
 @agent_api_app.post(
+    "/conversation-turns/read-retained",
+    response_model=retained_history.RetainedConversationReadResponse,
+)
+@agent_api_app.post(
     "/conversation-turns/read", response_model=history.ConversationReadResponse
 )
 @agent_api_app.post(
     "/conversation-turns/read-with-citations",
-    response_model=history.ConversationCitationReadResponse,
+    response_model=retained_history.ConversationCitationReadResponse,
 )
 async def read_conversation_turns(
     request: Request,
@@ -1852,7 +1857,9 @@ async def read_conversation_turns(
                 return problem("VALIDATION_FAILED", 422)
             raw.extend(chunk)
         request_model = (
-            history.ConversationCitationReadRequest
+            retained_history.RetainedConversationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-retained")
+            else retained_history.ConversationCitationReadRequest
             if request.url.path.endswith("/conversation-turns/read-with-citations")
             else history.ConversationReadRequest
         )
@@ -1864,7 +1871,14 @@ async def read_conversation_turns(
 
     def read_in_session():
         with get_session() as managed:
-            return history.read_conversation(
+            reader = (
+                retained_history.read_retained_conversation
+                if body.schema_version == "1.2.0"
+                else retained_history.read_current_with_citations
+                if body.schema_version == "1.1.0"
+                else history.read_conversation
+            )
+            return reader(
                 session=cast(Session, managed),
                 workload_client_id=principal.client_id,
                 mount_context_token=mount_context_token,
