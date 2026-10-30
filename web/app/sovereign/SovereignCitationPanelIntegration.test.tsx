@@ -121,6 +121,79 @@ afterEach(() => {
   delete window.CosmaNeuraPanel
 })
 describe("real byte-pinned panel with accepted Core maps", () => {
+  it("restores a superseded answer then sends only the new question envelope, never retained history or maps", async () => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    expect(document.body.textContent).toContain(
+      "Historical answer · its reviewed sources have since changed",
+    )
+    const question = "A new complete factual question about reviewed history."
+    document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value = question
+    f.control.fresh = async () => {
+      const request = f.requests.find((item) => item.url.endsWith("/chat"))!
+      const id = JSON.parse(String(request.init.body)).client_turn_id
+      const response = citationFixture("1.1.0")
+      response.turns[0].client_turn_id = id
+      response.history.messages.forEach((message) => {
+        message.client_turn_id = id
+      })
+      return json(response)
+    }
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+    await waitFor(() =>
+      expect(
+        f.requests.some((item) => item.url.endsWith("history-with-citations")),
+      ).toBe(true),
+    )
+    const requests = f.requests.filter((item) => item.url.endsWith("/chat"))
+    expect(requests).toHaveLength(1)
+    const wire = String(requests[0].init.body),
+      body = JSON.parse(wire)
+    expect(Object.keys(body).sort()).toEqual([
+      "client_turn_id",
+      "message",
+      "metadata",
+    ])
+    expect(body.message).toBe(question)
+    expect(body.metadata).toEqual({
+      output_format: "chat",
+      clientId: "appointment_synthetic_a",
+    })
+    for (const excluded of [
+      "reviewed_citations",
+      "display_state",
+      finalReference,
+      "Synthetic identical recorded text.",
+      "Synthetic recorded question",
+      excerptAnswer,
+    ])
+      expect(wire).not.toContain(excluded)
+    expect(Object.keys(body.metadata)).not.toContain("history")
+    expect(
+      f.requests.filter((item) => item.url.endsWith("history-with-citations")),
+    ).toHaveLength(1)
+  })
+
+  it("uses a neutral historical label when a quoted answer has no verified accepted map", async () => {
+    const value = citationFixture()
+    value.history.messages[1].reviewed_citations = []
+    value.history.messages[1].display_state = "historical"
+    await fixture(async () => json(value))
+    await screen.findByText("Historical answer.")
+    await screen.findByText(
+      "Reviewed-source links could not be verified. Attributed export is unavailable.",
+    )
+    expect(document.body.textContent).not.toContain(
+      "reviewed-source attribution preserved",
+    )
+    expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Save answer .md" })).toBeNull()
+  })
+
   it("restores superseded same-day identical quotes, original references and dated export without current-source reads", async () => {
     const f = await fixture()
     await waitFor(() =>
