@@ -16,12 +16,31 @@ scope = _scope_fixture
 
 @pytest.mark.parametrize(
     "change",
-    ["null", "valid", "refused", "suppressed", "mode", "version", "empty", "oversize"],
+    [
+        "null",
+        "json_null",
+        "valid",
+        "refused",
+        "suppressed",
+        "mode",
+        "version",
+        "empty",
+        "oversize",
+    ],
 )
 def test_actual_final_table_expand_constraints_preserve_legacy(scope, change):
     client, turn = _client(), _chat(scope[3])
     assert _final(client, scope[3], turn).status_code == 201
     with get_session() as session:
+        assert (
+            session.execute(
+                text(
+                    "SELECT reviewed_excerpt_bindings IS NULL FROM canonical_conversation_final_phase WHERE turn_id=:turn_id"
+                ),
+                {"turn_id": str(turn[2])},
+            ).scalar_one()
+            is True
+        )
         session.execute(
             text(
                 "CREATE TEMP TABLE reviewed_excerpt_expand_probe (LIKE canonical_conversation_final_phase INCLUDING CONSTRAINTS INCLUDING DEFAULTS) ON COMMIT DROP"
@@ -55,7 +74,9 @@ def test_actual_final_table_expand_constraints_preserve_legacy(scope, change):
         elif change == "oversize":
             value["padding"] = "x" * 65536
         parameters = {
-            "value": None if change == "null" else json.dumps(value),
+            "value": None
+            if change == "null"
+            else json.dumps(None if change == "json_null" else value),
             "outcome": outcome,
             "mode": mode,
             "suppressed": suppressed,

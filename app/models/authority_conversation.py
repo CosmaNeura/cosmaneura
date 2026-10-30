@@ -170,7 +170,10 @@ class CanonicalConversationFinalPhase(
     )
     outcome: str = Field(max_length=16)
     reviewed_excerpt_bindings: dict | None = Field(
-        default=None, nullable=True, sa_type=JSONB, exclude=True, repr=False
+        default=None,
+        sa_column=sa.Column(JSONB(none_as_null=True), nullable=True),
+        exclude=True,
+        repr=False,
     )
     content_type: str = Field(max_length=32)
     content: str = Field(min_length=1, max_length=20_000)
