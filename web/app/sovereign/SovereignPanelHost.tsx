@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
-import { getClient } from "~/configuration/clerk"
+import { getClient, useBrowserPrincipal } from "~/configuration/clerk"
 import type { PriorNoteOverview } from "~/configuration/client"
 import { appointmentDateFormat } from "~/lib/date"
 import { withReadDeadline } from "~/lib/read-deadline"
@@ -267,13 +267,17 @@ function loadPinnedPanel(signal: AbortSignal): Promise<PanelApi> {
   })
 }
 
-async function platformSessionToken(): Promise<string> {
+async function platformSessionToken(
+  checkPrincipal: () => Promise<void>,
+): Promise<string> {
+  await checkPrincipal()
   const clerk = await getClient()
   if (!clerk?.user || !clerk.session) {
     throw new Error("Provider session unavailable")
   }
   const token = await clerk.session.getToken()
   if (!token) throw new Error("Provider session unavailable")
+  await checkPrincipal()
   return token
 }
 
@@ -359,6 +363,7 @@ async function requestProviderMountContext(
 
 function createProviderMountContextTokenProvider(
   appointmentId: string,
+  checkPrincipal: () => Promise<void>,
 ): MountContextTokenProvider {
   let credential: MountContextCredential | null = null
   let pending: {
@@ -375,6 +380,7 @@ function createProviderMountContextTokenProvider(
 
   const getToken = async (request?: AuthTokenRequest): Promise<string> => {
     const forceRefresh = requestedForceRefresh(request)
+    await checkPrincipal()
     if (discarded) throw new Error("Provider authority is unavailable")
     const now = Date.now()
     if (pending) {
@@ -414,10 +420,11 @@ function createProviderMountContextTokenProvider(
             )
           : await requestProviderMountContext(
               "exchange",
-              await platformSessionToken(),
+              await platformSessionToken(checkPrincipal),
               appointmentId,
               controller.signal,
             )
+        await checkPrincipal()
         if (discarded) throw new Error("Provider authority is unavailable")
         credential = next
         return next.contextToken
@@ -489,6 +496,7 @@ export function SovereignPanelHost({
   onSessionPrepStateChange?: (state: SessionPrepUiState) => void
 }) {
   const config = resolveSovereignProviderConfig()
+  const { isLoaded, userId, sessionId, identity } = useBrowserPrincipal()
   const panelRef = useRef<PanelInstance | null>(null)
   const [panelReady, setPanelReady] = useState(false)
   const [presentationTarget, setPresentationTarget] =
@@ -538,13 +546,19 @@ export function SovereignPanelHost({
     setPanelReady(false)
     setPresentationTarget(null)
     sourceSnapshot.current = null
+    if (!isLoaded || !userId || !sessionId) {
+      setRecovery("unavailable")
+      return
+    }
     let cancelled = false
     let accessWasGranted = false
     let accessLost = false
     let mounted: PanelInstance | null = null
     const statusController = new AbortController()
-    const mountTokenProvider =
-      createProviderMountContextTokenProvider(appointmentId)
+    const mountTokenProvider = createProviderMountContextTokenProvider(
+      appointmentId,
+      checkPrincipal,
+    )
     setRecovery(mountAttempt > 0 ? "connecting" : null)
     const finishBootstrap = () => clearTimeout(bootstrapTimeout)
     const discardMounted = () => {
@@ -559,6 +573,30 @@ export function SovereignPanelHost({
       if (panelRef.current === previous) panelRef.current = null
       if (previous) resetAndDestroy(previous)
     }
+    let readSdkPrincipal:
+      | (() => ReturnType<typeof identity.current>)
+      | undefined
+    const matches = (principal: ReturnType<typeof identity.current>) =>
+      principal.isLoaded &&
+      principal.userId === userId &&
+      principal.sessionId === sessionId
+    function assertPrincipal() {
+      if (cancelled || accessLost)
+        throw new Error("Provider authority is unavailable")
+      if (
+        !matches(identity.current()) ||
+        (readSdkPrincipal && !matches(readSdkPrincipal()))
+      ) {
+        discardMounted()
+        setRecovery("unavailable")
+        throw new DOMException("Provider principal changed", "AbortError")
+      }
+    }
+    async function checkPrincipal() {
+      assertPrincipal()
+      readSdkPrincipal = await identity.readCurrent()
+      assertPrincipal()
+    }
     // Bound the whole handshake, including script loading, authority exchange,
     // and welcome. A timed-out generation can never complete a later retry.
     const bootstrapTimeout = setTimeout(() => {
@@ -566,6 +604,13 @@ export function SovereignPanelHost({
       discardMounted()
       setRecovery("unavailable")
     }, 30_000)
+
+    const unsubscribeAuth = identity.subscribe((principal) => {
+      if (!matches(principal)) {
+        discardMounted()
+        setRecovery("unavailable")
+      }
+    })
 
     // Fail closed before loading the platform context-token path. A Clerk
     // session token is accepted only by the same-origin exchange endpoint and
@@ -587,6 +632,9 @@ export function SovereignPanelHost({
           embedVersion: EMBED_VERSION,
           getAuthToken: (request) => mountTokenProvider.getToken(request),
           getContext: async () => {
+            if (cancelled || accessLost)
+              throw new Error("Open record changed while context was resolving")
+            await checkPrincipal()
             if (cancelled || accessLost) {
               throw new Error("Open record changed while context was resolving")
             }
@@ -608,18 +656,21 @@ export function SovereignPanelHost({
             )
             if (signals.some((source) => source.aborted)) abort()
             const assertCurrent = () => {
+              assertPrincipal()
               controller.signal.throwIfAborted()
               if (cancelled || accessLost || recordId !== appointmentId) {
                 throw new DOMException("Open record changed", "AbortError")
               }
             }
             try {
+              await checkPrincipal()
               const history = await loadSovereignHistory({
                 origin: config.origin,
                 getToken: () => mountTokenProvider.getToken(),
                 signal: controller.signal,
                 assertCurrent,
               })
+              await checkPrincipal()
               assertCurrent()
               return history
             } catch (error) {
@@ -648,11 +699,13 @@ export function SovereignPanelHost({
             )
             if (signals.some((source) => source.aborted)) abort()
             const assertCurrent = () => {
+              assertPrincipal()
               controller.signal.throwIfAborted()
               if (cancelled || accessLost || recordId !== appointmentId)
                 throw new DOMException("Open record changed", "AbortError")
             }
             try {
+              await checkPrincipal()
               const display = await withReadDeadline(
                 (signal) =>
                   loadCitationDisplay({
@@ -663,6 +716,7 @@ export function SovereignPanelHost({
                   }),
                 { signal: controller.signal },
               )
+              await checkPrincipal()
               assertCurrent()
               return display
             } catch (error) {
@@ -715,6 +769,7 @@ export function SovereignPanelHost({
         // Cleanup owns destruction once the effect has been cancelled. Do not
         // dereference `mounted` here: cleanup deliberately nulls it while an
         // asynchronous initial bind may still be resolving.
+        await checkPrincipal()
         if (cancelled || accessLost) return
         finishBootstrap()
         panelRef.current = candidate
@@ -730,8 +785,19 @@ export function SovereignPanelHost({
         // is unavailable. The panel itself renders network errors per turn.
       })
 
-    return discardMounted
-  }, [appointmentId, config?.origin, mountAttempt])
+    return () => {
+      unsubscribeAuth()
+      discardMounted()
+    }
+  }, [
+    appointmentId,
+    config?.origin,
+    mountAttempt,
+    identity,
+    isLoaded,
+    userId,
+    sessionId,
+  ])
 
   return config ? (
     <>

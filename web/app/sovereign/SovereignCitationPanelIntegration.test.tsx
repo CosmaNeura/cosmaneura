@@ -7,6 +7,7 @@ import {
   excerptAnswer,
   finalReference,
 } from "./SovereignCitationDisplay.fixture"
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import {
   act,
   cleanup,
@@ -20,7 +21,10 @@ const authority = vi.hoisted(() => ({
   getClient: vi.fn(),
   getViewAsStatus: vi.fn(),
 }))
-vi.mock("~/configuration/clerk", () => ({ getClient: authority.getClient }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: authority.getClient,
+  useBrowserPrincipal: () => syntheticClerk.principal(authority.getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({
   getViewAsStatus: authority.getViewAsStatus,
 }))
@@ -32,19 +36,28 @@ const headers = {
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers })
 
-async function fixture(first = async () => json(citationFixture())) {
+async function fixture(
+  first = async () => json(citationFixture()),
+  sessionToken = async () => "synthetic-session",
+) {
   vi.resetModules()
   vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
   vi.stubEnv("VITE_SOVEREIGN_PROVIDER_URL", "https://provider.example")
   vi.spyOn(document, "hidden", "get").mockReturnValue(false)
   authority.getViewAsStatus.mockResolvedValue({ active: false })
-  authority.getClient.mockResolvedValue({
-    user: { id: "synthetic-user" },
-    session: { getToken: async () => "synthetic-session" },
-  })
+  authority.getClient.mockResolvedValue(
+    syntheticClerk.bindResource({
+      user: { id: "synthetic-user" },
+      session: {
+        id: "synthetic-session-id",
+        getToken: sessionToken,
+      },
+    }),
+  )
   const control = {
     retained: first,
     fresh: async () => json(citationFixture("1.1.0")),
+    exchange: null as (() => Promise<Response>) | null,
   }
   const requests: Array<{ url: string; init: RequestInit }> = []
   vi.stubGlobal(
@@ -53,6 +66,7 @@ async function fixture(first = async () => json(citationFixture())) {
       const url = String(input)
       requests.push({ url, init })
       if (url === "/embed/v1/context-tokens/exchange") {
+        if (control.exchange) return control.exchange()
         const now = Date.now()
         return json(
           {
@@ -117,6 +131,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  syntheticClerk.bind(null)
   vi.clearAllMocks()
   delete window.CosmaNeuraPanel
 })
@@ -368,4 +383,158 @@ describe("real byte-pinned panel with accepted Core maps", () => {
       )
     },
   )
+})
+
+function replacePrincipal(kind: string, notify = true) {
+  const client =
+    kind === "signout"
+      ? { loaded: true, user: null, session: null }
+      : {
+          loaded: true,
+          user: {
+            id: kind === "session" ? "synthetic-user" : "synthetic-user-b",
+          },
+          session: {
+            id: "synthetic-session-b",
+            getToken: async () => "synthetic-session-b",
+          },
+        }
+  authority.getClient.mockResolvedValue(client)
+  if (kind !== "SDK-only") syntheticClerk.bind(client, notify)
+}
+const readOnlyDisplay = {
+  version: "1.2.0" as const,
+  mode: "recent" as const,
+  clientTurnId: null,
+  signal: new AbortController().signal,
+}
+it.each(["account", "session", "signout", "missed-listener", "SDK-only"])(
+  "same-record Host rejects a late retained200 after %s replacement",
+  async (kind) => {
+    let resolve!: (response: Response) => void
+    const f = await fixture(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
+    )
+    await waitFor(() =>
+      expect(f.requests.some((r) => r.url.endsWith("history-retained"))).toBe(
+        true,
+      ),
+    )
+    const old = f.mounts[0]
+    f.control.retained = async () => json({}, 403)
+    act(() => replacePrincipal(kind, kind !== "missed-listener"))
+    if (kind !== "missed-listener" && kind !== "SDK-only")
+      f.view.rerender(<f.Host appointmentId="appointment_synthetic_a" />)
+    await act(async () => resolve(json(citationFixture())))
+    await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+    expect(document.body.textContent).not.toContain(
+      "Synthetic identical recorded text",
+    )
+    expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+    const count = f.requests.length
+    await expect(old.getAuthToken()).rejects.toThrow()
+    await expect(
+      old.loadCitationHistory("appointment_synthetic_a", readOnlyDisplay),
+    ).rejects.toThrow()
+    expect(f.requests).toHaveLength(count)
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+      ),
+    ).toBe(false)
+  },
+)
+it.each(["account", "session", "signout"])(
+  "same-record Host discards displayed retained bytes and cached token on %s replacement",
+  async (kind) => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    const old = f.mounts[0]
+    f.control.retained = async () => json({}, 403)
+    act(() => replacePrincipal(kind))
+    expect(document.querySelector(".cnp-root")).toBeNull()
+    expect(document.body.textContent).not.toContain(
+      "Synthetic identical recorded text",
+    )
+    await expect(old.getAuthToken()).rejects.toThrow()
+    await expect(old.getAuthToken({ forceRefresh: true })).rejects.toThrow()
+    f.view.rerender(<f.Host appointmentId="appointment_synthetic_a" />)
+    await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+      ),
+    ).toBe(false)
+  },
+)
+it("same-record Host fences a late platform token before any old exchange or display", async () => {
+  let resolve!: (token: string) => void
+  const f = await fixture(
+    async () => json({}, 403),
+    () =>
+      new Promise<string>((r) => {
+        resolve = r
+      }),
+  )
+  await waitFor(() => expect(resolve).toBeTypeOf("function"))
+  const old = f.mounts[0]
+  f.control.exchange = async () => json({}, 403)
+  act(() => replacePrincipal("account"))
+  await act(async () => resolve("synthetic-old-platform-token"))
+  await expect(old.getAuthToken()).rejects.toThrow()
+  expect(
+    f.requests.some(
+      (r) =>
+        r.url === "/embed/v1/context-tokens/exchange" &&
+        new Headers(r.init.headers).get("Authorization") ===
+          "Bearer synthetic-old-platform-token",
+    ),
+  ).toBe(false)
+  await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+})
+it("same-record Host fences a late exchange credential and never replays that logical mount", async () => {
+  // First establish this original principal and an explicitly refreshed logical mount.
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  let resolve!: (response: Response) => void
+  f.control.exchange = () =>
+    new Promise<Response>((r) => {
+      resolve = r
+    })
+  f.view.rerender(<f.Host appointmentId="appointment_synthetic_b" />)
+  await waitFor(() => expect(resolve).toBeTypeOf("function"))
+  const old = f.mounts[1]
+  f.control.exchange = async () => json({}, 403)
+  act(() => replacePrincipal("account"))
+  const now = Date.now()
+  await act(async () =>
+    resolve(
+      json(
+        {
+          context_token: "mctx_" + "c".repeat(48),
+          token_type: "Bearer",
+          issued_at: new Date(now - 1000).toISOString(),
+          refresh_after: new Date(now + 300000).toISOString(),
+          expires_at: new Date(now + 900000).toISOString(),
+        },
+        201,
+      ),
+    ),
+  )
+  await expect(old.getAuthToken()).rejects.toThrow()
+  await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+  expect(
+    f.requests.some(
+      (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+    ),
+  ).toBe(false)
 })
