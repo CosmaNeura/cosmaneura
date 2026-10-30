@@ -25,6 +25,7 @@ from app.services import scribe_capture_protocol as protocol
 from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
 from app.services.scribe_capture_admission import (
+    AdmissionUnconfirmed,
     CaptureCaller,
     ConsentAttestation,
     admit_capture,
@@ -636,17 +637,26 @@ async def execute_native_capture(
         ReadOperation(kind="provider_encounter") if data.opening_nonce else None
     )
     receipt = None
+    opening_recovery = False
     if operation is not None:
-        with phase("operation"):
-            receipt = await execute_capture_operation(
-                caller=caller,
-                binding_ref=binding,
-                workspace_id=data.workspace_id,
-                operation=operation,
-                client_request_key=key,
-                client=client,
-                upload_origins=capture_settings.upload_origins,
-            )
+        try:
+            with phase("operation"):
+                receipt = await execute_capture_operation(
+                    caller=caller,
+                    binding_ref=binding,
+                    workspace_id=data.workspace_id,
+                    operation=operation,
+                    client_request_key=key,
+                    client=client,
+                    upload_origins=capture_settings.upload_origins,
+                )
+        except AdmissionUnconfirmed:
+            if data.action != "mount" or data.opening_nonce is None:
+                raise
+            # The existing admission remains uncertain. Opening is read-only:
+            # publish recovery only after the final current encounter check,
+            # never a fresh/ready receipt or an admission/source replay.
+            opening_recovery = True
         check_async_capture_deadline()
     # Only the final mount row is published. All other lookups still execute
     # their full fresh authority checks without unused saved-note display reads.
@@ -697,6 +707,14 @@ async def execute_native_capture(
                 "request_nonce": str(data.opening_nonce),
                 "operation": "provider_encounter",
                 "receipt": receipt.model_dump(mode="json"),
+            }
+        if opening_recovery:
+            result["opening_recovery"] = {
+                "contract_version": "1",
+                "workspace_id": str(data.workspace_id),
+                "binding_ref": binding,
+                "request_nonce": str(data.opening_nonce),
+                "disposition": "provider_operation_conflict",
             }
         if data.retain_preparation_context:
             # Private server-to-server field, stripped before native publication.
