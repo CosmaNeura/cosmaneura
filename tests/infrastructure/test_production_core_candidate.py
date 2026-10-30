@@ -14,6 +14,13 @@ from typing import Any, TypedDict
 import pytest
 import yaml
 
+from tests.infrastructure.test_production_saved_image_identity import (
+    fixture as saved_fixture,
+)
+from tests.infrastructure.test_production_saved_image_identity import (
+    save as save_fixture,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location(
@@ -25,7 +32,7 @@ spec.loader.exec_module(candidate)
 SHA = "a" * 40
 TREE = "b" * 40
 IMAGE_DIGEST = "sha256:" + "c" * 64
-CONFIG_DIGEST = "sha256:" + "d" * 64
+CONFIG_DIGEST = saved_fixture(engine="classic")[0]["Id"]
 
 
 class ProducerEvidence(TypedDict):
@@ -65,26 +72,11 @@ def context(run=20):
 
 
 def local_image() -> dict[str, Any]:
-    return dict(
-        Id=CONFIG_DIGEST,
-        Os="linux",
-        Architecture="amd64",
-        Config=dict(
-            Labels={"org.opencontainers.image.revision": SHA},
-            Env=["PYTHON_ENV=production"],
-        ),
-    )
+    return saved_fixture(engine="classic")[0]
 
 
 def manifest_bytes() -> bytes:
-    return candidate.canonical(
-        {
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "config": {"digest": CONFIG_DIGEST},
-            "layers": [{"digest": IMAGE_DIGEST}],
-        }
-    )
+    return saved_fixture()[2]
 
 
 def retention_bytes(image_digest) -> bytes:
@@ -451,14 +443,14 @@ def test_runtime_environment_cannot_be_staging_or_ambiguous(env):
         candidate.image_source(context(), image)
 
 
+@pytest.mark.parametrize("engine", ["classic", "containerd"])
 def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, engine
 ):
     config_path = tmp_path / "configuration.json"
     config_path.write_bytes(candidate.canonical(configuration()))
-    raw = manifest_bytes()
+    image, exported, raw = saved_fixture(engine=engine)
     actual_digest = candidate.digest(raw)
-    image = local_image()
     calls = []
     monkeypatch.setattr(candidate, "source_context", lambda: context(10))
     monkeypatch.setattr(
@@ -471,6 +463,10 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
         calls.append(args)
         if args[:3] == ["docker", "image", "inspect"]:
             return candidate.canonical([image])
+        if args[:3] == ["docker", "image", "save"]:
+            assert args[-1] == image["Id"]
+            save_fixture(Path(args[args.index("--output") + 1]), exported)
+            return b""
         if args[:2] == ["docker", "create"]:
             return ("1" * 64).encode()
         if args[:4] == ["docker", "buildx", "imagetools", "inspect"]:
@@ -488,6 +484,12 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
     candidate.publish(config_path, output)
     observed = json.loads(output.read_bytes())
     assert observed["image"] == candidate.IMAGE + "@" + actual_digest
+    assert observed["image_config_digest"] == CONFIG_DIGEST
+    tag = next(args for args in calls if args[:2] == ["docker", "tag"])
+    assert tag[2] == image["Id"]
+    assert next(
+        i for i, args in enumerate(calls) if args[:3] == ["docker", "image", "save"]
+    ) < next(i for i, args in enumerate(calls) if args[:2] == ["docker", "create"])
     first_push = next(
         i for i, args in enumerate(calls) if args[:2] == ["docker", "push"]
     )
@@ -525,8 +527,14 @@ def test_image_or_asset_failure_prevents_publication(
 
     def fake(args, **kwargs):
         assert args[0] == "docker" and args[1] in {"image", "create", "cp", "rm"}
-        if invalid_image and args[1] != "image":
+        if invalid_image and args[:3] != ["docker", "image", "inspect"]:
             pytest.fail("malformed image advanced beyond inspection")
+        if args[:3] == ["docker", "image", "save"]:
+            save_fixture(
+                Path(args[args.index("--output") + 1]),
+                saved_fixture(engine="classic")[1],
+            )
+            return b""
         return (
             candidate.canonical([None if invalid_image else image])
             if args[1] == "image"
@@ -885,3 +893,32 @@ def test_client_children_receive_only_their_normal_capabilities(monkeypatch):
         (["gh", "api", "--hostname", "github.com", "synthetic"], True),
     ):
         assert candidate.command(args, github=github) == b"{}"
+
+
+def test_saved_config_failure_prevents_source_probe_and_registry_mutations(
+    monkeypatch, tmp_path
+):
+    image, entries, _raw = saved_fixture()
+    catalogue = json.loads(entries["manifest.json"])
+    entries[catalogue[0]["Config"]] = b"{}"
+    config_path = tmp_path / "configuration.json"
+    config_path.write_bytes(candidate.canonical(configuration()))
+    monkeypatch.setattr(candidate, "source_context", lambda: context(10))
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["docker", "image", "inspect"]:
+            return candidate.canonical([image])
+        if args[:3] == ["docker", "image", "save"]:
+            save_fixture(Path(args[args.index("--output") + 1]), entries)
+            return b""
+        pytest.fail("invalid saved config reached source/container/registry operation")
+
+    monkeypatch.setattr(candidate, "command", command)
+    output = tmp_path / "candidate.json"
+    with pytest.raises(
+        candidate.CandidateRefused, match="^production_core_candidate_refused$"
+    ):
+        candidate.publish(config_path, output)
+    assert len(calls) == 2 and not output.exists()
