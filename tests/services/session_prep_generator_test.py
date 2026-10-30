@@ -690,7 +690,7 @@ def test_artifact_constructor_rejects_unsupported_injected_generator_output():
         predecessor=None,
     )
     assert (
-        result.state == "ready" and result.brief_prompt_version == "source_only_prep_v6"
+        result.state == "ready" and result.brief_prompt_version == "source_only_prep_v7"
     )
     assert result.prepared_brief == supported
 

@@ -64,7 +64,7 @@ const code = z
     code: text(15),
     label: text(150),
     evidenceIds: z.array(text(160)).max(320),
-    mapping: z.record(z.unknown()).optional(),
+    mapping: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough()
 export const cabDraft = z
@@ -345,7 +345,7 @@ export async function readCabResponse(
       sourceOperationId: z.literal(operationId),
       requestSha256: hash,
       source: cabSource,
-      result: z.record(z.unknown()),
+      result: z.record(z.string(), z.unknown()),
     })
     .passthrough()
     .parse(input)
