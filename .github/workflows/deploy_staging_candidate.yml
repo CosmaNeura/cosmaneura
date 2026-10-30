@@ -27,6 +27,14 @@ on:
         type: string
         description: "SHA-256 of the independently reviewed staging Clerk/Zoom/Recall/Stripe-test fingerprint set"
         required: true
+      staging_effective_configuration_sha256:
+        type: string
+        description: "SHA-256 of the independently reviewed full Core web/worker/scheduler runtime configuration to preserve"
+        required: true
+      staging_runtime_public_json:
+        type: string
+        description: "Independently reviewed public Scribe/Companion runtime group already enabled on staging; bound by the full runtime hash"
+        required: true
       expected_schema_before:
         type: string
         description: "Reviewed 12-character Alembic revision currently on staging"
@@ -69,6 +77,8 @@ jobs:
       approval_pr_number: ${{ steps.verify.outputs.approval_pr_number }}
       synthetic_evidence_sha256: ${{ steps.verify.outputs.synthetic_evidence_sha256 }}
       staging_identity_fingerprints_sha256: ${{ steps.verify.outputs.staging_identity_fingerprints_sha256 }}
+      staging_effective_configuration_sha256: ${{ steps.verify.outputs.staging_effective_configuration_sha256 }}
+      staging_runtime_public_json: ${{ steps.verify.outputs.staging_runtime_public_json }}
       expected_schema_before: ${{ steps.verify.outputs.expected_schema_before }}
       expected_schema_after: ${{ steps.verify.outputs.expected_schema_after }}
       recovery_digest: ${{ steps.verify.outputs.recovery_digest }}
@@ -92,6 +102,8 @@ jobs:
           SYNTHETIC_EVIDENCE_SHA256: ${{ inputs.synthetic_evidence_sha256 }}
           SYNTHETIC_ONLY_CONFIRMED: ${{ inputs.synthetic_only_confirmed }}
           STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ inputs.staging_identity_fingerprints_sha256 }}
+          STAGING_EFFECTIVE_CONFIGURATION_SHA256: ${{ inputs.staging_effective_configuration_sha256 }}
+          STAGING_RUNTIME_PUBLIC_JSON: ${{ inputs.staging_runtime_public_json }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -111,6 +123,12 @@ jobs:
             echo "::error::Staging identity evidence must use the canonical sha256 form."
             exit 1
           fi
+          if [[ ! "$STAGING_EFFECTIVE_CONFIGURATION_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Full staging runtime configuration evidence must use the canonical sha256 form."
+            exit 1
+          fi
+          STAGING_RUNTIME_PUBLIC_JSON=$(printf '%s' "$STAGING_RUNTIME_PUBLIC_JSON" |
+            python3 scripts/staging_release_contract.py --validate-runtime-public)
           if [[ ! "$EXPECTED_SCHEMA_BEFORE" =~ ^[0-9a-f]{12}$ || \
                 ! "$EXPECTED_SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]; then
             echo "::error::Expected schema revisions must be 12 lowercase hexadecimal characters."
@@ -136,6 +154,8 @@ jobs:
             echo "approval_pr_number=$APPROVAL_PR_NUMBER"
             echo "synthetic_evidence_sha256=$SYNTHETIC_EVIDENCE_SHA256"
             echo "staging_identity_fingerprints_sha256=$STAGING_IDENTITY_FINGERPRINTS_SHA256"
+            echo "staging_effective_configuration_sha256=$STAGING_EFFECTIVE_CONFIGURATION_SHA256"
+            echo "staging_runtime_public_json=$STAGING_RUNTIME_PUBLIC_JSON"
             echo "expected_schema_before=$EXPECTED_SCHEMA_BEFORE"
             echo "expected_schema_after=$EXPECTED_SCHEMA_AFTER"
             echo "recovery_digest=$RECOVERY_DIGEST"
@@ -911,6 +931,8 @@ jobs:
           EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
           IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
           STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}
+          STAGING_EFFECTIVE_CONFIGURATION_SHA256: ${{ needs.authorize.outputs.staging_effective_configuration_sha256 }}
+          STAGING_RUNTIME_PUBLIC_JSON: ${{ needs.authorize.outputs.staging_runtime_public_json }}
           SYNTHETIC_EVIDENCE_SHA256: ${{ needs.authorize.outputs.synthetic_evidence_sha256 }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
@@ -922,6 +944,8 @@ jobs:
             --arg source_sha "$CANDIDATE_SHA" \
             --arg image_digest "$IMAGE_DIGEST" \
             --arg staging_identity_fingerprints_sha256 "$STAGING_IDENTITY_FINGERPRINTS_SHA256" \
+            --arg staging_effective_configuration_sha256 "$STAGING_EFFECTIVE_CONFIGURATION_SHA256" \
+            --argjson staging_runtime_public "$STAGING_RUNTIME_PUBLIC_JSON" \
             --arg dispatch_actor "$DISPATCH_ACTOR" \
             --arg dispatch_triggering_actor "$DISPATCH_TRIGGERING_ACTOR" \
             --argjson approval_pr_number "$APPROVAL_PR_NUMBER" \
@@ -943,6 +967,8 @@ jobs:
               synthetic_only_confirmed: true,
               synthetic_evidence_sha256: $synthetic_evidence_sha256,
               staging_identity_fingerprints_sha256: $staging_identity_fingerprints_sha256,
+              staging_effective_configuration_sha256: $staging_effective_configuration_sha256,
+              staging_runtime_public: $staging_runtime_public,
               expected_schema_before: $expected_schema_before,
               expected_schema_after: $expected_schema_after,
               expected_recovery_digest: $expected_recovery_digest
@@ -1145,6 +1171,9 @@ jobs:
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
           EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}
+          STAGING_PRESERVE_EFFECTIVE_CONFIGURATION: "true"
+          EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256: ${{ needs.authorize.outputs.staging_effective_configuration_sha256 }}
+          STAGING_RUNTIME_PUBLIC_JSON: ${{ needs.authorize.outputs.staging_runtime_public_json }}
           IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}
           PYTHON_ENV: staging
@@ -1210,6 +1239,7 @@ jobs:
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
           EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}
+          EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256: ${{ needs.authorize.outputs.staging_effective_configuration_sha256 }}
           FRONTEND_TEST_RESULT: ${{ needs.web.result }}
           HEALTHCHECK_HTTP_STATUS: ${{ steps.smoke.outputs.http_status }}
           HEALTHCHECK_URL: ${{ steps.smoke.outputs.healthcheck_url }}
@@ -1259,6 +1289,7 @@ jobs:
             'if type == "object" then . else error("invalid configuration evidence") end')
           configuration_blockers=-1
           observed_identity_fingerprints_sha256=""
+          observed_effective_configuration_sha256=""
           observed_sentry_staging_enabled=""
           observed_zoom_watchdog_enabled=""
           if [[ "$configuration_evidence_json" != "null" ]]; then
@@ -1268,6 +1299,8 @@ jobs:
             fi
             observed_identity_fingerprints_sha256=$(printf '%s' "$configuration_evidence_json" |
               jq -er '.identity_fingerprint_set_sha256 // empty' || true)
+            observed_effective_configuration_sha256=$(printf '%s' "$configuration_evidence_json" |
+              jq -er '.effective_configuration_sha256 // empty' || true)
             observed_sentry_staging_enabled=$(printf '%s' "$configuration_evidence_json" |
               jq -er '.flags.SENTRY_STAGING_ENABLED // empty' || true)
             observed_zoom_watchdog_enabled=$(printf '%s' "$configuration_evidence_json" |
@@ -1297,6 +1330,7 @@ jobs:
                 "$OBSERVED_SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER" && \
                 "$OBSERVED_RECOVERY_DIGEST" == "$EXPECTED_RECOVERY_DIGEST" && \
                 "$observed_identity_fingerprints_sha256" == "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" && \
+                "$observed_effective_configuration_sha256" == "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" && \
                 "$observed_sentry_staging_enabled" == "false" && \
                 "$observed_zoom_watchdog_enabled" == "false" && \
                 "$workloads_before_json" != "null" && \
@@ -1314,6 +1348,8 @@ jobs:
             --arg synthetic_evidence_sha256 "$SYNTHETIC_EVIDENCE_SHA256" \
             --arg expected_staging_identity_fingerprints_sha256 "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" \
             --arg observed_staging_identity_fingerprints_sha256 "$observed_identity_fingerprints_sha256" \
+            --arg expected_staging_effective_configuration_sha256 "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" \
+            --arg observed_staging_effective_configuration_sha256 "$observed_effective_configuration_sha256" \
             --arg backend_test_result "$BACKEND_TEST_RESULT" \
             --arg frontend_test_result "$FRONTEND_TEST_RESULT" \
             --arg config_result "$CONFIG_RESULT" \
@@ -1358,6 +1394,10 @@ jobs:
               staging_identity_fingerprints: {
                 expected_sha256: $expected_staging_identity_fingerprints_sha256,
                 observed_sha256: (if $observed_staging_identity_fingerprints_sha256 == "" then null else $observed_staging_identity_fingerprints_sha256 end)
+              },
+              staging_effective_configuration: {
+                expected_sha256: $expected_staging_effective_configuration_sha256,
+                observed_sha256: (if $observed_staging_effective_configuration_sha256 == "" then null else $observed_staging_effective_configuration_sha256 end)
               },
               candidate_tests: {
                 backend: $backend_test_result,
@@ -1519,6 +1559,7 @@ jobs:
           PUBLICATION_RESULT: ${{ needs.publish.result }}
           RECOVERY_DIGEST_INPUT: ${{ inputs.recovery_digest }}
           STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT: ${{ inputs.staging_identity_fingerprints_sha256 }}
+          STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT: ${{ inputs.staging_effective_configuration_sha256 }}
           SYNTHETIC_EVIDENCE_SHA256_INPUT: ${{ inputs.synthetic_evidence_sha256 }}
           SYNTHETIC_ONLY_CONFIRMED_INPUT: ${{ inputs.synthetic_only_confirmed }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -1534,6 +1575,7 @@ jobs:
             --arg synthetic_only_confirmed_input "$SYNTHETIC_ONLY_CONFIRMED_INPUT" \
             --arg synthetic_evidence_sha256_input "$SYNTHETIC_EVIDENCE_SHA256_INPUT" \
             --arg staging_identity_fingerprints_sha256_input "$STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT" \
+            --arg staging_effective_configuration_sha256_input "$STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT" \
             --arg recovery_digest_input "$RECOVERY_DIGEST_INPUT" \
             --arg expected_schema_before_input "$EXPECTED_SCHEMA_BEFORE_INPUT" \
             --arg expected_schema_after_input "$EXPECTED_SCHEMA_AFTER_INPUT" \
@@ -1575,6 +1617,7 @@ jobs:
                 synthetic_only_confirmed: ($synthetic_only_confirmed_input == "true"),
                 synthetic_evidence_sha256: $synthetic_evidence_sha256_input,
                 staging_identity_fingerprints_sha256: $staging_identity_fingerprints_sha256_input,
+                staging_effective_configuration_sha256: $staging_effective_configuration_sha256_input,
                 recovery_digest: $recovery_digest_input,
                 expected_schema_before: $expected_schema_before_input,
                 expected_schema_after: $expected_schema_after_input
@@ -1628,6 +1671,7 @@ jobs:
           BUILD_IMAGE_ID: ${{ needs.build.outputs.image_id }}
           BUILD_RESULT: ${{ needs.build.result }}
           CANDIDATE_SHA_INPUT: ${{ inputs.candidate_sha }}
+          STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT: ${{ inputs.staging_effective_configuration_sha256 }}
           CONFIG_RESULT: ${{ needs.config.result }}
           DEPLOYMENT_CONTRACT_RESULT: ${{ needs.deploy.outputs.release_contract_result }}
           DEPLOYMENT_RESULT: ${{ needs.deploy.result }}
@@ -1671,6 +1715,9 @@ jobs:
           jq -e 'type == "object" and
             .flags.SENTRY_STAGING_ENABLED == "false" and
             .flags.ZOOM_WATCHDOG_ENABLED == "false"' \
+            <<< "$OBSERVED_CONFIGURATION" >/dev/null
+          jq -e --arg expected "$STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT" \
+            '.effective_configuration_preserved == true and .effective_configuration_sha256 == $expected' \
             <<< "$OBSERVED_CONFIGURATION" >/dev/null
           jq -e 'type == "array" and length == 3' <<< "$WORKLOADS_BEFORE" >/dev/null
           jq -e 'type == "array" and length == 3 and
