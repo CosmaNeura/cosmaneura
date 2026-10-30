@@ -64,6 +64,49 @@ def context(run=20):
     return dict(source_sha=SHA, source_tree=TREE, run_id=run, run_attempt=1)
 
 
+def local_image() -> dict[str, Any]:
+    return dict(
+        Id=CONFIG_DIGEST,
+        Os="linux",
+        Architecture="amd64",
+        Config=dict(
+            Labels={"org.opencontainers.image.revision": SHA},
+            Env=["PYTHON_ENV=production"],
+        ),
+    )
+
+
+def manifest_bytes() -> bytes:
+    return candidate.canonical(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"digest": CONFIG_DIGEST},
+            "layers": [{"digest": IMAGE_DIGEST}],
+        }
+    )
+
+
+def retention_bytes(image_digest) -> bytes:
+    flags: dict[str, bool] = dict.fromkeys(("writeEnabled", "deleteEnabled"), False)
+    flags.update(dict.fromkeys(("readEnabled", "listEnabled"), True))
+    return candidate.canonical(dict(digest=image_digest, changeableAttributes=flags))
+
+
+def runtime_environment() -> dict[str, str]:
+    return dict(
+        GITHUB_ACTOR="JohnClem",
+        GITHUB_TRIGGERING_ACTOR="JohnClem",
+        GITHUB_EVENT_NAME="workflow_dispatch",
+        GITHUB_REF="refs/heads/master",
+        GITHUB_REPOSITORY=candidate.REPOSITORY,
+        GITHUB_WORKFLOW_REF=candidate.WORKFLOW_REF,
+        GITHUB_SHA=SHA,
+        GITHUB_RUN_ID="20",
+        GITHUB_RUN_ATTEMPT="1",
+    )
+
+
 def record():
     panel_sha = "e" * 64
     return dict(
@@ -352,14 +395,7 @@ def test_configuration_digest_change_fails_before_registry_access(monkeypatch):
 
 
 def test_exact_manifest_bytes_and_one_buildx_final_lf_are_checked():
-    raw = candidate.canonical(
-        dict(
-            schemaVersion=2,
-            mediaType="application/vnd.oci.image.manifest.v1+json",
-            config=dict(digest=CONFIG_DIGEST),
-            layers=[dict(digest=IMAGE_DIGEST)],
-        )
-    )
+    raw = manifest_bytes()
     expected = candidate.digest(raw)
     candidate.manifest_identity(raw, expected)
     candidate.manifest_identity(raw + b"\n", expected)
@@ -392,15 +428,7 @@ def test_image_asset_closure_is_real_file_content_and_refuses_links(tmp_path):
     "field,value", [("Os", "windows"), ("Architecture", "arm64"), ("Id", "invalid")]
 )
 def test_wrong_local_image_cannot_be_published(field, value):
-    image = dict(
-        Id=CONFIG_DIGEST,
-        Os="linux",
-        Architecture="amd64",
-        Config=dict(
-            Labels={"org.opencontainers.image.revision": SHA},
-            Env=["PYTHON_ENV=production"],
-        ),
-    )
+    image = local_image()
     candidate.image_source(context(), image)
     image[field] = value
     with pytest.raises(candidate.CandidateRefused):
@@ -417,12 +445,8 @@ def test_wrong_local_image_cannot_be_published(field, value):
     ],
 )
 def test_runtime_environment_cannot_be_staging_or_ambiguous(env):
-    image = dict(
-        Id=CONFIG_DIGEST,
-        Os="linux",
-        Architecture="amd64",
-        Config=dict(Labels={"org.opencontainers.image.revision": SHA}, Env=env),
-    )
+    image = local_image()
+    image["Config"]["Env"] = env
     with pytest.raises(candidate.CandidateRefused):
         candidate.image_source(context(), image)
 
@@ -432,24 +456,9 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
 ):
     config_path = tmp_path / "configuration.json"
     config_path.write_bytes(candidate.canonical(configuration()))
-    raw = candidate.canonical(
-        dict(
-            schemaVersion=2,
-            mediaType="application/vnd.oci.image.manifest.v1+json",
-            config=dict(digest=CONFIG_DIGEST),
-            layers=[dict(digest=IMAGE_DIGEST)],
-        )
-    )
+    raw = manifest_bytes()
     actual_digest = candidate.digest(raw)
-    image = dict(
-        Id=CONFIG_DIGEST,
-        Os="linux",
-        Architecture="amd64",
-        Config=dict(
-            Labels={"org.opencontainers.image.revision": SHA},
-            Env=["PYTHON_ENV=production"],
-        ),
-    )
+    image = local_image()
     calls = []
     monkeypatch.setattr(candidate, "source_context", lambda: context(10))
     monkeypatch.setattr(
@@ -471,17 +480,7 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
                 else candidate.canonical(dict(digest=actual_digest))
             )
         if args[:4] == ["az", "acr", "repository", "show"]:
-            return candidate.canonical(
-                dict(
-                    digest=actual_digest,
-                    changeableAttributes=dict(
-                        writeEnabled=False,
-                        deleteEnabled=False,
-                        readEnabled=True,
-                        listEnabled=True,
-                    ),
-                )
-            )
+            return retention_bytes(actual_digest)
         return b""
 
     monkeypatch.setattr(candidate, "command", fake)
@@ -521,15 +520,7 @@ def test_image_or_asset_failure_prevents_publication(
 ):
     config_path = tmp_path / "configuration.json"
     config_path.write_bytes(candidate.canonical(configuration()))
-    image = dict(
-        Id=CONFIG_DIGEST,
-        Os="linux",
-        Architecture="amd64",
-        Config=dict(
-            Labels={"org.opencontainers.image.revision": SHA},
-            Env=["PYTHON_ENV=production"],
-        ),
-    )
+    image = local_image()
     monkeypatch.setattr(candidate, "source_context", lambda: context(10))
 
     def fake(args, **kwargs):
@@ -690,16 +681,7 @@ def test_cli_failure_is_value_free(monkeypatch, capsys):
     monkeypatch.setattr(
         sys,
         "argv",
-        [
-            "candidate",
-            "admit",
-            "--producer-run-id",
-            "10",
-            "--producer-attempt",
-            "1",
-            "--artifact-id",
-            "30",
-        ],
+        "candidate admit --producer-run-id 10 --producer-attempt 1 --artifact-id 30".split(),
     )
 
     def malformed(*args):
@@ -724,15 +706,7 @@ def test_cli_failure_is_value_free(monkeypatch, capsys):
     ],
 )
 def test_wrong_runtime_context_refuses_before_any_client(monkeypatch, key, value):
-    for field, expected in dict(
-        GITHUB_ACTOR="JohnClem",
-        GITHUB_TRIGGERING_ACTOR="JohnClem",
-        GITHUB_EVENT_NAME="workflow_dispatch",
-        GITHUB_REF="refs/heads/master",
-        GITHUB_REPOSITORY=candidate.REPOSITORY,
-        GITHUB_WORKFLOW_REF=candidate.WORKFLOW_REF,
-        GITHUB_SHA=SHA,
-    ).items():
+    for field, expected in runtime_environment().items():
         monkeypatch.setenv(field, expected)
     monkeypatch.setenv(key, value)
     monkeypatch.setattr(
@@ -757,13 +731,8 @@ def test_admit_fetches_only_exact_authenticated_api_coordinates(monkeypatch):
     monkeypatch.setattr(candidate, "api", lambda path: replies[path])
 
     def fetch(args, **kwargs):
-        assert args == [
-            "gh",
-            "api",
-            "--hostname",
-            "github.com",
-            prefix + "/artifacts/30/zip",
-        ]
+        path = prefix + "/artifacts/30/zip"
+        assert args == ["gh", "api", "--hostname", "github.com", path]
         assert kwargs == {"github": True}
         return data["archive"]
 
@@ -773,14 +742,7 @@ def test_admit_fetches_only_exact_authenticated_api_coordinates(monkeypatch):
 
 def test_positive_promotion_only_reads_and_keeps_exact_registry_digest(monkeypatch):
     value = record()
-    raw = candidate.canonical(
-        dict(
-            schemaVersion=2,
-            mediaType="application/vnd.oci.image.manifest.v1+json",
-            config=dict(digest=CONFIG_DIGEST),
-            layers=[dict(digest=IMAGE_DIGEST)],
-        )
-    )
+    raw = manifest_bytes()
     actual_digest = candidate.digest(raw)
     value["image"] = candidate.IMAGE + "@" + actual_digest
     monkeypatch.setattr(candidate, "panel_identity", lambda *args: value["panel"])
@@ -794,17 +756,7 @@ def test_positive_promotion_only_reads_and_keeps_exact_registry_digest(monkeypat
             return raw + b"\n"
         assert args[:4] == ["az", "acr", "repository", "show"]
         assert args[args.index("--name") + 1] == candidate.REGISTRY
-        return candidate.canonical(
-            dict(
-                digest=actual_digest,
-                changeableAttributes=dict(
-                    writeEnabled=False,
-                    deleteEnabled=False,
-                    readEnabled=True,
-                    listEnabled=True,
-                ),
-            )
-        )
+        return retention_bytes(actual_digest)
 
     monkeypatch.setattr(candidate, "command", read)
     assert candidate.promotion_check(value, configuration()) == value["image"]
@@ -823,18 +775,7 @@ def test_immutable_archive_digest_detects_modified_bytes():
 def test_current_source_is_rechecked_through_normal_authenticated_path(
     monkeypatch, remote_sha
 ):
-    fields = dict(
-        GITHUB_ACTOR="JohnClem",
-        GITHUB_TRIGGERING_ACTOR="JohnClem",
-        GITHUB_EVENT_NAME="workflow_dispatch",
-        GITHUB_REF="refs/heads/master",
-        GITHUB_REPOSITORY=candidate.REPOSITORY,
-        GITHUB_WORKFLOW_REF=candidate.WORKFLOW_REF,
-        GITHUB_SHA=SHA,
-        GITHUB_RUN_ID="20",
-        GITHUB_RUN_ATTEMPT="1",
-    )
-    for key, value in fields.items():
+    for key, value in runtime_environment().items():
         monkeypatch.setenv(key, value)
 
     def git(args, **kwargs):
@@ -939,10 +880,8 @@ def test_client_children_receive_only_their_normal_capabilities(monkeypatch):
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(candidate.subprocess, "run", run)
-    assert candidate.command(["docker", "image", "inspect", "synthetic"]) == b"{}"
-    assert (
-        candidate.command(
-            ["gh", "api", "--hostname", "github.com", "synthetic"], github=True
-        )
-        == b"{}"
-    )
+    for args, github in (
+        (["docker", "image", "inspect", "synthetic"], False),
+        (["gh", "api", "--hostname", "github.com", "synthetic"], True),
+    ):
+        assert candidate.command(args, github=github) == b"{}"

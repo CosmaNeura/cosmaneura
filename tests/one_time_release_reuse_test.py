@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -151,30 +153,31 @@ def test_only_the_exact_single_stale_assertion_can_be_repaired(mutation):
         reuse.verify_validation(run, jobs, log)
 
 
-def test_existing_build_publish_and_deployment_steps_and_locks_are_preserved():
-    original = yaml.safe_load(
-        Path(".github/workflows/build_and_publish_local.yml").read_text()
+def test_historical_release_steps_and_locks_remain_frozen():
+    raw = Path(".github/workflows/production_release_verified.yml").read_bytes()
+    # Historical caller at master 5033ea3a; it cannot inherit a newer pipeline.
+    assert hashlib.sha256(raw).hexdigest() == (
+        "37086b3fd3a8ff3b5821d488e7bebc0025b9fdb47b1c618b0b259d00d26a6654"
     )
-    release = yaml.safe_load(
-        Path(".github/workflows/production_release_verified.yml").read_text()
-    )
-    assert release["concurrency"] == original["concurrency"]
-    before = original["jobs"]["deploy"]
+    release = yaml.safe_load(raw)
+    assert release["concurrency"] == {
+        "group": "Build & Publish-${{ github.ref }}",
+        "cancel-in-progress": False,
+    }
     after = release["jobs"]["deploy"]
-    assert after["concurrency"] == before["concurrency"]
-    assert after["environment"] == before["environment"]
-    assert after["permissions"] == before["permissions"] | {
+    assert after["concurrency"] == {
+        "group": "cosmaneura-production-container-apps",
+        "cancel-in-progress": False,
+    }
+    assert after["environment"] == "production"
+    assert after["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
         "pull-requests": "read",
         "issues": "read",
     }
-    assert after["env"] == before["env"]
-    steps = [
-        s
-        for s in after["steps"]
-        if s.get("name")
-        != "Verify exact prior acceptance and unchanged production source"
-    ]
-    assert steps == before["steps"]
+    assert after["env"] == {"DURABLE_WEBHOOK_INBOX_ENABLED": "false"}
     guard_index = next(
         i
         for i, s in enumerate(after["steps"])
@@ -187,6 +190,13 @@ def test_existing_build_publish_and_deployment_steps_and_locks_are_preserved():
         if s.get("name") == "Resolve production frontend build configuration"
     )
     assert guard_index < credentials_index
+
+
+def test_historical_acceptance_refuses_current_broader_source():
+    # Real local Git inspection, without credentials or deployment execution.
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(ValueError, match="Runtime/build/configuration source changed"):
+        reuse.verify_source(head, head)
 
 
 CLINICAL_REVIEW_BODY = "Reviewed exact head 08a5cdacc572530b1ad2cd5eb8908696a1f1b8d3. No blocking source findings. The medication verification limit is restricted to newly generated drafts and existing eligible fields; saved-note early returns and authorization/source checks remain intact. The compact renderer preserves complete selected text, speaker qualification and order.\n\nAll 15 changed files and 17 retained model/request/source binding chains were checked. Independent production tests passed 18/18; the exact 17-response replay reproduced the archived result byte-for-byte. The author’s separate focused suite reports 217 passes. The documented mmHg expansion, mixed editorial source text, duplicate follow-up and raw person-fixture parser limitation remain; this review does not claim live or universal clinical qualification.\n"
