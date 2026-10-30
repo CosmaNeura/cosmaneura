@@ -4,13 +4,14 @@ from datetime import UTC, datetime
 from typing import Annotated, cast
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictStr, field_validator
 
 import app.configuration.session_prep as configuration
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services.session_prep_capture_freshness import (
     note_has_saved_capture_correction,
 )
+from app.services.session_prep_note_corrections import correct_source_note
 from app.services.session_prep_note_sources import (
     NoteSourceChanged,
     NoteSourceDenied,
@@ -42,6 +43,61 @@ class SessionPrepNoteReview(BaseModel, extra="forbid"):
 
 class ReviewNoteForSessionPrepRequest(BaseModel, extra="forbid"):
     expected_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class CorrectSessionPrepSourceNoteRequest(BaseModel, extra="forbid"):
+    expected_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    fields: dict[StrictStr, StrictStr] = Field(min_length=1, max_length=64)
+
+    @field_validator("fields")
+    @classmethod
+    def bounded_fields(cls, fields):
+        from app.services.session_prep_note_sources import canonical_note_content
+
+        canonical_note_content(fields)
+        if any(len(heading) > 200 for heading in fields):
+            raise ValueError("Note cannot be corrected")
+        return fields
+
+
+class CorrectSessionPrepSourceNoteResponse(BaseModel, extra="forbid"):
+    note_id: str
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+@session_prep_review_api.post("/notes/revisions/{note_id}/source-correction")
+def correct_session_prep_source_note(
+    request: Request,
+    response: Response,
+    note_id: Annotated[TypeIDType, Path()],
+    body: CorrectSessionPrepSourceNoteRequest,
+) -> CorrectSessionPrepSourceNoteResponse:
+    deny_view_as_browser_activity(request)
+    doctor: Doctor = request.state.doctor
+    response.headers["Cache-Control"] = "no-store"
+    if not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id):
+        raise HTTPException(status_code=404, detail="Note is unavailable.")
+    try:
+        with get_session() as managed:
+            corrected = correct_source_note(
+                session=cast(Session, managed),
+                doctor=doctor,
+                note_id=note_id,
+                expected_content_sha256=body.expected_content_sha256,
+                fields=body.fields,
+            )
+            result = CorrectSessionPrepSourceNoteResponse(
+                note_id=str(corrected.id),
+                content_sha256=note_content_sha256(corrected.note),
+            )
+            managed.commit()
+            return result
+    except NoteSourceChanged:
+        raise HTTPException(
+            status_code=409, detail="The note changed. Reload it before saving."
+        ) from None
+    except NoteSourceDenied:
+        raise HTTPException(status_code=404, detail="Note is unavailable.") from None
 
 
 def prior_notes_for_session_prep(

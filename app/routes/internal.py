@@ -450,6 +450,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     engagement_role: EngagementRole | None = None
     billing_header_sources: dict[str, BillingHeaderSource] = Field(default_factory=dict)
     session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
+    session_prep_editable_note_ids: list[str] = Field(default_factory=list)
     session_prep_prior_notes: PriorNoteOverview | None = None
     canonical_patient: Patient | None = None
     patient_identity_state: Literal["provisional", "matched", "confirmed"] | None = None
@@ -582,6 +583,11 @@ def note_detail(
                     identity_state = cast(
                         Literal["provisional", "matched", "confirmed"], identity.state
                     )
+    prep_reviews = (
+        note_review_statuses(doctor, visit_notes)
+        if getattr(request.state, "view_as", None) is None
+        else None
+    )
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
@@ -605,10 +611,11 @@ def note_detail(
         ),
         note_status=note_status,
         billing_header_sources=note_billing_sources(request, visit_notes),
-        session_prep_reviews=(
-            note_review_statuses(doctor, visit_notes)
-            if getattr(request.state, "view_as", None) is None
-            else None
+        session_prep_reviews=prep_reviews,
+        session_prep_editable_note_ids=(
+            list(prep_reviews or {})
+            if uploaded_audio is not None and not capture_workflow_required
+            else []
         ),
         session_prep_prior_notes=(
             prior_notes_for_session_prep(doctor, appointment.id)

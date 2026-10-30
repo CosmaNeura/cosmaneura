@@ -1,17 +1,17 @@
 /**
  * Byte-pinned copy of CosmaNeura/cosmaneura-sovereign app/panel.js.
  *
- * Exact Sovereign source candidate: 4d9ccc80f6449ad347f922ec4cd4ce4b36a804b7
+ * Exact Sovereign source candidate: f4e47585c2aaae81da2e2207490853eec03fc010
  * Updating the asset requires changing the digest, integrity, and immutable
  * source commit together and passing SovereignPanelAsset.test.ts.
  */
 export const SOVEREIGN_PANEL_SHA256 =
-  "030b3854b0d9b5a385624ce8f786c7aca4fcc88aa3c2b05e8d6963f85f7ea4a4"
+  "6e76aed8811dc662ed2a84a108f9247d6213d5670af7bb059f3eed2f07e345fe"
 
 export const SOVEREIGN_PANEL_ASSET_PATH = `/vendor/cosmaneura-panel.v1.${SOVEREIGN_PANEL_SHA256}.js`
 
 export const SOVEREIGN_PANEL_INTEGRITY =
-  "sha256-Aws4VLDZtaOFYkzo94bHrKT8yIqjwrBejWlj+F9+pKQ="
+  "sha256-bnau2IEdxmLtKoShCPkkfWIT1WcK97sFnz7tLwfjRf4="
 
 export const SOVEREIGN_PANEL_UPSTREAM_COMMIT =
-  "4d9ccc80f6449ad347f922ec4cd4ce4b36a804b7"
+  "f4e47585c2aaae81da2e2207490853eec03fc010"

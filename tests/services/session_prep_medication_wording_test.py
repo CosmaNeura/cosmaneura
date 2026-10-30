@@ -115,11 +115,11 @@ def test_second_historical_violation_is_rejected_without_rewriting_or_third_call
         generator.validate_generated_brief(rejected, selection)
 
 
-def test_v6_digest_differs_from_v5_for_the_exact_same_reviewed_sources(monkeypatch):
+def test_v7_digest_differs_from_v6_for_the_exact_same_reviewed_sources(monkeypatch):
     selection = _historical_selection()
-    assert generator.PROMPT_VERSION == runtime.PROMPT_VERSION == "source_only_prep_v6"
+    assert generator.PROMPT_VERSION == runtime.PROMPT_VERSION == "source_only_prep_v7"
     manifest = runtime.source_manifest(selection)
     current = runtime.source_digest(selection)
-    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v5")
+    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v6")
     assert runtime.source_manifest(selection) == manifest
     assert runtime.source_digest(selection) != current
