@@ -15,6 +15,7 @@ const control = vi.hoisted(() => ({
 const auth = vi.hoisted(() => {
   const state = {
     isLoaded: true,
+    liveLoaded: null as boolean | null,
     userId: "user_synthetic_a" as string | null,
     sessionId: "session_synthetic_a" as string | null,
     sdkOverride: null as {
@@ -51,7 +52,7 @@ const auth = vi.hoisted(() => {
 })
 const identity = {
   current: () => ({
-    isLoaded: auth.state.isLoaded,
+    isLoaded: auth.state.liveLoaded ?? auth.state.isLoaded,
     userId: auth.state.userId,
     sessionId: auth.state.sessionId,
   }),
@@ -79,7 +80,11 @@ const identity = {
   },
 }
 vi.mock("~/configuration/clerk", () => ({
-  useBrowserPrincipal: () => ({ ...identity.current(), identity }),
+  useBrowserPrincipal: () => ({
+    ...identity.current(),
+    isLoaded: auth.state.isLoaded,
+    identity,
+  }),
 }))
 vi.mock("~/configuration/client", () => ({
   retainedSessionPrepCitation: control.read,
@@ -100,6 +105,7 @@ afterEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
   auth.state.isLoaded = true
+  auth.state.liveLoaded = null
   auth.state.userId = "user_synthetic_a"
   auth.state.sessionId = "session_synthetic_a"
   auth.state.listeners.clear()
@@ -297,3 +303,36 @@ describe("authenticated retained-source viewer", () => {
     },
   )
 })
+
+it.each([false, true])(
+  "fences same-ID live loading without hook/listener update (already displayed=%s)",
+  async (alreadyDisplayed) => {
+    let resolve!: (value: unknown) => void
+    control.reference = `${finalReference}.1`
+    control.status.mockResolvedValue({ active: false })
+    control.read.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r
+        }),
+    )
+    const view = render(<Citation />)
+    await waitFor(() => expect(control.read).toHaveBeenCalledTimes(1))
+    if (alreadyDisplayed) {
+      await act(async () => resolve({ data: retainedFixture() }))
+      await screen.findByText(
+        "Original reviewed synthetic version. Literal <script> text. Ω",
+      )
+    }
+    // Actual resource loading changes while hook IDs/loading and listener stay stale.
+    auth.state.liveLoaded = false
+    view.rerender(<Citation />)
+    if (!alreadyDisplayed)
+      await act(async () => resolve({ data: retainedFixture() }))
+    expect(document.body.textContent).not.toContain(
+      "Original reviewed synthetic version",
+    )
+    expect(auth.state.isLoaded).toBe(true)
+    expect(control.read).toHaveBeenCalledTimes(1)
+  },
+)

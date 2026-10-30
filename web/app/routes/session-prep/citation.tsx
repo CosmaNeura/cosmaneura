@@ -34,14 +34,17 @@ export default function ReviewedCitationPage() {
       setDisplay(null)
       setUnavailable(true)
     }
-    const authMatches = () =>
-      Boolean(
+    const authMatches = () => {
+      const principal = identity.current()
+      return Boolean(
         isLoaded &&
+          principal.isLoaded &&
           userId &&
           sessionId &&
-          identity.current().userId === userId &&
-          identity.current().sessionId === sessionId,
+          principal.userId === userId &&
+          principal.sessionId === sessionId,
       )
+    }
     const check = (signal: AbortSignal) => {
       signal.throwIfAborted()
       if (!current || !authMatches()) throw new Error()
@@ -123,14 +126,16 @@ export default function ReviewedCitationPage() {
       document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [reference, refresh, identity, isLoaded, userId, sessionId])
+  const currentPrincipal = identity.current()
   const data =
     display &&
     display.reference === reference &&
     isLoaded &&
+    currentPrincipal.isLoaded &&
     display.userId === userId &&
     display.sessionId === sessionId &&
-    identity.current().userId === userId &&
-    identity.current().sessionId === sessionId
+    currentPrincipal.userId === userId &&
+    currentPrincipal.sessionId === sessionId
       ? display.data
       : null
   return (
