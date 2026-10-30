@@ -104,6 +104,7 @@ def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() 
         "synthetic_evidence_sha256",
         "staging_identity_fingerprints_sha256",
         "staging_effective_configuration_sha256",
+        "staging_runtime_public_json",
         "expected_schema_before",
         "expected_schema_after",
         "recovery_digest",
@@ -535,6 +536,11 @@ def test_terminal_attempt_requires_the_requested_preserved_configuration(
         "EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256: "
         "${{ needs.authorize.outputs.staging_effective_configuration_sha256 }}"
     ) in deployment
+    assert (
+        "STAGING_RUNTIME_PUBLIC_JSON: "
+        "${{ needs.authorize.outputs.staging_runtime_public_json }}"
+    ) in deployment
+    assert "scripts/staging_release_contract.py --validate-runtime-public" in authorize
     terminal = _step(
         _job(workflow, "attempt_evidence"),
         "Require a complete successful staging attempt",

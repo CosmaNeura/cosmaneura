@@ -2,12 +2,15 @@
 
 Tier 2: protected staging deployment configuration. Core staging currently has
 `SCRIBE_WORKFLOW_ENABLED=true`. `Deploy Staging Candidate` enters the legacy
-service-principal deployment branch, whose configuration guard requires that
-flag to be false. It therefore cannot advance application source while retaining
-the approved Scribe integration.
+service-principal deployment branch, whose reconciliation forces that flag to
+false before validation. Advancing application source through that branch would
+disable the approved Scribe integration.
 
-Add one required `staging_effective_configuration_sha256` dispatch input and bind
-the existing full configuration preservation mode in the deployment job. The
+Require `staging_effective_configuration_sha256` and `staging_runtime_public_json`
+dispatch inputs and bind the existing full configuration preservation mode in
+the deployment job. The existing staging release contract validates the public
+runtime group before credentials and again before overlaying legacy defaults.
+The public group cannot contain credentials or arbitrary environment keys. The
 configuration guard accepts the already-enabled Scribe workflow only in version
 2 or full preservation mode. The complete effective environment and workload
 arguments must match the reviewed hash, and the existing checks compare every
@@ -39,11 +42,13 @@ where its migration inputs are byte-identical. It does not assert that the entir
 persistent staging database is PHI-free. Identity and full runtime configuration
 manifests still require independent review before dispatch.
 
-Focused validation passed: 201 tests across the existing canonical staging,
+Focused validation passed: 208 tests across the existing canonical staging,
 runtime preservation, candidate verifier, and release contract suites. Six
-preserved-enabled Scribe cases fail at the real configuration guard on the exact
-PR903 baseline and pass with this change; five cases retain the legacy and V2
-boundaries. The terminal gate accepts the requested preserved hash and rejects
+preserved-enabled Scribe cases exercise reconciliation plus the real guard,
+demonstrate the exact PR903 baseline disables Scribe, and pass with this change;
+five cases retain the legacy and V2 boundaries. The public input refuses partial,
+wrong-target, credential-bearing, ambiguous, duplicate, and oversized input.
+The terminal gate accepts the requested preserved hash and rejects
 missing, mismatched, or unattested configuration. Ruff, Bash syntax, YAML syntax
 and duplicate-key validation, and whitespace checks passed. These checks use
 synthetic inputs with application conftest and provider hooks disabled.

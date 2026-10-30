@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shlex
 import subprocess
 import sys
@@ -165,6 +166,7 @@ def _configuration_evidence_fixture(integration, billing, key_kind):
         STRIPE_SECRET_KEY=key_kind + "synthetic" if integration == "true" else key_kind,
         STRIPE_WEBHOOK_SECRET="whsec_synthetic" if integration == "true" else key_kind,
     )
+    configuration.update(_public_runtime_fixture())
     fields = dict(
         pair.split(":")
         for pair in (
@@ -188,14 +190,42 @@ def _configuration_evidence_fixture(integration, billing, key_kind):
     return configuration, expected
 
 
-def _configuration_evidence_result(configuration, fingerprint, preservation, release=""):
+def _public_runtime_fixture():
+    contract = runpy.run_path(str(ROOT / "scripts/staging_release_contract.py"))
+    runtime = dict.fromkeys(
+        contract["FLAGS"] | contract["COMPANION_FLAGS"]
+        | contract["PRESERVED_WORKFLOW_FLAGS"], "true",
+    )
+    runtime.update(
+        SCRIBE_SERVICE_BASE_URL=(
+            "https://cosmaneura-staging-scribe-api.internal."
+            "politesmoke-7989878f.northcentralus.azurecontainerapps.io"
+        ),
+        SCRIBE_SERVICE_SCOPE="api://57264fe1-6a4a-4946-8412-e0be18805977/.default",
+        SCRIBE_MANAGED_IDENTITY_CLIENT_ID="11111111-1111-1111-1111-111111111111",
+        AGENT_API_SCRIBE_RECEIVER_CLIENT_ID="22222222-2222-2222-2222-222222222222",
+        AGENT_API_COMPANION_CLIENT_ID="33333333-3333-3333-3333-333333333333",
+        SCRIBE_SERVICE_TIMEOUT_SECONDS="60",
+        SCRIBE_CAPTURE_UPLOAD_ORIGINS="https://syntheticstaging.blob.core.windows.net",
+    )
+    return runtime
+
+
+def _configuration_evidence_result(
+    configuration, fingerprint, preservation, release="", *, reconcile=False,
+):
     source = DEPLOY.read_text()
     start = source.index("\nbuild_configuration_evidence() {") + 1
     # The embedded Python contains its own unindented closing braces.
     end = source.index("\n}\n\nif ! CONFIGURATION_EVIDENCE_JSON", start) + 2
     actual_function = source[start:end]
+    reconciliation = ""
+    if reconcile:
+        start = source.index("# Keep the provider-v7 runtime gates")
+        end = source.index("\nif ! jq -e", start)
+        reconciliation = source[start:end] + "\n"
     return subprocess.run(
-        ["bash", "-c", actual_function + "\nbuild_configuration_evidence"],
+        ["bash", "-c", reconciliation + actual_function + "\nbuild_configuration_evidence"],
         capture_output=True,
         text=True,
         check=False,
@@ -205,6 +235,9 @@ def _configuration_evidence_result(configuration, fingerprint, preservation, rel
             "ENV_JSON": json.dumps(configuration),
             "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256": fingerprint,
             "STAGING_PRESERVE_EFFECTIVE_CONFIGURATION": preservation,
+            "STAGING_RUNTIME_PUBLIC_JSON": json.dumps(_public_runtime_fixture()),
+            "ENABLE_PROVIDER_V7": "true",
+            "REPOSITORY_ROOT": str(ROOT),
             "RELEASE_V2_JSON": release,
         },
     )
@@ -227,7 +260,9 @@ def test_full_preservation_retains_enabled_scribe_and_existing_test_billing(
     configuration, fingerprint = _configuration_evidence_fixture(
         integration, billing, key_kind
     )
-    result = _configuration_evidence_result(configuration, fingerprint, "true")
+    result = _configuration_evidence_result(
+        configuration, fingerprint, "true", reconcile=True,
+    )
     assert result.returncode == 0
     evidence = json.loads(result.stdout)
     assert evidence["flags"]["SCRIBE_WORKFLOW_ENABLED"] == "true"
@@ -235,6 +270,7 @@ def test_full_preservation_retains_enabled_scribe_and_existing_test_billing(
     assert evidence["flags"]["STRIPE_BILLING_ENABLED"] == billing
     assert evidence["identity_fingerprint_set_sha256"] == fingerprint
     assert evidence["deployment_blockers"] == []
+    assert evidence["flags"]["AGENT_API_ENABLED"] == "true"
     assert "synthetic-recall-api" not in result.stdout + result.stderr
 
 

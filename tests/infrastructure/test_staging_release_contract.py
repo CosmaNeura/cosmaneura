@@ -98,6 +98,45 @@ def test_runtime_rejects_unbounded_or_wrong_target_values(key, value):
         m["validate_runtime"](candidate)
 
 
+@pytest.mark.parametrize(
+    "change",
+    [None, "missing", "production", "credential", "ambiguous", "duplicate", "oversized"],
+)
+def test_canonical_public_runtime_input_reuses_bounded_staging_contract(change):
+    candidate = runtime()
+    if change == "missing":
+        del candidate["SCRIBE_WORKFLOW_ENABLED"]
+    elif change == "production":
+        candidate["SCRIBE_SERVICE_BASE_URL"] = "https://production.example"
+    elif change == "credential":
+        candidate["DATABASE_URL"] = "synthetic-do-not-emit"
+    elif change == "ambiguous":
+        candidate["SCRIBE_WORKFLOW_ENABLED"] = True
+    payload = json.dumps(candidate)
+    if change == "duplicate":
+        payload = payload[:-1] + ', "SCRIBE_WORKFLOW_ENABLED": "true"}'
+    elif change == "oversized":
+        payload = " " * 65537 + payload
+    script = Path(__file__).resolve().parents[2] / "scripts/staging_release_contract.py"
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", str(script), "--validate-runtime-public"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+        env={},
+    )
+    if change is None:
+        assert result.returncode == 0
+        assert json.loads(result.stdout) == candidate
+        assert "\n" not in result.stdout.rstrip("\n")
+    else:
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert result.stderr == "staging_release_contract_refused\n"
+
+
 def companion_runtime():
     return runtime() | {
         "AGENT_API_COMPANION_CLIENT_ID": "33333333-3333-3333-3333-333333333333",

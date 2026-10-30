@@ -19,6 +19,7 @@ EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
 STAGING_PRESERVE_EFFECTIVE_CONFIGURATION="${STAGING_PRESERVE_EFFECTIVE_CONFIGURATION:-false}"
 EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256="${EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256:-}"
+STAGING_RUNTIME_PUBLIC_JSON="${STAGING_RUNTIME_PUBLIC_JSON:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
@@ -387,6 +388,14 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 fi
 if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
 	ENV_JSON=$(jq -c --argjson release "$RELEASE_V2_JSON" '. + $release.runtime_public' <<<"$ENV_JSON") || exit 1
+elif [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+	# Canonical service-principal preservation receives only the reviewed public
+	# group. The complete hash and live comparisons still bind every owned value.
+	STAGING_RUNTIME_PUBLIC_JSON=$(printf '%s' "$STAGING_RUNTIME_PUBLIC_JSON" |
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+			--validate-runtime-public) || exit 1
+	ENV_JSON=$(jq -c --argjson runtime "$STAGING_RUNTIME_PUBLIC_JSON" \
+		'. + $runtime' <<<"$ENV_JSON") || exit 1
 fi
 if ! jq -e '
 	.SOVEREIGN_RECORD_GRANT_SECRET |
