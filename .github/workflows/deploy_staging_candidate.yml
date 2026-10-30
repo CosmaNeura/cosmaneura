@@ -3,6 +3,8 @@ name: Deploy Staging Candidate
 # This workflow is a protected-master control plane for an immutable staging
 # candidate. The candidate is tested and built from its exact approved commit;
 # moving master is never deployed implicitly.
+# Standard hosted Ubuntu provides capacity without a registered local runner.
+# Founder, protected-master, candidate, credential and deployment gates remain.
 on:
   workflow_dispatch:
     inputs:
@@ -67,7 +69,7 @@ env:
 jobs:
   authorize:
     name: Authorize immutable staging candidate
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -164,7 +166,7 @@ jobs:
   backend-quality:
     name: Candidate backend quality
     needs: authorize
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -215,7 +217,7 @@ jobs:
   backend-tests:
     name: Candidate backend tests (${{ matrix.shard }})
     needs: authorize
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -350,7 +352,7 @@ jobs:
     name: Candidate Backend
     needs: [backend-quality, backend-tests]
     if: ${{ always() }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:
@@ -367,7 +369,7 @@ jobs:
   web:
     name: Candidate Frontend
     needs: authorize
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -429,7 +431,7 @@ jobs:
         needs.app.result == 'success' &&
         needs.web.result == 'success'
       }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: staging
     outputs:
@@ -517,7 +519,7 @@ jobs:
         needs.web.result == 'success' &&
         needs.config.result == 'success'
       }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       archive_sha256: ${{ steps.package.outputs.archive_sha256 }}
@@ -645,7 +647,7 @@ jobs:
         needs.config.result == 'success' &&
         needs.build.result == 'success'
       }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: staging
     outputs:
@@ -889,7 +891,7 @@ jobs:
         needs.build.result == 'success' &&
         needs.publish.result == 'success'
       }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: staging
     outputs:
@@ -1525,7 +1527,7 @@ jobs:
     name: Record complete staging workflow attempt
     needs: [authorize, app, web, config, build, publish, deploy]
     if: ${{ always() }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:
