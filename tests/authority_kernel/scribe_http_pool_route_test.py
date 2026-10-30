@@ -167,24 +167,27 @@ async def test_deadline_retains_worker_slot_until_parent_response_close_joins(
     app, _, _ = application(monkeypatch, downstream, outer=outer, seconds=0.08)
     async with app.router.lifespan_context(app):
         pool = app.state.scribe_http_pool
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app), base_url="http://test"
-        ) as client:
-            first = await client.post(PATH, content=b"{}")
-            assert first.status_code == 504
-            await asyncio.wait_for(stream.close_entered.wait(), 1)
-            assert not stream.closed and len(pool._operations) == 1
-            second = await client.post(PATH, content=b"{}")
-            assert second.status_code == 503 and len(calls) == 1
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app), base_url="http://test"
+            ) as client:
+                first = await client.post(PATH, content=b"{}")
+                assert first.status_code == 504
+                await asyncio.wait_for(stream.close_entered.wait(), 1)
+                assert not stream.closed and len(pool._operations) == 1
+                second = await client.post(PATH, content=b"{}")
+                assert second.status_code == 503 and len(calls) == 1
+                release.set()
+                expires = time.monotonic() + 1
+                while not slots.acquire(blocking=False):
+                    assert time.monotonic() < expires
+                    await asyncio.sleep(0.002)
+                slots.release()
+                third = await client.post(PATH, content=b"{}")
+                assert third.status_code == 200 and len(calls) == 2
+            assert stream.closed and not pool._operations
+        finally:
             release.set()
-            expires = time.monotonic() + 1
-            while not slots.acquire(blocking=False):
-                assert time.monotonic() < expires
-                await asyncio.sleep(0.002)
-            slots.release()
-            third = await client.post(PATH, content=b"{}")
-            assert third.status_code == 200 and len(calls) == 2
-        assert stream.closed and not pool._operations
 
 
 @pytest.mark.asyncio

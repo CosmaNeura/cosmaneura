@@ -42,6 +42,10 @@ _PSEUDONYMOUS_EVENT_PREFIX = "hmac-v1:"
 # Keep aligned with app.services.recall.BOT_NAME without importing that module
 # here (recall itself imports inbox logging helpers during application startup).
 _ZOOM_BOT_PARTICIPANT_NAME = "Cosmas AI Note-Taker"
+_RECALL_TERMINAL_BOT_EVENTS = frozenset(
+    {"bot.recording_permission_denied", "bot.call_ended", "bot.done", "bot.fatal"}
+)
+_RECALL_SUB_CODE = re.compile(r"^[a-z0-9_]{1,128}$")
 
 
 class WebhookInboxError(Exception):
@@ -119,11 +123,43 @@ def _project_recall(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     data = payload.get("data")
     if not isinstance(data, dict):
         data = {}
-    projected_data: dict[str, dict[str, str]] = {}
+    projected_data: dict[str, dict[str, Any]] = {}
     for key in ("bot", "recording", "transcript"):
         item = data.get(key)
         if isinstance(item, dict) and item.get("id") is not None:
             projected_data[key] = {"id": str(item["id"])}
+    # The terminal handler needs this signed operational status DTO. Keeping
+    # only IDs makes every terminal event permanently invalid after ingress.
+    # Retain no arbitrary provider metadata or free-form status detail.
+    detail = data.get("data")
+    if event_type in _RECALL_TERMINAL_BOT_EVENTS and isinstance(detail, dict):
+        code, sub_code, updated_at = (
+            detail.get("code"),
+            detail.get("sub_code"),
+            detail.get("updated_at"),
+        )
+        if (
+            code == event_type.removeprefix("bot.")
+            and (
+                sub_code is None
+                or isinstance(sub_code, str)
+                and _RECALL_SUB_CODE.fullmatch(sub_code)
+            )
+            and isinstance(updated_at, str)
+            and len(updated_at) <= 64
+        ):
+            try:
+                updated = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                if updated.tzinfo is not None:
+                    projected_data["data"] = {
+                        "code": code,
+                        "sub_code": sub_code,
+                        "updated_at": updated.astimezone(UTC).isoformat(
+                            timespec="microseconds"
+                        ),
+                    }
+            except (ValueError, OverflowError):
+                pass
     return {"event": event_type, "data": projected_data}
 
 
