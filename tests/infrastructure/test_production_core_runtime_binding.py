@@ -907,6 +907,50 @@ def test_record_is_after_admission_private_exclusive_and_configuration_bound(
             assert target.read_text() == "preserved"
 
 
+@pytest.mark.parametrize(
+    "problem", [None, "missing", "producer-receipt", "configuration"]
+)
+def test_enabled_capture_requires_its_own_fresh_admission(
+    monkeypatch, tmp_path, problem
+):
+    prepared, _, producer_admission = producer_fixtures.enabled_candidate(
+        tmp_path, monkeypatch
+    )
+    prepared["panel"] = prepared_record()["panel"]
+    config, admission = producer_fixtures.admitted_frontend(
+        tmp_path, monkeypatch, run=20
+    )
+    fresh = observation(monkeypatch)
+    for workload in fresh["workloads"].values():
+        workload["image"] = prepared["image"]
+    monkeypatch.setattr(c, "source_context", context)
+    monkeypatch.setattr(binding, "prepare", lambda *args: (prepared, association()))
+
+    def observed(*args):
+        assert problem is None, "refused admission must precede runtime observation"
+        return fresh
+
+    monkeypatch.setattr(binding, "observe", observed)
+    if problem == "missing":
+        admission = None
+    elif problem == "producer-receipt":
+        admission = producer_admission
+    elif problem == "configuration":
+        config["VITE_POSTHOG_KEY"] = "changed"
+    config_file, output = tmp_path / "capture-config.json", tmp_path / "capture.json"
+    config_file.write_bytes(c.canonical(config))
+    if problem is not None:
+        with pytest.raises(ValueError):
+            binding.record(10, 1, 30, config_file, output, admission)
+        assert not output.exists()
+        return
+    binding.record(10, 1, 30, config_file, output, admission)
+    captured = c.read_json(output)
+    assert captured["candidate"] == prepared
+    assert captured["candidate"]["frontend_admission"] != c.read_json(admission)
+    assert captured["deployment_authorized"] is False
+
+
 def test_cli_errors_are_value_free(monkeypatch, capsys):
     monkeypatch.setattr(
         sys,
