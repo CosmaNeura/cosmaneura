@@ -149,6 +149,31 @@ def test_authenticated_successful_producer_is_admitted():
     assert verify(evidence()) == record()
 
 
+@pytest.mark.parametrize("oversized", [False, True])
+def test_complete_job_metadata_capacity_is_bounded(monkeypatch, oversized):
+    data = evidence()
+    step = dict(
+        name="Acceptance check " + "x" * 64,
+        status="completed",
+        conclusion="success",
+        started_at="2026-10-30T12:00:00Z",
+        completed_at="2026-10-30T12:01:00Z",
+    )
+    for job in data["jobs"]["jobs"]:
+        job["steps"] = [dict(number=n, **step) for n in range(20)]
+    raw = candidate.canonical(data["jobs"])
+    assert candidate.MAX_JSON < len(raw) <= candidate.MAX_METADATA
+    monkeypatch.setattr(candidate, "command", lambda *a, **k: raw)
+    path = f"repos/{candidate.REPOSITORY}/actions/runs/10/attempts/1/jobs?per_page=100"
+    if oversized:
+        raw = b" " * (candidate.MAX_METADATA + 1)
+        with pytest.raises(candidate.CandidateRefused):
+            candidate.api(path)
+    else:
+        data["jobs"] = candidate.api(path)
+        assert verify(data) == record()
+
+
 @pytest.mark.parametrize(
     "path,value",
     [

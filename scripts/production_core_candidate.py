@@ -42,6 +42,7 @@ PUBLIC_KEYS = frozenset(
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 MAX_JSON = 128 * 1024
+MAX_METADATA = 1024 * 1024
 MAX_ARCHIVE = 1024 * 1024
 MANIFEST_TYPES = {
     "application/vnd.oci.image.manifest.v1+json",
@@ -68,8 +69,8 @@ def digest(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def decode(raw: bytes) -> Any:
-    require(0 < len(raw) <= MAX_JSON)
+def decode(raw: bytes, *, maximum: int = MAX_JSON) -> Any:
+    require(0 < len(raw) <= maximum)
 
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -139,7 +140,8 @@ def command(args: list[str], *, github: bool = False) -> bytes:
 
 def api(path: str) -> Any:
     require(path.startswith(f"repos/{REPOSITORY}/") and ".." not in path)
-    return decode(command(["gh", "api", "--hostname", "github.com", path], github=True))
+    raw = command(["gh", "api", "--hostname", "github.com", path], github=True)
+    return decode(raw, maximum=MAX_METADATA)
 
 
 def source_context() -> dict[str, Any]:
