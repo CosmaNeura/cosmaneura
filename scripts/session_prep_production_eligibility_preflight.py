@@ -5,6 +5,9 @@ This command deliberately does not import ``app``: importing the application in
 production can run startup migrations.  It uses one repeatable-read, read-only
 transaction and returns fixed authorization-state counts only.  No provider,
 practice, account, or chart identifier is selected into the process or emitted.
+The entire report is refused if any normalization input is outside printable
+ASCII: PostgreSQL's space-only btrim and locale casing are not Python's Unicode
+strip/lower contract. This guard does not classify a partially covered cohort.
 """
 
 from __future__ import annotations
@@ -33,6 +36,28 @@ EXPECTED_DATABASE_HOST = "cosmaneura-prod-postgres.postgres.database.azure.com"
 LINUX_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 BAA_CURRENT_REFERENCE = "CN-BAA-CUST-CW v2.3"
 ROOT = Path(__file__).resolve().parents[1]
+# Reviewed runtime ASTs, not imports: application initialization can mutate DBs.
+# A substantive normalizer change requires a fresh SQL-contract review.
+NORMALIZATION_SOURCE_CONTRACTS = (
+    (
+        "app/models/practice.py",
+        "Practice",
+        "has_authoritative_stripe_subscription_binding",
+        "c7eeba860a3e53baa56211e3e546dcb92d0efd2b94099fa93a356f75c99838b2",
+    ),
+    (
+        "app/services/organization_access.py",
+        None,
+        "normalize_email",
+        "ba944d3b1277fd1f5f1f30bbe3e16aba8e97a3ca54f3f95c368b907e0c07b2e8",
+    ),
+    (
+        "app/services/organization_access.py",
+        None,
+        "email_matches_exact_domain",
+        "5f55b631a26396281d2b1c9a02b346ca1af324340d7d6ef91f2f532e28c4bf5e",
+    ),
+)
 REQUIRED_SESSION_PREP_ANCESTORS = (
     "443f26a5dfe7",
     "c80db51e6a75",
@@ -62,6 +87,7 @@ INTEGRITY_CHECKS = (
     "unknown_organization_status",
     "unknown_practice_acquisition_source",
     "unknown_practice_subscription_status",
+    "unsupported_identity_or_billing_normalization",
 )
 
 SERVER_IDENTITY_QUERY: LiteralString = """
@@ -108,7 +134,7 @@ SELECT check_name, violations
                 SELECT 1
                   FROM organization_roster_approval
                  WHERE revoked_at IS NULL
-                 GROUP BY approved_email
+                 GROUP BY approved_email COLLATE "C"
                 HAVING count(*) > 1
                ) AS duplicate_active_roster_approvals
         UNION ALL
@@ -158,6 +184,20 @@ SELECT check_name, violations
                 'pending_verification',
                 'invalid'
            )
+        UNION ALL
+        SELECT 'unsupported_identity_or_billing_normalization', count(*)::bigint
+          FROM (
+                SELECT email AS value FROM doctor
+                UNION ALL
+                SELECT approved_email FROM organization_roster_approval
+                UNION ALL
+                SELECT email_domain FROM provider_organization
+                UNION ALL
+                SELECT stripe_subscription_id FROM practice
+                UNION ALL
+                SELECT stripe_customer_id FROM practice
+               ) AS normalization_inputs
+         WHERE value COLLATE "C" ~ '[^ -~]'
        ) AS checks
  ORDER BY check_name
 """
@@ -175,7 +215,7 @@ pilot_state AS (
      GROUP BY clerk_id
 ),
 roster_history AS (
-    SELECT approval.approved_email,
+    SELECT approval.approved_email COLLATE "C" AS approved_email,
            bool_or(approval.revoked_at IS NOT NULL) AS has_revoked,
            count(*) FILTER (
                WHERE approval.revoked_at IS NULL
@@ -186,7 +226,7 @@ roster_history AS (
            ) AS active_count
       FROM organization_roster_approval AS approval
       CROSS JOIN parameters
-     GROUP BY approval.approved_email
+     GROUP BY approval.approved_email COLLATE "C"
 ),
 provider_state AS (
     SELECT CASE
@@ -231,18 +271,19 @@ provider_state AS (
                     char_length(btrim(doctor.email))
                     - char_length(replace(btrim(doctor.email), '@', ''))
                 ) = 1
-                AND split_part(lower(btrim(doctor.email)), '@', 1) <> ''
-                AND split_part(lower(btrim(doctor.email)), '@', 2) <> ''
+                AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 1) <> ''
+                AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2) <> ''
                 AND position(
-                    '.' IN split_part(lower(btrim(doctor.email)), '@', 2)
+                    '.' IN split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2)
                 ) > 0
-                AND lower(btrim(doctor.email)) = roster_approval.approved_email
+                AND lower(btrim(doctor.email) COLLATE "C")
+                    = roster_approval.approved_email
                 AND NOT coalesce(roster_history.has_revoked, false)
                 AND roster_history.active_count = 1
                 AND organization.id = practice.organization_id
                 AND organization.status = 'active'
-                AND split_part(lower(btrim(doctor.email)), '@', 2)
-                    = lower(ltrim(btrim(organization.email_domain), '@'))
+                AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2)
+                    = lower(ltrim(btrim(organization.email_domain), '@') COLLATE "C")
                 AND char_length(ltrim(btrim(organization.email_domain), '@'))
                     BETWEEN 1 AND 253
                 AND position(
@@ -288,13 +329,14 @@ provider_state AS (
             WHEN practice.acquisition_source = 'public_self_service'
              AND practice.subscription_status IN ('trialing', 'active')
              AND NOT coalesce(
-                left(practice.stripe_subscription_id, 4) = 'sub_'
+                left(practice.stripe_subscription_id COLLATE "C", 4) = 'sub_'
                 AND char_length(practice.stripe_subscription_id) > 4
-                AND btrim(practice.stripe_subscription_id)
+                AND btrim(practice.stripe_subscription_id) COLLATE "C"
                     = practice.stripe_subscription_id
-                AND left(practice.stripe_customer_id, 4) = 'cus_'
+                AND left(practice.stripe_customer_id COLLATE "C", 4) = 'cus_'
                 AND char_length(practice.stripe_customer_id) > 4
-                AND btrim(practice.stripe_customer_id) = practice.stripe_customer_id
+                AND btrim(practice.stripe_customer_id) COLLATE "C"
+                    = practice.stripe_customer_id
                 AND practice.stripe_state_version > 0,
                 false
              )
@@ -322,7 +364,7 @@ provider_state AS (
       LEFT JOIN organization_roster_approval AS roster_approval
         ON roster_approval.id = member.organization_roster_approval_id
       LEFT JOIN roster_history
-        ON roster_history.approved_email = lower(btrim(doctor.email))
+        ON roster_history.approved_email = lower(btrim(doctor.email) COLLATE "C")
       LEFT JOIN provider_organization AS organization
         ON organization.id = roster_approval.organization_id
 )
@@ -349,6 +391,40 @@ class ReadOnlyConnection(Protocol):
         query: LiteralString,
         params: tuple[Any, ...] = (),
     ) -> QueryResult: ...
+
+
+def validate_runtime_normalization_contract(root: Path | None = None) -> None:
+    """Refuse changed normalizers without importing app or exposing source data."""
+
+    source_root = ROOT if root is None else root
+    try:
+        for path, scope, name, expected_sha256 in NORMALIZATION_SOURCE_CONTRACTS:
+            tree = ast.parse((source_root / path).read_text(encoding="utf-8"))
+            body = tree.body
+            if scope is not None:
+                classes = [
+                    node
+                    for node in body
+                    if isinstance(node, ast.ClassDef) and node.name == scope
+                ]
+                if len(classes) != 1:
+                    raise InventoryFailure("runtime normalization source is ambiguous")
+                body = classes[0].body
+            functions = [
+                node
+                for node in body
+                if isinstance(node, ast.FunctionDef) and node.name == name
+            ]
+            if (
+                len(functions) != 1
+                or hashlib.sha256(
+                    ast.dump(functions[0], include_attributes=False).encode()
+                ).hexdigest()
+                != expected_sha256
+            ):
+                raise InventoryFailure("runtime normalization source changed")
+    except (OSError, SyntaxError, UnicodeDecodeError) as error:
+        raise InventoryFailure("runtime normalization source cannot be read") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,6 +715,7 @@ def collect_inventory(
 ) -> dict[str, Any]:
     """Read aggregate eligibility state; never select or return identifiers."""
 
+    validate_runtime_normalization_contract()
     _parse_integrity(connection.execute(INTEGRITY_QUERY).fetchall())
     contract = migration_contract or repository_migration_contract()
     migration_head = validate_migration_compatibility(
@@ -695,6 +772,7 @@ def main() -> int:
 
     try:
         validate_production_database_url(database_url)
+        validate_runtime_normalization_contract()
         rollout_enabled = _rollout_enabled(
             os.environ.get("SESSION_PREP_PROVIDER_ENABLED")
         )
