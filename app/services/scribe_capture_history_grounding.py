@@ -35,6 +35,7 @@ _EXCLUDED = re.compile(
 )
 _MEDICATION = re.compile(r"\b(?:medications?|medicines?)\b")
 _OBJECTIVE = re.compile(r"\bobjective\b")
+_HISTORY_HEADING = re.compile(r"\bhistor(?:y|ies)\b")
 CONTEXT_HEADING = "Selected transcript source context (questions are not findings):\n"
 
 
@@ -54,7 +55,8 @@ def with_medication_verification_limit(
     Identifying a speaker does not independently verify a complete medication
     list. This is a verification limitation, never an assertion that a list was
     absent or that the person takes no medicines. Keep every generated/source
-    statement and use only an existing medication or Objective field.
+    statement. Prefer an existing medication or Objective field, falling back
+    to History when the selected template has neither. Never add a section.
     """
     medication_fields = [
         heading
@@ -70,7 +72,14 @@ def with_medication_verification_limit(
         and _OBJECTIVE.search(normalized(heading))
         and not _EXCLUDED.search(normalized(heading))
     ]
-    targets = medication_fields + objective_fields
+    history_fields = [
+        heading
+        for heading in fields
+        if heading not in plan_fields
+        and _HISTORY_HEADING.search(normalized(heading))
+        and not _EXCLUDED.search(normalized(heading))
+    ]
+    targets = medication_fields + objective_fields + history_fields
     result = dict(fields)
     if not targets or any(MEDICATION_LIST_UNVERIFIED in fields[h] for h in targets):
         return result

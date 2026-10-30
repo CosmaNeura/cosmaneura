@@ -19,7 +19,7 @@ from app.services import authority, provider_context_exchange
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_native_capture as service
 from app.services.scribe_capture_deadline import CaptureBudget, capture_budget
-from app.services.scribe_capture_protocol import ProviderEncounter
+from app.services.scribe_capture_protocol import ProviderEncounter, ReadOperation
 from app.services.scribe_workflow import DisabledScribeWorkflowClient
 
 from activemodel import session_manager
@@ -144,6 +144,70 @@ async def test_mount_composes_existing_services_and_keeps_original_intent(monkey
         data.opening_nonce
     )
     assert "never-return" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_uncertain_admission_opens_only_bound_recovery_after_final_access_check(
+    monkeypatch,
+):
+    data, calls, _, invoke = fixture(monkeypatch)
+
+    async def uncertain(**kwargs):
+        calls.append(("operation", kwargs))
+        assert kwargs["operation"].kind == "provider_encounter"
+        raise admission.AdmissionUnconfirmed
+
+    monkeypatch.setattr(service, "execute_capture_operation", uncertain)
+    result = (await invoke())["result"]
+    assert isinstance(result, dict)
+    assert "opening_review" not in result
+    assert result["opening_recovery"] == {
+        "contract_version": "1",
+        "workspace_id": str(data.workspace_id),
+        "binding_ref": BINDING,
+        "request_nonce": str(data.opening_nonce),
+        "disposition": "provider_operation_conflict",
+    }
+    assert calls[-1] == "lookup"
+    assert sum(isinstance(call, tuple) for call in calls) == 1
+    assert "never-return" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_uncertain_opening_cannot_publish_after_access_revocation(monkeypatch):
+    _, _, state, invoke = fixture(monkeypatch)
+
+    async def uncertain(**kwargs):
+        state["revoked"] = True
+        raise admission.AdmissionUnconfirmed
+
+    monkeypatch.setattr(service, "execute_capture_operation", uncertain)
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        await invoke()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["provider_encounter", "native_recording_preparation"])
+async def test_uncertain_ordinary_read_never_becomes_opening_recovery(
+    monkeypatch, kind
+):
+    data, _, _, invoke = fixture(monkeypatch)
+
+    async def uncertain(**kwargs):
+        raise admission.AdmissionUnconfirmed
+
+    monkeypatch.setattr(service, "execute_capture_operation", uncertain)
+    operation = service.NativeCaptureRequest(
+        action="operation",
+        workspace_id=data.workspace_id,
+        binding_ref=BINDING,
+        request_nonce=uuid4(),
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        operation=ReadOperation(kind=kind),
+    )
+    with pytest.raises(admission.AdmissionUnconfirmed):
+        await invoke(operation)
 
 
 @pytest.mark.asyncio
