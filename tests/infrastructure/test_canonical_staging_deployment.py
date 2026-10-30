@@ -309,7 +309,11 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
     assert "just db_lint" in _job(source, "backend-quality")
     assert "just py_test-ci-${{ matrix.shard }}" in _job(source, "backend-tests")
     assert "name: Candidate Backend" in _job(source, "app")
-    assert "needs: [backend-quality, backend-tests]" in _job(source, "app")
+    assert "needs: [authorize, backend-quality, backend-tests]" in _job(source, "app")
+    assert (
+        "if: ${{ always() && needs.authorize.outputs.recovery_verified != 'true' }}"
+        in _job(source, "app")
+    )
     assert "pnpm run openapi" in _job(source, "web")
     assert "just js_lint" in _job(source, "web")
     assert "just js_test" in _job(source, "web")
@@ -470,7 +474,13 @@ def test_publication_is_sha_only_and_deployment_is_digest_pinned() -> None:
     assert "immutable candidate tag already exists" in publish
     assert "^sha256:[0-9a-f]{64}$" in publish
     assert "docker buildx imagetools inspect" in publish
-    assert '"$candidate_image" --raw | sha256sum' in publish
+    assert "\"$candidate_image\" --format '{{.Manifest.Digest}}'" in publish
+    assert (
+        '"$REGISTRY_HOST/cosmaneura/cosmaneura@$RECOVERY_IMAGE_DIGEST" --raw' in publish
+    )
+    assert '"$remote_config" != "$EXPECTED_IMAGE_ID"' in publish
+    assert '"$remote_digest" != "$image_digest"' in publish
+    assert '"$candidate_image" --raw | sha256sum' not in publish
     assert ":latest" not in publish
     assert "build_push" not in publish
     assert "docker load --input candidate-image.tar" in publish_job
