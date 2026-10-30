@@ -5,13 +5,19 @@ import json
 import pytest
 
 from activemodel.session_manager import get_session
+from app.models.authority_conversation import CanonicalConversationFinalPhase as Final
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlmodel import col, select
 
 from tests.services.provider_question_context_test import _chat, _client, _final
 from tests.services.provider_question_context_test import scope as _scope_fixture
 
 scope = _scope_fixture
+# Exact PostgreSQL identifier observed in the actual migrated v3 DB regression.
+EXPECTED_CITATION_CONSTRAINT = (
+    "canonical_conversation_final_phase_ck_conversation_revi_3e4b"
+)
 
 
 @pytest.mark.parametrize(
@@ -33,12 +39,11 @@ def test_actual_final_table_expand_constraints_preserve_legacy(scope, change):
     assert _final(client, scope[3], turn).status_code == 201
     with get_session() as session:
         assert (
-            session.execute(
-                text(
-                    "SELECT reviewed_excerpt_bindings IS NULL FROM canonical_conversation_final_phase WHERE turn_id=:turn_id"
-                ),
-                {"turn_id": str(turn[2])},
-            ).scalar_one()
+            session.exec(
+                select(col(Final.reviewed_excerpt_bindings).is_(None)).where(
+                    Final.turn_id == turn[2]
+                )
+            ).one()
             is True
         )
         session.execute(
@@ -93,6 +98,6 @@ def test_actual_final_table_expand_constraints_preserve_legacy(scope, change):
                 getattr(
                     getattr(rejected.value.orig, "diag", None), "constraint_name", None
                 )
-                == "ck_conversation_reviewed_excerpt_bindings"
+                == EXPECTED_CITATION_CONSTRAINT
             )
         session.rollback()

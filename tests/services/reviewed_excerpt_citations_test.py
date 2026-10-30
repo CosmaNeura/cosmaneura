@@ -22,7 +22,7 @@ from app.services.session_prep_note_sources import note_content_sha256
 from activemodel.session_manager import get_session
 from app.models.authority_conversation import CanonicalConversationFinalPhase as Final
 from app.models.authority_conversation import CanonicalConversationTurn as Turn
-from app.models.provider_record_authority import ProviderRecordAuthority
+from app.models.visit_audio_file import VisitAudioFile
 from sqlmodel import Session, select
 
 from tests.services.provider_question_context_test import (
@@ -78,6 +78,12 @@ def write(client, token, turn, body):
 
 
 def accepted(scope):
+    VisitAudioFile(
+        doctor_id=scope[0].id,
+        patient_id=scope[1].patient_id,
+        appointment_id=scope[2].appointment_id,
+        azure_file_name="fictional.wav",
+    ).save()
     token, client = scope[3], _client()
     turn = _chat(token)
     response = _read(client, token, turn, "1.2.0")
@@ -89,17 +95,12 @@ def accepted(scope):
     return client, token, turn, body, response.json()["result"]
 
 
-def reconstruct(session, note):
+def reconstruct(session, record):
     final = session.exec(select(Final)).one()
     turn = session.get(Turn, final.turn_id)
-    scope = session.exec(
-        select(ProviderRecordAuthority).where(
-            ProviderRecordAuthority.appointment_id == note.appointment_id
-        )
-    ).one()
     return retained_context_result(
         session=session,
-        scope=scope,
+        scope=record,
         turn=turn,
         final=final,
         bindings=CitationBindings.model_validate(final.reviewed_excerpt_bindings),
@@ -112,7 +113,7 @@ def test_atomic_full_witness_replay_and_unchanged_legacy_read(scope):
     assert write(client, token, turn, copy.deepcopy(body)).status_code == 201
     assert Final.count() == 1
     with get_session() as session:
-        assert reconstruct(session, scope[2]).model_dump(mode="json") == result
+        assert reconstruct(session, scope[4]).model_dump(mode="json") == result
         final = session.exec(select(Final)).one()
         witness = CitationBindings.model_validate(final.reviewed_excerpt_bindings)
         assert len(witness.context_witness.sources) == len(result["reviewed_sources"])
@@ -144,7 +145,7 @@ def test_retained_witness_reconstructs_original_after_source_correction(scope):
         )
         managed.commit()
     with get_session() as session:
-        assert reconstruct(session, scope[2]).model_dump(mode="json") == result
+        assert reconstruct(session, scope[4]).model_dump(mode="json") == result
     assert write(client, token, turn, body).status_code == 409
 
 
