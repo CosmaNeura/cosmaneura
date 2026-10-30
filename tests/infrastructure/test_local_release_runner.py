@@ -55,6 +55,12 @@ def test_every_tracked_workflow_requires_approved_compute() -> None:
                 if path.name in HOSTED_PR_WORKFLOWS:
                     assert labels == "ubuntu-24.04", path
                     continue
+                if path.name == "deploy_staging_candidate.yml":
+                    assert labels == "ubuntu-24.04", path
+                    assert set(workflow.get("on", workflow.get(True, {}))) == {
+                        "workflow_dispatch"
+                    }
+                    continue
                 if path.name in {
                     "build_and_publish_local.yml",
                     "production_release_verified.yml",

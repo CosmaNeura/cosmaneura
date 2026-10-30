@@ -243,15 +243,14 @@ function VisitAudioUploadForm({
     // Validate without trimming: the backend matches existing patients by
     // their exact stored name, so a selected name must pass through as-is.
     patient_name: z
-      .string({ required_error: `Enter the ${t.patientPossessive} name` })
+      .string({ error: `Enter the ${t.patientPossessive} name` })
       .refine(
         (name) => name.trim().length > 0,
         `Enter the ${t.patientPossessive} name`,
       ),
     date_of_birth: z
       .date({
-        required_error: "Enter a date of birth",
-        invalid_type_error: "Enter a date of birth",
+        error: "Enter a date of birth",
       })
       .max(tomorrow, {
         message: "Date of birth cannot be in the future",

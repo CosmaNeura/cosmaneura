@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import dataclass
 from time import monotonic
 from typing import Literal, get_args
 
@@ -21,7 +22,7 @@ from app.services.session_prep import (
 from app.services.session_prep_note_sources import ReviewedNoteSelection
 
 GENERATOR_VERSION = "reviewed_notes_v1"
-PROMPT_VERSION = "source_only_prep_v6"
+PROMPT_VERSION = "source_only_prep_v7"
 MODEL_PROFILE = DEFAULT_MULTI_MODAL_MODEL
 MAX_OUTPUT_CHARACTERS = 40_000
 # Leave time for source revalidation/storage before the existing Celery task's
@@ -44,7 +45,18 @@ was <medication> <planned dose> instead of <earlier dose>', '<date>: documented
 non-use of <medication> <dose>', and '<correction date>: the <earlier date> planned
 <dose> was superseded by the documented <corrected dose> plan'. Do not emit these
 placeholders. Preserve both dated doses and the reason for a correction when
-documented. A recorded plan is not actual use; missing confirmation is not proof
+documented. Distinguish an erroneous recording, transcription or documentation
+from a change to an actual documented treatment plan. An earlier erroneous dose
+statement is not an earlier treatment plan unless a supplied note explicitly
+documents that plan. Preserve the source's explicit 'no dose change' statement;
+do not imply a treatment change from a corrected recording. Keep the complete
+relevant error and no-change source clauses with their source dates in the recap
+or material changes, alongside both dated dose values. Use the complete original
+and corrected dose clauses and the complete error reason, each with the exact
+ISO source date and source_ref. Add a no-dose-change clause only when the source
+explicitly contains it; an error alone establishes neither actual change nor
+no actual change. Never infer
+actual medication use from either recorded value. A recorded plan is not actual use; missing confirmation is not proof
 of non-use. Describe absence only as absence of documentation, and preserve any
 explicit uncertainty. For talking points and the outline, use 'Review the dated
 medication history and clarify current use' with source-supported specifics,
@@ -63,7 +75,10 @@ Describe documented prior assessments and plans as past documentation, not new
 recommendations. Preserve uncertainty and conflicts. Distinguish prescribed or
 planned doses from documented doses actually being taken; never convert a plan
 into a completed action. A later explicit correction or cancellation supersedes
-the earlier plan, with both source dates retained. Distinguish ordered tests,
+the earlier recorded statement or plan according to the actual source. A
+recording/documentation error is not evidence of a treatment change; preserve
+explicit no-dose-change wording. Describe an earlier treatment plan only when
+the source documents a plan, retaining both source dates. Distinguish ordered tests,
 completed tests, available results, cancelled orders, and absent documentation.
 An absent result does not imply an order, completion, or normal result. Do not
 list a test as outstanding unless a supplied note explicitly documents its order.
@@ -87,8 +102,9 @@ and never infer a measurement for a visit with none documented. Keep critical
 source facts available in the recap or material changes rather than omitting them
 from the short brief. Describe medication use, prior plans and later corrections
 with dated neutral recorded status under the medication-history rule below.
-Keep both the historical plan and its later correction, without implying that
-either is a new instruction. Describe recorded assessments
+Keep both the historical recorded statement or plan and its later correction,
+including the documented error distinction, without implying that either is a
+new instruction. Describe recorded assessments
 as 'the documented assessment was ...', not a new or confirmed diagnosis.
 Omit names, contact details,
 dates of birth, and other identifying demographics. Every factual item must cite
@@ -107,6 +123,11 @@ draft. The initial attempt did not meet source-fidelity or output safety rules; 
 permission to remove or soften those rules. Preserve the dated factual values,
 medication status, cancelled orders and corrections using neutral historical
 documentation language. Do not omit critical facts to avoid the wording rules.
+Distinguish erroneous recorded doses from documented treatment plans. Retain
+both dated doses and any explicit no-dose-change statement; never turn a
+recording error into an earlier treatment plan or an actual treatment change.
+Preserve the complete relevant error/no-change clauses with their source dates
+in the recap or material changes.
 Before returning JSON, check every text field against the same lexical
 medication-history rule. Use 'documented planned dose', 'documented use',
 'superseded prior plan' or 'documented cessation' only when the source supports
@@ -146,8 +167,10 @@ _SAFETY_REGENERATION_INSTRUCTIONS: dict[SafetyCategory, str] = {
         "Medication wording needs correction. Preserve the original dated dose values, "
         "documented use, planned use and later corrections. Express the history with "
         "the dated neutral dose/status forms under the same lexical medication-history "
-        "rule in every section. Preserve a cancelled or superseded plan as dated recorded "
-        "status with its original and corrected doses. Do not omit dose history, "
+        "rule in every section. Preserve a cancelled or superseded plan only when "
+        "the source documents a plan; distinguish an erroneous recorded statement "
+        "from a treatment change. Keep original/corrected dated doses, the error "
+        "reason and explicit no-dose-change wording. Do not omit dose history, "
         "turn a plan into documented use, or infer non-use from missing confirmation."
     ),
     "emergency_deferral": (
@@ -364,6 +387,7 @@ def validate_generated_brief(
             "output_safety_rejected", safety_categories=_safety_categories(prepared)
         )
     _validate_noncompletion_grounding(prepared, selection)
+    _validate_documented_dose_errors(prepared, selection)
 
 
 _NONCOMPLETION = re.compile(
@@ -417,15 +441,359 @@ _ATTRIBUTION = re.compile(
     re.IGNORECASE,
 )
 _STATUS_WORDS = frozenset(
-    "not never yet been actually fully successfully completed complete done "
-    "finished finish performed obtained carried out followed through incomplete "
-    "unfinished uncompleted unperformed failed was were is are has have had "
-    "did does do be to the a an it this that these those they them he she his her "
-    "its their as of on at by for from in into with without after before during "
-    "since until then now today previously earlier later source note notes "
-    "document documented documentation recorded reported said stated status "
-    "action actions required needed planned prior previous".split()
+    [
+        "not",
+        "never",
+        "yet",
+        "been",
+        "actually",
+        "fully",
+        "successfully",
+        "completed",
+        "complete",
+        "done",
+        "finished",
+        "finish",
+        "performed",
+        "obtained",
+        "carried",
+        "out",
+        "followed",
+        "through",
+        "incomplete",
+        "unfinished",
+        "uncompleted",
+        "unperformed",
+        "failed",
+        "was",
+        "were",
+        "is",
+        "are",
+        "has",
+        "have",
+        "had",
+        "did",
+        "does",
+        "do",
+        "be",
+        "to",
+        "the",
+        "a",
+        "an",
+        "it",
+        "this",
+        "that",
+        "these",
+        "those",
+        "they",
+        "them",
+        "he",
+        "she",
+        "his",
+        "her",
+        "its",
+        "their",
+        "as",
+        "of",
+        "on",
+        "at",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "with",
+        "without",
+        "after",
+        "before",
+        "during",
+        "since",
+        "until",
+        "then",
+        "now",
+        "today",
+        "previously",
+        "earlier",
+        "later",
+        "source",
+        "note",
+        "notes",
+        "document",
+        "documented",
+        "documentation",
+        "recorded",
+        "reported",
+        "said",
+        "stated",
+        "status",
+        "action",
+        "actions",
+        "required",
+        "needed",
+        "planned",
+        "prior",
+        "previous",
+    ]
 )
+
+
+_DOSE_TOKEN = r"\d+(?:\.\d+)?\s*(?:mcg|mg|g)"
+_DOCUMENTED_DOSE_ERROR = re.compile(
+    rf"Correction:\s*(?P<medication>[a-z][a-z0-9-]{{0,39}})\s+"
+    rf"(?P<corrected>{_DOSE_TOKEN})(?:\s+(?:daily|twice daily|once daily))?,\s*"
+    rf"not\s+(?P<earlier>{_DOSE_TOKEN})[.]?",
+    re.IGNORECASE,
+)
+_DOSE_ERROR_REASON = re.compile(
+    r"The previous dose statement was an error[.]?", re.IGNORECASE
+)
+_EXPLICIT_NO_DOSE_CHANGE = re.compile(
+    r"No dose change(?: was (?:made|documented))?[.]?", re.IGNORECASE
+)
+_MEDICATION_PLAN = re.compile(
+    r"\b(?:plan|planned|prescribed|prescription|regimen)\b", re.IGNORECASE
+)
+_DOSE_CHANGE = re.compile(
+    r"\b(?:dose|treatment|therapy)\s+(?:(?:was|is|remains?)\s+)?"
+    r"(?:change[ds]?|unchanged)\b|"
+    r"\b(?:change[ds]?|unchanged)\s+(?:the\s+)?(?:dose|treatment|therapy)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True, repr=False)
+class _DocumentedDoseError:
+    medication: str
+    earlier_ref: str
+    corrected_ref: str
+    earlier_date: str
+    corrected_date: str
+    earlier_clause: str
+    correction_clause: str
+    reason_clause: str
+    no_change_clause: str | None
+
+
+def _dose_pattern(value: str) -> re.Pattern[str]:
+    # Formatting-only whitespace matching; no dose conversion or arithmetic.
+    return re.compile(
+        r"\b" + re.escape(value).replace(r"\ ", r"\s*") + r"\b", re.IGNORECASE
+    )
+
+
+def _documented_dose_errors(
+    selection: ReviewedNoteSelection,
+) -> list[_DocumentedDoseError]:
+    """Recognize the observed two-clause documentation error, not general medicine.
+
+    The optional third clause must explicitly document no dose change. Any other
+    wording/qualification stays outside this narrow guard. The earlier source
+    must document the same literal dose without a treatment-plan statement.
+    """
+    errors = []
+    corrections = {}
+    for source in selection.sources:
+        for text in source.content.values():
+            clauses = [clause.strip() for clause in _clauses(text) if clause.strip()]
+            matches = [
+                match
+                for clause in clauses
+                if (match := _DOCUMENTED_DOSE_ERROR.fullmatch(clause))
+            ]
+            if (
+                any(_DOSE_ERROR_REASON.fullmatch(clause) for clause in clauses)
+                and len(
+                    {
+                        (
+                            match["medication"].casefold(),
+                            match["earlier"].casefold(),
+                            match["corrected"].casefold(),
+                        )
+                        for match in matches
+                    }
+                )
+                > 1
+            ):
+                raise SessionPrepGenerationError("output_fidelity_rejected")
+            if len(clauses) not in {2, 3}:
+                continue
+            correction = _DOCUMENTED_DOSE_ERROR.fullmatch(clauses[0])
+            if (
+                correction is None
+                or _DOSE_ERROR_REASON.fullmatch(clauses[1]) is None
+                or (
+                    len(clauses) == 3
+                    and _EXPLICIT_NO_DOSE_CHANGE.fullmatch(clauses[2]) is None
+                )
+            ):
+                continue
+            medication = correction["medication"]
+            key = (medication.casefold(), source.source_at)
+            value = (
+                source.source_ref,
+                correction["earlier"].casefold(),
+                correction["corrected"].casefold(),
+            )
+            if key in corrections and corrections[key] != value:
+                raise SessionPrepGenerationError("output_fidelity_rejected")
+            corrections[key] = value
+            dose = _dose_pattern(correction["earlier"])
+            initial = re.compile(
+                r"^\s*" + re.escape(medication) + r"\s+" + dose.pattern, re.IGNORECASE
+            )
+            candidates = {}
+            # Runtime selection is newest-first, not chronological. Bind the
+            # previous statement by a strictly earlier source timestamp, then
+            # prefer its most recent literal match independently of ordering.
+            for prior in selection.sources:
+                if (
+                    prior.source_ref == source.source_ref
+                    or prior.source_at > source.source_at
+                ):
+                    continue
+                for prior_text in prior.content.values():
+                    if (
+                        "?" in prior_text
+                        or _SOURCE_NONFACTUAL.search(prior_text)
+                        or _UNPAIRED_QUOTATION.search(prior_text)
+                    ):
+                        continue
+                    for clause in _clauses(prior_text):
+                        if (
+                            initial.search(clause)
+                            and not _MEDICATION_PLAN.search(clause)
+                            and not _DOSE_CHANGE.search(clause)
+                        ):
+                            if prior.source_at == source.source_at:
+                                raise SessionPrepGenerationError(
+                                    "output_fidelity_rejected"
+                                )
+                            candidates[(prior.source_ref, clause)] = prior
+            if candidates:
+                latest = max(prior.source_at for prior in candidates.values())
+                matches = [
+                    (reference, clause, prior)
+                    for (reference, clause), prior in candidates.items()
+                    if prior.source_at == latest
+                ]
+                if len(matches) != 1:
+                    raise SessionPrepGenerationError("output_fidelity_rejected")
+                _reference, earlier_clause, earlier = matches[0]
+                errors.append(
+                    _DocumentedDoseError(
+                        medication=medication,
+                        earlier_ref=earlier.source_ref,
+                        corrected_ref=source.source_ref,
+                        earlier_date=earlier.source_at.date().isoformat(),
+                        corrected_date=source.source_at.date().isoformat(),
+                        earlier_clause=earlier_clause,
+                        correction_clause=clauses[0],
+                        reason_clause=clauses[1],
+                        no_change_clause=clauses[2] if len(clauses) == 3 else None,
+                    )
+                )
+    return errors
+
+
+def _dated_source_clause(clause: str, evidence: str, source_date: str) -> bool:
+    return set(_ISO_DATE.findall(clause)) == {source_date} and _normalized_clause(
+        clause
+    ) == _normalized_clause(evidence)
+
+
+def _literal_status_source(
+    clause: str, references: list[str], selection: ReviewedNoteSelection
+) -> bool:
+    """A dated complete source clause can support a contrasting genuine status."""
+    normalized = _normalized_clause(clause)
+    dates = set(_ISO_DATE.findall(clause))
+    return any(
+        source.source_ref in references
+        and dates == {source.source_at.date().isoformat()}
+        and any(
+            "?" not in text
+            and not _SOURCE_NONFACTUAL.search(text)
+            and not _UNPAIRED_QUOTATION.search(text)
+            and any(
+                _normalized_clause(evidence) == normalized
+                for evidence in _clauses(text)
+            )
+            for text in source.content.values()
+        )
+        for source in selection.sources
+    )
+
+
+def _validate_documented_dose_errors(
+    prepared: SessionPrepPreparedBrief, selection: ReviewedNoteSelection
+) -> None:
+    """Fence one observed error-to-treatment inference; not general entailment.
+
+    No-change is preserved only when explicitly sourced. The observed Bob notes
+    do not establish either a clinical dose change or no clinical dose change.
+    Require their dated documentation error in the recap/material changes, and
+    do not repair or overwrite an unsafe generated draft.
+    """
+    errors = _documented_dose_errors(selection)
+    if not errors:
+        return
+    material = [prepared.recap, *prepared.trajectory_and_material_changes]
+    items = [
+        *material,
+        *prepared.talking_points,
+        *prepared.open_threads,
+        *prepared.cautions,
+        *prepared.suggested_outline,
+    ]
+    for error in errors:
+        medication = re.compile(
+            r"\b" + re.escape(error.medication) + r"\b", re.IGNORECASE
+        )
+        required = [
+            (error.earlier_clause, error.earlier_ref, error.earlier_date),
+            (error.correction_clause, error.corrected_ref, error.corrected_date),
+            (error.reason_clause, error.corrected_ref, error.corrected_date),
+        ]
+        if error.no_change_clause is not None:
+            required.append(
+                (error.no_change_clause, error.corrected_ref, error.corrected_date)
+            )
+        if not all(
+            any(
+                reference in item.source_refs
+                and any(
+                    _dated_source_clause(clause, evidence, source_date)
+                    for clause in _clauses(item.text)
+                )
+                for item in material
+            )
+            for evidence, reference, source_date in required
+        ):
+            raise SessionPrepGenerationError("output_fidelity_rejected")
+        for item in items:
+            for clause in _clauses(item.text):
+                # References bind anaphoric 'the earlier plan' to the same
+                # error as well. Genuine status clauses must be literal, dated
+                # source evidence; the explicit no-change error clause is the
+                # only exception to ordinary nonfactual-section exclusion.
+                relevant = medication.search(clause) or {
+                    error.earlier_ref,
+                    error.corrected_ref,
+                }.intersection(item.source_refs)
+                exact_no_change = (
+                    error.no_change_clause is not None
+                    and error.corrected_ref in item.source_refs
+                    and _dated_source_clause(
+                        clause, error.no_change_clause, error.corrected_date
+                    )
+                )
+                if (
+                    relevant
+                    and (_MEDICATION_PLAN.search(clause) or _DOSE_CHANGE.search(clause))
+                    and not exact_no_change
+                    and not _literal_status_source(clause, item.source_refs, selection)
+                ):
+                    raise SessionPrepGenerationError("output_fidelity_rejected")
 
 
 def _normalized_clause(value: str) -> str:

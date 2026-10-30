@@ -24,6 +24,11 @@ from pathlib import Path
 from typing import Any
 
 import session_prep_production_frontend_admission as frontend_admission
+from production_saved_image_identity import (
+    ImageIdentityRefused,
+    published_manifest_identity,
+    saved_image_identity,
+)
 from superadmin_capability_config_preflight import (
     _clerk_issuer_from_publishable_key,
 )
@@ -106,7 +111,7 @@ def read_json(path: Path) -> Any:
         return decode(stream.read(MAX_JSON + 1))
 
 
-def command(args: list[str], *, github: bool = False) -> bytes:
+def command(args: list[str], *, github: bool = False, timeout: int = 60) -> bytes:
     # Keep normal client caches; never forward upstream build/1Password capabilities.
     allowed = ("HOME", "PATH", "TMPDIR", "LANG", "LC_ALL")
     if args[0] in {"docker", "az"}:
@@ -129,7 +134,7 @@ def command(args: list[str], *, github: bool = False) -> bytes:
             stderr=subprocess.DEVNULL,
             env=environment,
             check=False,
-            timeout=60,
+            timeout=timeout,
         )
         require(result.returncode == 0)
         output.seek(0)
@@ -249,7 +254,7 @@ def panel_identity(assets: Path) -> dict[str, str]:
 
 
 def manifest_identity(
-    raw: bytes, expected: str, image_config: dict[str, Any] | None = None
+    raw: bytes, expected: str, saved_identity: dict[str, Any] | None = None
 ) -> None:
     require(type(expected) is str and DIGEST.fullmatch(expected))
     # Buildx may append one LF; only exact digest-matching bytes are admitted.
@@ -264,8 +269,11 @@ def manifest_identity(
     config = manifest.get("config")
     require(type(config) is dict and DIGEST.fullmatch(config.get("digest", "")))
     require(type(manifest.get("layers")) is list and manifest["layers"])
-    if image_config is not None:
-        require(config["digest"] == image_config["Id"])
+    if saved_identity is not None:
+        try:
+            published_manifest_identity(raw, expected, saved_identity)
+        except ImageIdentityRefused:
+            raise CandidateRefused("production_core_candidate_refused") from None
 
 
 def image_source(context: dict[str, Any], image_config: dict[str, Any]) -> None:
@@ -288,6 +296,20 @@ def image_source(context: dict[str, Any], image_config: dict[str, Any]) -> None:
     )
 
 
+def exported_identity(image_config: dict[str, Any]) -> dict[str, Any]:
+    """Read immutable local image bytes before any registry mutation."""
+    with tempfile.TemporaryDirectory() as directory:
+        archive = Path(directory) / "image.tar"
+        command(
+            ["docker", "image", "save", "--output", str(archive), image_config["Id"]],
+            timeout=900,
+        )
+        try:
+            return saved_image_identity(archive, image_config)
+        except ImageIdentityRefused:
+            raise CandidateRefused("production_core_candidate_refused") from None
+
+
 def compiled_assets(assets: Path, image_assets: Path) -> tuple[str, dict[str, str]]:
     assets_digest = asset_tree(assets)
     require(asset_tree(image_assets) == assets_digest)
@@ -302,11 +324,12 @@ def candidate_record(
     assets_digest: str,
     panel: dict[str, str],
     image_digest: str,
+    saved_identity: dict[str, Any],
     admission_path: Path | None = None,
 ) -> dict[str, Any]:
     config = public_configuration(config, context["source_sha"], admission_path)
     enabled = config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "true"
-    manifest_identity(manifest, image_digest, image_config)
+    manifest_identity(manifest, image_digest, saved_identity)
     image_source(context, image_config)
     record = {
         "schema_version": 2 if enabled else 1,
@@ -315,7 +338,7 @@ def candidate_record(
         "workflow_ref": WORKFLOW_REF,
         **context,
         "image": IMAGE + "@" + image_digest,
-        "image_config_digest": image_config["Id"],
+        "image_config_digest": saved_identity["config_digest"],
         "public_configuration_digest": digest(canonical(config)),
         "frontend_assets_digest": assets_digest,
         "panel": panel,
@@ -564,9 +587,12 @@ def publish(
     if type(image_config) is not dict:
         raise CandidateRefused("production_core_candidate_refused")
     image_source(context, image_config)
+    saved_identity = exported_identity(image_config)
     # Verify exact stopped-image files; never execute the application.
     container = (
-        command(["docker", "create", "--network", "none", local_image]).decode().strip()
+        command(["docker", "create", "--network", "none", image_config["Id"]])
+        .decode()
+        .strip()
     )
     require(re.fullmatch(r"[0-9a-f]{64}", container))
     try:
@@ -581,7 +607,7 @@ def publish(
         f"upload-{context['run_id']}-{context['run_attempt']}-{context['source_sha']}"
     )
     tag = f"candidate-{context['source_sha']}-{context['run_id']}-{context['run_attempt']}"
-    command(["docker", "tag", local_image, IMAGE + ":" + upload])
+    command(["docker", "tag", image_config["Id"], IMAGE + ":" + upload])
     command(["docker", "push", IMAGE + ":" + upload])
     descriptor = decode(
         command(
@@ -608,7 +634,7 @@ def publish(
             IMAGE + "@" + image_digest,
         ]
     )
-    manifest_identity(manifest, image_digest, image_config)
+    manifest_identity(manifest, image_digest, saved_identity)
     # No-force import; protect/read back both tag and manifest before success.
     command(
         [
@@ -660,6 +686,7 @@ def publish(
         assets_digest,
         panel,
         image_digest,
+        saved_identity,
         admission_path,
     )
     require(source_context() == context)
