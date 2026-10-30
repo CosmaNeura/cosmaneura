@@ -584,6 +584,26 @@ jobs:
           PYTHON_ENV: staging
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git status --porcelain)" = ""
+          candidate_envrc="$PWD/.envrc"
+          test -f "$candidate_envrc" && test ! -L "$candidate_envrc"
+          git cat-file blob "$CANDIDATE_SHA:.envrc" | cmp -s - "$candidate_envrc"
+          umask 077
+          candidate_env_args=$(mktemp "$RUNNER_TEMP/candidate-build-args.XXXXXX")
+          cleanup_candidate_build_environment() {
+            exit_status=$?
+            trap - EXIT
+            direnv deny "$candidate_envrc" || exit_status=1
+            rm -f "$candidate_env_args" || exit_status=1
+            exit "$exit_status"
+          }
+          trap cleanup_candidate_build_environment EXIT
+          direnv allow "$candidate_envrc"
+          # Resolve arguments successfully before the recipe's xargs consumer
+          # can launch a builder with an empty or partial producer result.
+          just _javascript_nixpacks_env_args > "$candidate_env_args"
+          test -s "$candidate_env_args"
           just build
           docker image inspect "cosmaneura:$CANDIDATE_SHA" >/dev/null
 
