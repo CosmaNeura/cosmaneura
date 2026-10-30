@@ -8,6 +8,7 @@ import {
   finalReference,
 } from "./SovereignCitationDisplay.fixture"
 import { syntheticClerk } from "./SovereignClerk.fixture"
+import { emptyHistory } from "./SovereignHistory.fixture"
 import {
   act,
   cleanup,
@@ -39,6 +40,7 @@ const json = (value: unknown, status = 200) =>
 async function fixture(
   first = async () => json(citationFixture()),
   sessionToken = async () => "synthetic-session",
+  sdkRead?: () => Promise<unknown>,
 ) {
   vi.resetModules()
   vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
@@ -54,10 +56,12 @@ async function fixture(
       },
     }),
   )
+  if (sdkRead) authority.getClient.mockImplementation(sdkRead)
   const control = {
     retained: first,
     fresh: async () => json(citationFixture("1.1.0")),
     exchange: null as (() => Promise<Response>) | null,
+    rotate: null as (() => Promise<Response>) | null,
   }
   const requests: Array<{ url: string; init: RequestInit }> = []
   vi.stubGlobal(
@@ -79,6 +83,8 @@ async function fixture(
           201,
         )
       }
+      if (url === "/embed/v1/context-tokens/rotate" && control.rotate)
+        return control.rotate()
       if (url.endsWith("/welcome"))
         return json({
           persona: "provider",
@@ -87,6 +93,7 @@ async function fixture(
           paths: [],
           disclaimer: "Synthetic provider disclaimer.",
         })
+      if (url.endsWith("/embed/history")) return json(emptyHistory())
       if (url.endsWith("/embed/history-retained")) return control.retained()
       if (url.endsWith("/embed/history-with-citations")) return control.fresh()
       if (url.endsWith("/chat"))
@@ -127,6 +134,7 @@ async function fixture(
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -537,4 +545,201 @@ it("same-record Host fences a late exchange credential and never replays that lo
       (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
     ),
   ).toBe(false)
+})
+
+const originalPrincipal = () => ({
+  loaded: true,
+  user: { id: "synthetic-user" },
+  session: {
+    id: "synthetic-session-id",
+    getToken: async () => "synthetic-session",
+  },
+})
+it.each([
+  ["retained", "first"],
+  ["retained", "final"],
+  ["legacy", "first"],
+  ["legacy", "final"],
+])(
+  "%s read owns one30s deadline around %s SDK await after completed bootstrap",
+  async (lane, phase) => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    // Initial bootstrap has already finished; only this read's deadline can pass.
+    vi.useFakeTimers()
+    let resolve!: (value: unknown) => void,
+      calls = 0
+    authority.getClient.mockImplementation(async () => {
+      calls++
+      if (calls === (phase === "first" ? 1 : 3))
+        return new Promise((r) => {
+          resolve = r
+        })
+      return originalPrincipal()
+    })
+    const before = f.requests.length
+    let outcome: unknown
+    const caller = new AbortController()
+    const pending =
+      lane === "retained"
+        ? f.mounts[0].loadCitationHistory("appointment_synthetic_a", {
+            ...readOnlyDisplay,
+            signal: caller.signal,
+          })
+        : f.mounts[0].loadHistory("appointment_synthetic_a", {
+            signal: caller.signal,
+          })
+    void pending.then(
+      (value) => {
+        outcome = value
+      },
+      (error) => {
+        outcome = error
+      },
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29999)
+    })
+    expect(resolve).toBeTypeOf("function")
+    expect(outcome).toBeUndefined()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+    const count = f.requests.length
+    expect(count - before).toBe(phase === "first" ? 0 : 1)
+    await act(async () => resolve(originalPrincipal()))
+    expect(f.requests).toHaveLength(count)
+    expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+      ),
+    ).toBe(false)
+  },
+)
+it("shorter15s caller cancellation bounds a stalled actualSDK read with no late request", async () => {
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  vi.useFakeTimers()
+  let resolve!: (value: unknown) => void, outcome: unknown
+  authority.getClient.mockImplementation(
+    () =>
+      new Promise((r) => {
+        resolve = r
+      }),
+  )
+  const caller = new AbortController(),
+    before = f.requests.length
+  const pending = f.mounts[0].loadCitationHistory("appointment_synthetic_a", {
+    ...readOnlyDisplay,
+    signal: caller.signal,
+  })
+  void pending.then(
+    (value) => {
+      outcome = value
+    },
+    (error) => {
+      outcome = error
+    },
+  )
+  setTimeout(
+    () => caller.abort(new DOMException("Caller cancelled", "AbortError")),
+    15000,
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000)
+  })
+  expect(outcome).toMatchObject({ name: "AbortError" })
+  await act(async () => resolve(originalPrincipal()))
+  expect(f.requests).toHaveLength(before)
+  expect(outcome).toMatchObject({ name: "AbortError" })
+})
+it("bootstrap30s cap fences actualSDK completion that arrives after the mount expired", async () => {
+  vi.useFakeTimers()
+  let resolve!: (value: unknown) => void
+  const f = await fixture(
+    async () => json(citationFixture()),
+    async () => "synthetic-session",
+    () =>
+      new Promise((r) => {
+        resolve = r
+      }),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(resolve).toBeTypeOf("function")
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30000)
+  })
+  expect(document.querySelector(".cnp-root")).toBeNull()
+  const count = f.requests.length
+  await act(async () => resolve(originalPrincipal()))
+  expect(f.requests).toHaveLength(count)
+  expect(
+    f.requests.some((r) => r.url === "/embed/v1/context-tokens/exchange"),
+  ).toBe(false)
+  expect(document.querySelector(".cnp-root")).toBeNull()
+})
+
+it("read deadline cancels rotation and cannot install its late credential", async () => {
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  vi.useFakeTimers()
+  const start = Date.now()
+  vi.setSystemTime(start + 300001)
+  let resolve!: (response: Response) => void, outcome: unknown
+  f.control.rotate = () =>
+    new Promise((r) => {
+      resolve = r
+    })
+  const pending = f.mounts[0].loadCitationHistory("appointment_synthetic_a", {
+    ...readOnlyDisplay,
+    signal: new AbortController().signal,
+  })
+  void pending.then(
+    (value) => {
+      outcome = value
+    },
+    (error) => {
+      outcome = error
+    },
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(resolve).toBeTypeOf("function")
+  const rotation = f.requests.find((r) => r.url.endsWith("/rotate"))!
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30000)
+  })
+  expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+  expect(rotation.init.signal?.aborted).toBe(true)
+  const now = Date.now()
+  await act(async () =>
+    resolve(
+      json(
+        {
+          context_token: "mctx_" + "c".repeat(48),
+          token_type: "Bearer",
+          issued_at: new Date(now - 1000).toISOString(),
+          refresh_after: new Date(now + 300000).toISOString(),
+          expires_at: new Date(now + 900000).toISOString(),
+        },
+        201,
+      ),
+    ),
+  )
+  vi.setSystemTime(start)
+  expect(await f.mounts[0].getAuthToken()).toBe("mctx_" + "a".repeat(48))
+  expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
 })

@@ -85,7 +85,10 @@ type MountContextCredential = {
 }
 
 type MountContextTokenProvider = {
-  getToken: (request?: AuthTokenRequest) => Promise<string>
+  getToken: (
+    request?: AuthTokenRequest,
+    signal?: AbortSignal,
+  ) => Promise<string>
   discard: () => void
 }
 
@@ -268,16 +271,18 @@ function loadPinnedPanel(signal: AbortSignal): Promise<PanelApi> {
 }
 
 async function platformSessionToken(
-  checkPrincipal: () => Promise<void>,
+  checkPrincipal: (signal?: AbortSignal) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<string> {
-  await checkPrincipal()
+  await checkPrincipal(signal)
   const clerk = await getClient()
+  await checkPrincipal(signal)
   if (!clerk?.user || !clerk.session) {
     throw new Error("Provider session unavailable")
   }
   const token = await clerk.session.getToken()
   if (!token) throw new Error("Provider session unavailable")
-  await checkPrincipal()
+  await checkPrincipal(signal)
   return token
 }
 
@@ -363,7 +368,7 @@ async function requestProviderMountContext(
 
 function createProviderMountContextTokenProvider(
   appointmentId: string,
-  checkPrincipal: () => Promise<void>,
+  checkPrincipal: (signal?: AbortSignal) => Promise<void>,
 ): MountContextTokenProvider {
   let credential: MountContextCredential | null = null
   let pending: {
@@ -378,9 +383,12 @@ function createProviderMountContextTokenProvider(
     if (pending?.serial === serial) pending = null
   }
 
-  const getToken = async (request?: AuthTokenRequest): Promise<string> => {
+  const getToken = async (
+    request?: AuthTokenRequest,
+    signal?: AbortSignal,
+  ): Promise<string> => {
     const forceRefresh = requestedForceRefresh(request)
-    await checkPrincipal()
+    await checkPrincipal(signal)
     if (discarded) throw new Error("Provider authority is unavailable")
     const now = Date.now()
     if (pending) {
@@ -408,6 +416,9 @@ function createProviderMountContextTokenProvider(
 
     const current = credential
     const controller = new AbortController()
+    const abortRead = () => controller.abort(signal?.reason)
+    signal?.addEventListener("abort", abortRead, { once: true })
+    if (signal?.aborted) abortRead()
     const serial = ++requestSerial
     const operation = (async () => {
       try {
@@ -420,11 +431,11 @@ function createProviderMountContextTokenProvider(
             )
           : await requestProviderMountContext(
               "exchange",
-              await platformSessionToken(checkPrincipal),
+              await platformSessionToken(checkPrincipal, signal),
               appointmentId,
               controller.signal,
             )
-        await checkPrincipal()
+        await checkPrincipal(signal)
         if (discarded) throw new Error("Provider authority is unavailable")
         credential = next
         return next.contextToken
@@ -436,6 +447,7 @@ function createProviderMountContextTokenProvider(
         }
         throw error
       } finally {
+        signal?.removeEventListener("abort", abortRead)
         clearPending(serial)
       }
     })()
@@ -592,9 +604,11 @@ export function SovereignPanelHost({
         throw new DOMException("Provider principal changed", "AbortError")
       }
     }
-    async function checkPrincipal() {
+    async function checkPrincipal(signal?: AbortSignal) {
+      signal?.throwIfAborted()
       assertPrincipal()
       readSdkPrincipal = await identity.readCurrent()
+      signal?.throwIfAborted()
       assertPrincipal()
     }
     // Bound the whole handshake, including script loading, authority exchange,
@@ -663,16 +677,28 @@ export function SovereignPanelHost({
               }
             }
             try {
-              await checkPrincipal()
-              const history = await loadSovereignHistory({
-                origin: config.origin,
-                getToken: () => mountTokenProvider.getToken(),
-                signal: controller.signal,
-                assertCurrent,
-              })
-              await checkPrincipal()
-              assertCurrent()
-              return history
+              return await withReadDeadline(
+                async (signal) => {
+                  const check = () => {
+                    signal.throwIfAborted()
+                    assertCurrent()
+                  }
+                  check()
+                  await checkPrincipal(signal)
+                  check()
+                  const history = await loadSovereignHistory({
+                    origin: config.origin,
+                    getToken: () =>
+                      mountTokenProvider.getToken(undefined, signal),
+                    signal,
+                    assertCurrent: check,
+                  })
+                  await checkPrincipal(signal)
+                  check()
+                  return history
+                },
+                { signal: controller.signal },
+              )
             } catch (error) {
               if (
                 !cancelled &&
@@ -705,20 +731,28 @@ export function SovereignPanelHost({
                 throw new DOMException("Open record changed", "AbortError")
             }
             try {
-              await checkPrincipal()
-              const display = await withReadDeadline(
-                (signal) =>
-                  loadCitationDisplay({
+              return await withReadDeadline(
+                async (signal) => {
+                  const check = () => {
+                    signal.throwIfAborted()
+                    assertCurrent()
+                  }
+                  check()
+                  await checkPrincipal(signal)
+                  check()
+                  const display = await loadCitationDisplay({
                     origin: config.origin,
-                    getToken: () => mountTokenProvider.getToken(),
-                    assertCurrent,
+                    getToken: () =>
+                      mountTokenProvider.getToken(undefined, signal),
+                    assertCurrent: check,
                     options: { ...options, signal },
-                  }),
+                  })
+                  await checkPrincipal(signal)
+                  check()
+                  return display
+                },
                 { signal: controller.signal },
               )
-              await checkPrincipal()
-              assertCurrent()
-              return display
             } catch (error) {
               if (
                 !cancelled &&

@@ -21,3 +21,6 @@ Recovery: stop release on a failing access check. Revert the exact dependent
 commit if necessary while preserving the receiver, viewer and immutable maps;
 that reopens the prior Host gap and requires a new access decision before use.
 No migration rung, production operation or new deployment authority is implied.
+
+Both read lanes include first/final SDK checks and token acquisition in one
+existing 30-second deadline; shorter caller cancellation remains effective.
