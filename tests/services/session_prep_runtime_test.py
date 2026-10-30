@@ -87,7 +87,7 @@ def scope(monkeypatch, request):
     # before finalization/exchange schedules the build, preserving its digest.
     prior_prompt = getattr(request, "param", None)
     if prior_prompt is not None:
-        assert prior_prompt == "source_only_prep_v6"
+        assert prior_prompt == "source_only_prep_v7"
         import app.services.session_prep_runtime as runtime
 
         monkeypatch.setattr(runtime, "PROMPT_VERSION", prior_prompt)
@@ -508,12 +508,12 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, _token, record = scope
-    assert generator.PROMPT_VERSION == "source_only_prep_v7"
+    assert generator.PROMPT_VERSION == "source_only_prep_v8"
     with get_session() as session:
         current_selection, current_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
         )
-        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v6")
+        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v7")
         prior_selection, prior_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
         )
@@ -521,31 +521,31 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     assert current_digest != prior_digest
 
 
-@pytest.mark.parametrize("scope", ["source_only_prep_v6"], indirect=True)
+@pytest.mark.parametrize("scope", ["source_only_prep_v7"], indirect=True)
 def test_new_prompt_version_cannot_serve_or_replay_an_old_brief(scope, monkeypatch):
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, token, record = scope
-    assert runtime.PROMPT_VERSION == "source_only_prep_v6"
+    assert runtime.PROMPT_VERSION == "source_only_prep_v7"
     assert _work() == "ready"
     old_action = _action(token)
     old = _read(token, record, old_action)
-    assert old.response.result.brief_prompt_version == "source_only_prep_v6"
+    assert old.response.result.brief_prompt_version == "source_only_prep_v7"
     assert _read(token, record, old_action).replayed
     old_artifact = SessionPrepArtifact.first()
     assert old_artifact is not None
     old_artifact_id = old_artifact.id
     old_payload = json.dumps(old_artifact.result_payload, sort_keys=True)
 
-    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v7")
+    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v8")
     with pytest.raises(SessionPrepScopeDenied):
         _read(token, record, old_action)
     fresh_action = _action(token)
     assert _read(token, record, fresh_action).response.result.state == "pending"
     assert SessionPrepArtifact.count() == 1
     assert _work() == "ready"
-    fresh = _read(token, record, fresh_action, key="prep-read-key-v7-0002")
-    assert fresh.response.result.brief_prompt_version == "source_only_prep_v7"
+    fresh = _read(token, record, fresh_action, key="prep-read-key-v8-0002")
+    assert fresh.response.result.brief_prompt_version == "source_only_prep_v8"
     assert fresh.response.result.brief_version == 2
     assert fresh.response.result.brief_supersedes_ref == old.response.result.brief_ref
     assert SessionPrepArtifact.count() == 2
@@ -553,6 +553,6 @@ def test_new_prompt_version_cannot_serve_or_replay_an_old_brief(scope, monkeypat
         preserved = session.get(SessionPrepArtifact, old_artifact_id)
         assert preserved is not None
         assert json.dumps(preserved.result_payload, sort_keys=True) == old_payload
-    # A successor does not restore a stale receipt's authority to serve v6.
+    # A successor does not restore a stale receipt's authority to serve v7.
     with pytest.raises(SessionPrepScopeDenied):
         _read(token, record, old_action)
