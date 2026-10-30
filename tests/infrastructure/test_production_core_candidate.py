@@ -107,6 +107,184 @@ def runtime_environment() -> dict[str, str]:
     )
 
 
+def admitted_frontend(tmp_path, monkeypatch, run=10):
+    for key, value in runtime_environment().items():
+        monkeypatch.setenv(key, str(run) if key == "GITHUB_RUN_ID" else value)
+    config_path, admission_path = (
+        tmp_path / f"config-{run}.json",
+        tmp_path / f"admission-{run}.json",
+    )
+    config_path.write_bytes(candidate.canonical(configuration()))
+    candidate.frontend_admission.prepare(config_path, admission_path, "true", SHA, SHA)
+    return json.loads(config_path.read_bytes()), admission_path
+
+
+def enabled_candidate(tmp_path, monkeypatch):
+    config, admission_path = admitted_frontend(tmp_path, monkeypatch)
+    manifest = manifest_bytes()
+    value = candidate.candidate_record(
+        context(10),
+        config,
+        manifest,
+        local_image(),
+        "sha256:" + "f" * 64,
+        record()["panel"],
+        candidate.digest(manifest),
+        admission_path,
+    )
+    return value, config, admission_path
+
+
+def evidence_for(value):
+    data = evidence()
+    data["archive"] = archive(value)
+    data["artifact"]["digest"] = candidate.digest(data["archive"])
+    data["artifact"]["size_in_bytes"] = len(data["archive"])
+    return data
+
+
+def test_enabled_candidate_binds_actual_admission_to_authenticated_producer(
+    tmp_path, monkeypatch
+):
+    value, config, admission = enabled_candidate(tmp_path, monkeypatch)
+    assert value["schema_version"] == 2 and value["frontend_authority_enabled"] is True
+    assert value["frontend_admission"] == json.loads(admission.read_bytes())
+    assert value["public_configuration_digest"] == candidate.digest(
+        candidate.canonical(config)
+    )
+    assert (
+        candidate.verify_evidence(context(), 10, 1, 30, **evidence_for(value)) == value
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "missing",
+        "source",
+        "run",
+        "actor",
+        "workflow",
+        "configuration",
+        "version",
+        "extra",
+        "false",
+    ],
+)
+def test_enabled_archive_rejects_unbound_or_malformed_admission(
+    tmp_path, monkeypatch, tamper
+):
+    value, _, _ = enabled_candidate(tmp_path, monkeypatch)
+    admission = value["frontend_admission"]
+    if tamper == "missing":
+        del value["frontend_admission"]
+    elif tamper == "source":
+        admission["source_sha"] = "1" * 40
+    elif tamper == "run":
+        admission["manual_workflow_context"]["GITHUB_RUN_ID"] = "11"
+    elif tamper == "actor":
+        admission["manual_workflow_context"]["GITHUB_ACTOR"] = "Other"
+    elif tamper == "workflow":
+        admission["manual_workflow_context"]["GITHUB_WORKFLOW_REF"] = "retired@master"
+    elif tamper == "configuration":
+        admission["public_configuration_sha256"] = "0" * 64
+    elif tamper == "version":
+        admission["version"] = True
+    elif tamper == "extra":
+        admission["readiness"] = True
+    else:
+        value["frontend_authority_enabled"] = False
+    with pytest.raises(ValueError):
+        candidate.verify_evidence(context(), 10, 1, 30, **evidence_for(value))
+
+
+@pytest.mark.parametrize("run,source", [(20, SHA), (10, "1" * 40)])
+def test_producer_admission_cannot_be_reused_in_another_run_or_source(
+    tmp_path, monkeypatch, run, source
+):
+    value, config, admission = enabled_candidate(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_RUN_ID", str(run))
+    monkeypatch.setenv("GITHUB_SHA", source)
+    monkeypatch.setattr(
+        candidate,
+        "command",
+        lambda *a, **k: pytest.fail("client called before admission refusal"),
+    )
+    with pytest.raises(ValueError):
+        candidate.promotion_check(value, config, admission)
+
+
+def test_fresh_promotion_admission_preserves_identical_enabled_config_and_digest(
+    tmp_path, monkeypatch
+):
+    value, config, producer_admission = enabled_candidate(tmp_path, monkeypatch)
+    fresh_config, fresh_admission = admitted_frontend(tmp_path, monkeypatch, run=20)
+    assert fresh_config == config
+    assert fresh_admission.read_bytes() != producer_admission.read_bytes()
+    monkeypatch.setattr(candidate, "panel_identity", lambda *a: value["panel"])
+    monkeypatch.setattr(candidate, "source_context", lambda: context())
+    calls = []
+
+    def read(args, **kwargs):
+        calls.append(args)
+        if args[:4] == ["docker", "buildx", "imagetools", "inspect"]:
+            assert args[-1] == value["image"]
+            return manifest_bytes()
+        assert args[:4] == ["az", "acr", "repository", "show"]
+        return retention_bytes(candidate.digest(manifest_bytes()))
+
+    monkeypatch.setattr(candidate, "command", read)
+    assert (
+        candidate.promotion_check(value, fresh_config, fresh_admission)
+        == value["image"]
+    )
+    assert len(calls) == 3 and all(
+        "push" not in call and "build" not in call for call in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper", ["default_dark", "config_changed", "receipt_missing", "record_flag"]
+)
+def test_enabled_promotion_refuses_changed_choice_or_configuration_before_clients(
+    tmp_path, monkeypatch, tamper
+):
+    value, _, _ = enabled_candidate(tmp_path, monkeypatch)
+    config, admission = admitted_frontend(tmp_path, monkeypatch, run=20)
+    if tamper == "default_dark":
+        config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] = "false"
+    elif tamper == "config_changed":
+        config["VITE_POSTHOG_KEY"] = "changed-synthetic-setting"
+    elif tamper == "receipt_missing":
+        admission.unlink()
+    else:
+        value["frontend_authority_enabled"] = False
+    monkeypatch.setattr(
+        candidate,
+        "command",
+        lambda *a, **k: pytest.fail("client called before refusal"),
+    )
+    with pytest.raises((ValueError, OSError)):
+        candidate.promotion_check(value, config, admission)
+
+
+def test_unadmitted_enabled_publish_fails_before_image_or_registry_commands(
+    tmp_path, monkeypatch
+):
+    config = configuration()
+    config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] = "true"
+    path = tmp_path / "unadmitted.json"
+    path.write_bytes(candidate.canonical(config))
+    monkeypatch.setattr(candidate, "source_context", lambda: context())
+    monkeypatch.setattr(
+        candidate,
+        "command",
+        lambda *a, **k: pytest.fail("unadmitted publish reached a client"),
+    )
+    with pytest.raises(ValueError):
+        candidate.publish(path, tmp_path / "candidate.json")
+
+
 def record():
     panel_sha = "e" * 64
     return dict(

@@ -49,6 +49,17 @@ on:
         required: true
         default: false
 
+      production_session_prep_frontend_enabled:
+        type: boolean
+        description: "Compile the provider Session Prep panel for this reviewed production release; backend activation remains separate"
+        required: false
+        default: false
+      production_session_prep_reviewed_core_sha:
+        type: string
+        description: "Full reviewed Core SHA equal to this exact master release; required only when compiling Session Prep"
+        required: false
+        default: ""
+
 # Deployment validation belongs only to explicit manual promotions, not pushes.
 # Hosted execution requires explicit founder opt-in; automatic PR jobs stay disabled.
 
@@ -170,7 +181,10 @@ jobs:
               .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
-            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
+            scripts/production_core_candidate.py scripts/production_core_runtime_binding.py \
+            scripts/session_prep_production_frontend_admission.py \
+            scripts/superadmin_capability_config_preflight.py; then
               production_infra_changed=true
             fi
           fi
@@ -465,6 +479,7 @@ jobs:
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
             scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
             scripts/production_core_candidate.py scripts/production_core_runtime_binding.py \
+            scripts/session_prep_production_frontend_admission.py \
             scripts/superadmin_capability_config_preflight.py; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
@@ -512,6 +527,9 @@ jobs:
         env:
           FRONTEND_ENV_SOURCE: .env.production.frontend
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
+          SESSION_PREP_FRONTEND_ENABLED: ${{ inputs.production_session_prep_frontend_enabled && 'true' || 'false' }}
+          SESSION_PREP_REVIEWED_SOURCE_SHA: ${{ inputs.production_session_prep_reviewed_core_sha }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
         run: |
           set -euo pipefail
@@ -531,6 +549,12 @@ jobs:
             } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+          python3 scripts/session_prep_production_frontend_admission.py prepare \
+            --configuration "$JAVASCRIPT_BUILD_ENV_JSON" \
+            --admission "$JAVASCRIPT_SESSION_PREP_ADMISSION_JSON" \
+            --enabled "$SESSION_PREP_FRONTEND_ENABLED" \
+            --source-sha "$GITHUB_SHA" \
+            --reviewed-source-sha "$SESSION_PREP_REVIEWED_SOURCE_SHA"
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -542,6 +566,7 @@ jobs:
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
           PYTHON_ENV: production
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
@@ -558,6 +583,7 @@ jobs:
           mkdir "$RUNNER_TEMP/core-production-candidate"
           python3 scripts/production_core_candidate.py publish \
             --configuration "$RUNNER_TEMP/production-frontend-build.json" \
+            --frontend-admission "$RUNNER_TEMP/production-session-prep-admission.json" \
             --output "$RUNNER_TEMP/core-production-candidate/candidate.json"
       - name: Retain the immutable candidate evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -570,7 +596,7 @@ jobs:
           overwrite: false
       - name: Remove resolved production frontend configuration
         if: always()
-        run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json"
+        run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json" "$RUNNER_TEMP/production-session-prep-admission.json"
 
   deploy:
     name: 🚀 Deploy
@@ -624,6 +650,9 @@ jobs:
         env:
           FRONTEND_ENV_SOURCE: .env.production.frontend
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
+          SESSION_PREP_FRONTEND_ENABLED: ${{ inputs.production_session_prep_frontend_enabled && 'true' || 'false' }}
+          SESSION_PREP_REVIEWED_SOURCE_SHA: ${{ inputs.production_session_prep_reviewed_core_sha }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
         run: |
           set -euo pipefail
@@ -643,6 +672,12 @@ jobs:
             } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+          python3 scripts/session_prep_production_frontend_admission.py prepare \
+            --configuration "$JAVASCRIPT_BUILD_ENV_JSON" \
+            --admission "$JAVASCRIPT_SESSION_PREP_ADMISSION_JSON" \
+            --enabled "$SESSION_PREP_FRONTEND_ENABLED" \
+            --source-sha "$GITHUB_SHA" \
+            --reviewed-source-sha "$SESSION_PREP_REVIEWED_SOURCE_SHA"
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -668,7 +703,8 @@ jobs:
             --producer-run-id "$PRODUCER_RUN_ID" \
             --producer-attempt "$PRODUCER_ATTEMPT" \
             --artifact-id "$ARTIFACT_ID" \
-            --configuration "$RUNNER_TEMP/production-frontend-build.json")
+            --configuration "$RUNNER_TEMP/production-frontend-build.json" \
+            --frontend-admission "$RUNNER_TEMP/production-session-prep-admission.json")
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
       - name: Deploy the previously verified Core digest without rebuilding
         env:
@@ -696,6 +732,7 @@ jobs:
             --run-id "$PRODUCER_RUN_ID" --run-attempt "$PRODUCER_ATTEMPT" \
             --artifact-id "$ARTIFACT_ID" \
             --configuration "$RUNNER_TEMP/production-frontend-build.json" \
+            --frontend-admission "$RUNNER_TEMP/production-session-prep-admission.json" \
             --output "$RUNNER_TEMP/core-production-runtime-binding/runtime-binding.json"
       - name: Retain the authenticated Core runtime binding
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -708,4 +745,4 @@ jobs:
           overwrite: false
       - name: Remove resolved production frontend configuration
         if: always()
-        run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json"
+        run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json" "$RUNNER_TEMP/production-session-prep-admission.json"
