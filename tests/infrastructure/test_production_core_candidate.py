@@ -9,6 +9,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from typing import Any, TypedDict
 
 import pytest
 import yaml
@@ -25,6 +26,14 @@ SHA = "a" * 40
 TREE = "b" * 40
 IMAGE_DIGEST = "sha256:" + "c" * 64
 CONFIG_DIGEST = "sha256:" + "d" * 64
+
+
+class ProducerEvidence(TypedDict):
+    run: dict[str, Any]
+    workflow: dict[str, Any]
+    jobs: dict[str, Any]
+    artifact: dict[str, Any]
+    archive: bytes
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +96,7 @@ def archive(value, name="candidate.json", second=False):
     return output.getvalue()
 
 
-def evidence():
+def evidence() -> ProducerEvidence:
     raw = archive(record())
     run = dict(
         id=10,
@@ -132,7 +141,7 @@ def evidence():
             head_branch="master",
         ),
     )
-    return dict(
+    return ProducerEvidence(
         run=run,
         workflow=workflow,
         jobs=dict(total_count=len(jobs), jobs=jobs),
@@ -207,7 +216,7 @@ def test_complete_job_metadata_capacity_is_bounded(monkeypatch, oversized):
 def test_wrong_authenticated_producer_metadata_refuses(path, value):
     data = evidence()
     fields = path.split(".")
-    cursor = data
+    cursor: Any = data
     for field in fields[:-1]:
         cursor = cursor[field]
     cursor[fields[-1]] = value
@@ -404,6 +413,7 @@ def test_wrong_local_image_cannot_be_published(field, value):
         ["PYTHON_ENV=staging"],
         ["PYTHON_ENV=production", "PYTHON_ENV=staging"],
         ["PYTHON_ENV=production", "PYTHON_ENV=production"],
+        ["PYTHON_ENV=production", None],
     ],
 )
 def test_runtime_environment_cannot_be_staging_or_ambiguous(env):
@@ -505,7 +515,10 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
     assert output.stat().st_mode & 0o777 == 0o600
 
 
-def test_asset_failure_prevents_any_publication(monkeypatch, tmp_path):
+@pytest.mark.parametrize("invalid_image", [False, True])
+def test_image_or_asset_failure_prevents_publication(
+    monkeypatch, tmp_path, invalid_image
+):
     config_path = tmp_path / "configuration.json"
     config_path.write_bytes(candidate.canonical(configuration()))
     image = dict(
@@ -521,8 +534,10 @@ def test_asset_failure_prevents_any_publication(monkeypatch, tmp_path):
 
     def fake(args, **kwargs):
         assert args[0] == "docker" and args[1] in {"image", "create", "cp", "rm"}
+        if invalid_image and args[1] != "image":
+            pytest.fail("malformed image advanced beyond inspection")
         return (
-            candidate.canonical([image])
+            candidate.canonical([None if invalid_image else image])
             if args[1] == "image"
             else ("1" * 64).encode()
             if args[1] == "create"

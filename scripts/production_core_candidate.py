@@ -106,8 +106,7 @@ def read_json(path: Path) -> Any:
 
 
 def command(args: list[str], *, github: bool = False) -> bytes:
-    # Existing normal Docker/Azure caches are preserved; upstream build and
-    # 1Password capabilities never reach these publication/read-only clients.
+    # Keep normal client caches; never forward upstream build/1Password capabilities.
     allowed = ("HOME", "PATH", "TMPDIR", "LANG", "LC_ALL")
     if args[0] in {"docker", "az"}:
         allowed += ("DOCKER_CONFIG", "AZURE_CONFIG_DIR", "AZURE_EXTENSION_DIR")
@@ -192,8 +191,7 @@ def public_configuration(value: Any) -> dict[str, str]:
     require(config["VITE_PYTHON_URL"] == "https://app.cosmaneura.com/")
     require(config["VITE_INTAKE_CHAT_DOMAIN"] == "chat.cosmaneura.com")
     require(config["VITE_SOVEREIGN_PROVIDER_URL"] == "https://sovereign.cosmaneura.com")
-    # Preserve current master's dark build admission. PR896 is separately
-    # reviewed and must be composed explicitly before a true flag is admitted.
+    # Preserve dark admission; PR896 needs separate explicit composition.
     require(config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "false")
     issuer = _clerk_issuer_from_publishable_key(
         config["VITE_CLERK_PUBLIC_KEY"], environment="production"
@@ -247,8 +245,7 @@ def manifest_identity(
     raw: bytes, expected: str, image_config: dict[str, Any] | None = None
 ) -> None:
     require(type(expected) is str and DIGEST.fullmatch(expected))
-    # Buildx prints a final LF after its raw document. Accept only the exact
-    # digest-matching bytes, never arbitrary whitespace or reserialized JSON.
+    # Buildx may append one LF; only exact digest-matching bytes are admitted.
     if digest(raw) != expected and raw.endswith(b"\n"):
         raw = raw[:-1]
     require(digest(raw) == expected)
@@ -278,7 +275,10 @@ def image_source(context: dict[str, Any], image_config: dict[str, Any]) -> None:
     )
     env = image_config["Config"].get("Env")
     require(type(env) is list and env.count("PYTHON_ENV=production") == 1)
-    require(sum(item.startswith("PYTHON_ENV=") for item in env) == 1)
+    require(all(type(item) is str for item in env))
+    require(
+        sum(type(item) is str and item.startswith("PYTHON_ENV=") for item in env) == 1
+    )
 
 
 def compiled_assets(assets: Path, image_assets: Path) -> tuple[str, dict[str, str]]:
@@ -530,9 +530,11 @@ def publish(config_path: Path, output: Path) -> None:
     local_image = "cosmaneura:" + context["source_sha"]
     inspected = decode(command(["docker", "image", "inspect", local_image]))
     require(type(inspected) is list and len(inspected) == 1)
-    image_source(context, inspected[0])
-    # Verify compiled files inside this exact local image before publication.
-    # Creating/copying a stopped container never executes the application.
+    image_config = inspected[0]
+    if type(image_config) is not dict:
+        raise CandidateRefused("production_core_candidate_refused")
+    image_source(context, image_config)
+    # Verify exact stopped-image files; never execute the application.
     container = (
         command(["docker", "create", "--network", "none", local_image]).decode().strip()
     )
@@ -576,9 +578,8 @@ def publish(config_path: Path, output: Path) -> None:
             IMAGE + "@" + image_digest,
         ]
     )
-    manifest_identity(manifest, image_digest, inspected[0])
-    # No-force import creates the selected tag without overwriting an earlier
-    # candidate. Lock both tag and manifest, then read back both before success.
+    manifest_identity(manifest, image_digest, image_config)
+    # No-force import; protect/read back both tag and manifest before success.
     command(
         [
             "az",
@@ -622,7 +623,7 @@ def publish(config_path: Path, output: Path) -> None:
         )
     retention(tag, image_digest)
     record = candidate_record(
-        context, config, manifest, inspected[0], assets_digest, panel, image_digest
+        context, config, manifest, image_config, assets_digest, panel, image_digest
     )
     require(source_context() == context)
     descriptor_file = os.open(
