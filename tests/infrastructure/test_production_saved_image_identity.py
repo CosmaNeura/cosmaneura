@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import tarfile
+import zlib
 
 import pytest
 
@@ -299,7 +300,9 @@ def test_remote_manifest_must_keep_verified_config_and_native_layer_bytes(
         identity.published_manifest_identity(changed, sha(changed), verified)
 
 
-@pytest.mark.parametrize("kind", ["wrong_expanded_bytes", "truncated_gzip"])
+@pytest.mark.parametrize(
+    "kind", ["wrong_expanded_bytes", "truncated_gzip", "malformed_deflate"]
+)
 def test_self_consistent_compressed_blob_must_still_match_rootfs(tmp_path, kind):
     inspected, entries, _remote = fixture()
     index = json.loads(entries["index.json"])
@@ -308,11 +311,17 @@ def test_self_consistent_compressed_blob_must_still_match_rootfs(tmp_path, kind)
     manifest = json.loads(entries.pop(manifest_name))
     old_layer = "blobs/sha256/" + manifest["layers"][0]["digest"][7:]
     previous = entries.pop(old_layer)
-    changed = (
-        gzip.compress(b"wrong expanded layer", mtime=0)
-        if kind == "wrong_expanded_bytes"
-        else previous[:-8]
-    )
+    if kind == "malformed_deflate":
+        # Valid gzip header/trailer, but DEFLATE BTYPE=3 is reserved. Bind its
+        # actual compressed bytes into every descriptor so hashing cannot mask
+        # the decoder failure. Verify the fixture reaches zlib.error itself.
+        changed = bytes.fromhex("1f8b08000000000002ff07") + b"\x00" * 8
+        with pytest.raises(zlib.error):
+            gzip.decompress(changed)
+    elif kind == "wrong_expanded_bytes":
+        changed = gzip.compress(b"wrong expanded layer", mtime=0)
+    else:
+        changed = previous[:-8]
     manifest["layers"][0].update(digest=sha(changed), size=len(changed))
     new_layer = "blobs/sha256/" + sha(changed)[7:]
     entries[new_layer] = changed
@@ -325,5 +334,8 @@ def test_self_consistent_compressed_blob_must_still_match_rootfs(tmp_path, kind)
     inspected["Descriptor"] = copy.deepcopy(chosen)
     entries["index.json"] = encoded(index)
     entries["blobs/sha256/" + sha(raw)[7:]] = raw
-    with pytest.raises(identity.ImageIdentityRefused):
+    with pytest.raises(
+        identity.ImageIdentityRefused, match="^production_saved_image_identity_refused$"
+    ) as refused:
         identity.saved_image_identity(save(tmp_path / "image.tar", entries), inspected)
+    assert refused.value.__cause__ is None and refused.value.__suppress_context__

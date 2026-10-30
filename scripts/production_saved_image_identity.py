@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import tarfile
+import zlib
 from pathlib import Path
 from typing import IO, Any, Protocol, cast
 
@@ -129,6 +130,7 @@ def saved_image_identity(archive_path: Path, inspected: Any) -> dict[str, Any]:
         EOFError,
         RecursionError,
         tarfile.TarError,
+        zlib.error,
     ):
         raise ImageIdentityRefused("production_saved_image_identity_refused") from None
 
