@@ -100,10 +100,18 @@ def test_runtime_rejects_unbounded_or_wrong_target_values(key, value):
 
 @pytest.mark.parametrize(
     "change",
-    [None, "missing", "production", "credential", "ambiguous", "duplicate", "oversized"],
+    [
+        None,
+        "missing",
+        "production",
+        "credential",
+        "ambiguous",
+        "duplicate",
+        "oversized",
+    ],
 )
 def test_canonical_public_runtime_input_reuses_bounded_staging_contract(change):
-    candidate = runtime()
+    candidate: dict[str, object] = dict(runtime())
     if change == "missing":
         del candidate["SCRIBE_WORKFLOW_ENABLED"]
     elif change == "production":

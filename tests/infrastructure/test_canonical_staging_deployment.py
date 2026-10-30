@@ -521,7 +521,9 @@ def test_identity_fingerprint_digest_contract_is_canonical_across_files() -> Non
     ],
 )
 def test_terminal_attempt_requires_the_requested_preserved_configuration(
-    preserved: bool, observed: str | None, accepted: bool,
+    preserved: bool,
+    observed: str | None,
+    accepted: bool,
 ) -> None:
     workflow = _source()
     authorize = _job(workflow, "authorize")
@@ -547,16 +549,20 @@ def test_terminal_attempt_requires_the_requested_preserved_configuration(
     )
     start = terminal.index('          jq -e --arg expected "$STAGING_EFFECTIVE')
     end = terminal.index('<<< "$OBSERVED_CONFIGURATION" >/dev/null', start)
-    actual_guard = terminal[start : end + len('<<< "$OBSERVED_CONFIGURATION" >/dev/null')]
+    actual_guard = terminal[
+        start : end + len('<<< "$OBSERVED_CONFIGURATION" >/dev/null')
+    ]
     result = subprocess.run(
         ["/bin/bash", "-c", actual_guard],
         env={
             "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
             "STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT": "sha256:" + "a" * 64,
-            "OBSERVED_CONFIGURATION": json.dumps({
-                "effective_configuration_preserved": preserved,
-                "effective_configuration_sha256": observed,
-            }),
+            "OBSERVED_CONFIGURATION": json.dumps(
+                {
+                    "effective_configuration_preserved": preserved,
+                    "effective_configuration_sha256": observed,
+                }
+            ),
         },
         capture_output=True,
         text=True,

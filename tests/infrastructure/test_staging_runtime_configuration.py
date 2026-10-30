@@ -167,8 +167,8 @@ def _configuration_evidence_fixture(integration, billing, key_kind):
         STRIPE_WEBHOOK_SECRET="whsec_synthetic" if integration == "true" else key_kind,
     )
     configuration.update(_public_runtime_fixture())
-    fields = dict(
-        pair.split(":")
+    fields = {
+        pair.partition(":")[0]: pair.partition(":")[2]
         for pair in (
             "clerk_publishable:CLERK_DEPLOYMENT_PUBLISHABLE_KEY "
             "clerk_private:CLERK_PRIVATE_KEY zoom_client:ZOOM_CLIENT_ID "
@@ -177,24 +177,29 @@ def _configuration_evidence_fixture(integration, billing, key_kind):
             "stripe_account:STRIPE_ACCOUNT_ID stripe_key:STRIPE_SECRET_KEY "
             "stripe_webhook:STRIPE_WEBHOOK_SECRET"
         ).split()
-    )
+    }
     fingerprints = {
         label + "_sha256": hashlib.sha256(configuration[name].encode()).hexdigest()
         if configuration[name]
         else None
         for label, name in fields.items()
     }
-    expected = "sha256:" + hashlib.sha256(
-        json.dumps(fingerprints, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    expected = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(fingerprints, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     return configuration, expected
 
 
 def _public_runtime_fixture():
     contract = runpy.run_path(str(ROOT / "scripts/staging_release_contract.py"))
     runtime = dict.fromkeys(
-        contract["FLAGS"] | contract["COMPANION_FLAGS"]
-        | contract["PRESERVED_WORKFLOW_FLAGS"], "true",
+        contract["FLAGS"]
+        | contract["COMPANION_FLAGS"]
+        | contract["PRESERVED_WORKFLOW_FLAGS"],
+        "true",
     )
     runtime.update(
         SCRIBE_SERVICE_BASE_URL=(
@@ -212,7 +217,12 @@ def _public_runtime_fixture():
 
 
 def _configuration_evidence_result(
-    configuration, fingerprint, preservation, release="", *, reconcile=False,
+    configuration,
+    fingerprint,
+    preservation,
+    release="",
+    *,
+    reconcile=False,
 ):
     source = DEPLOY.read_text()
     start = source.index("\nbuild_configuration_evidence() {") + 1
@@ -225,7 +235,11 @@ def _configuration_evidence_result(
         end = source.index("\nif ! jq -e", start)
         reconciliation = source[start:end] + "\n"
     return subprocess.run(
-        ["bash", "-c", reconciliation + actual_function + "\nbuild_configuration_evidence"],
+        [
+            "bash",
+            "-c",
+            reconciliation + actual_function + "\nbuild_configuration_evidence",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -261,7 +275,10 @@ def test_full_preservation_retains_enabled_scribe_and_existing_test_billing(
         integration, billing, key_kind
     )
     result = _configuration_evidence_result(
-        configuration, fingerprint, "true", reconcile=True,
+        configuration,
+        fingerprint,
+        "true",
+        reconcile=True,
     )
     assert result.returncode == 0
     evidence = json.loads(result.stdout)
