@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from typing import TextIO
 from unittest.mock import patch
 
 import pytest
@@ -255,3 +256,149 @@ def test_every_nonexact_or_nonpublication_command_is_rejected(
 ) -> None:
     with pytest.raises(m.BoundAcrRefused):
         m.validate_argv(bound(command))
+
+
+def manifest_command(*, read: bool, digest: str) -> list[str]:
+    if read:
+        return bound(
+            [
+                "acr",
+                "manifest",
+                "show-metadata",
+                "--registry",
+                m.REGISTRY,
+                "--name",
+                f"{m.REPOSITORY}@{digest}",
+                "--output",
+                "json",
+            ]
+        )
+    return bound(
+        [
+            "acr",
+            "repository",
+            "update",
+            "--name",
+            m.REGISTRY,
+            "--image",
+            f"{m.REPOSITORY}@{digest}",
+            "--write-enabled",
+            "false",
+            "--delete-enabled",
+            "false",
+            "--only-show-errors",
+            "--output",
+            "none",
+        ]
+    )
+
+
+class CandidateTagCli:
+    def __init__(self, tag: dict[str, object], *, status: int = 0):
+        self.tag, self.status = tag, status
+        self.calls: list[list[str]] = []
+
+    def invoke(self, argv: list[str], *, out_file: TextIO | None = None) -> int:
+        self.calls.append(argv)
+        if out_file is not None:
+            out_file.write(json.dumps(self.tag))
+            return self.status
+        return 0
+
+
+def protected_tag(digest: str) -> dict[str, object]:
+    return {
+        "name": m.CANDIDATE,
+        "digest": digest,
+        "changeableAttributes": {
+            "writeEnabled": False,
+            "deleteEnabled": False,
+            "readEnabled": True,
+            "listEnabled": True,
+        },
+    }
+
+
+@pytest.mark.parametrize("read", (False, True))
+def test_manifest_lock_and_read_use_only_the_protected_candidate_digest(read):
+    digest = "sha256:" + "a" * 64
+    command = manifest_command(read=read, digest=digest)
+    cli = CandidateTagCli(protected_tag(digest))
+    assert m.validate_argv(command) == digest
+    assert m.invoke_bound_command(cli, command, m.CANDIDATE) == 0
+    assert cli.calls[0] == bound(
+        [
+            "acr",
+            "repository",
+            "show",
+            "--name",
+            m.REGISTRY,
+            "--image",
+            f"{m.REPOSITORY}:{m.CANDIDATE}",
+            "--output",
+            "json",
+        ]
+    )
+    assert cli.calls[1:] == [command]
+
+
+@pytest.mark.parametrize("read", (False, True))
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("digest", "sha256:" + "b" * 64),
+        ("name", "other-candidate"),
+        ("writeEnabled", True),
+        ("deleteEnabled", True),
+        ("readEnabled", False),
+        ("listEnabled", False),
+        ("deleteEnabled", "false"),
+    ),
+)
+def test_manifest_operation_is_not_invoked_for_an_unbound_or_unprotected_tag(
+    read, field, value
+):
+    digest = "sha256:" + "a" * 64
+    tag = protected_tag(digest)
+    if field in {"name", "digest"}:
+        tag[field] = value
+    else:
+        attributes = tag["changeableAttributes"]
+        assert isinstance(attributes, dict)
+        attributes[field] = value
+    cli = CandidateTagCli(tag)
+    with pytest.raises(m.BoundAcrRefused):
+        m.invoke_bound_command(
+            cli, manifest_command(read=read, digest=digest), m.CANDIDATE
+        )
+    assert len(cli.calls) == 1
+
+
+def test_failed_candidate_readback_prevents_manifest_mutation():
+    digest = "sha256:" + "a" * 64
+    cli = CandidateTagCli(protected_tag(digest), status=1)
+    with pytest.raises(m.BoundAcrRefused):
+        m.invoke_bound_command(
+            cli, manifest_command(read=False, digest=digest), m.CANDIDATE
+        )
+    assert len(cli.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("--name", "cosmaneuraprodregistry"),
+        ("--write-enabled", "true"),
+        ("--delete-enabled", "true"),
+        ("--image", "other/repository@sha256:" + "a" * 64),
+    ),
+)
+def test_manifest_admission_rejects_broader_registry_or_permission_changes(
+    field, value
+):
+    command = manifest_command(read=False, digest="sha256:" + "a" * 64)
+    command[command.index(field) + 1] = value
+    cli = CandidateTagCli(protected_tag("sha256:" + "a" * 64))
+    with pytest.raises(m.BoundAcrRefused):
+        m.invoke_bound_command(cli, command, m.CANDIDATE)
+    assert cli.calls == []
