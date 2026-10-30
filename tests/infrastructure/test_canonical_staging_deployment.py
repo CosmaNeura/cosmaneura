@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,94 @@ def _step(job: str, name: str) -> str:
     start = job.index(marker)
     end = job.find("\n      - ", start + len(marker))
     return job[start:] if end == -1 else job[start:end]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_status", "builder_runs", "trust_runs"),
+    [
+        ("success", 0, True, True),
+        ("source-mismatch", 1, False, False),
+        ("partial-producer-failure", 19, False, True),
+        ("empty-producer", 1, False, True),
+        ("builder-failure", 23, True, True),
+        ("cleanup-failure", 1, True, True),
+    ],
+)
+def test_actual_candidate_build_scopes_trust_and_stops_before_failed_producer(
+    tmp_path: Path,
+    mode: str,
+    expected_status: int,
+    builder_runs: bool,
+    trust_runs: bool,
+) -> None:
+    step = _step(
+        _job(_source(), "build"),
+        "Build exact candidate image without protected credentials",
+    )
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / ".envrc").write_text("fictional verified candidate environment\n")
+    temporary = tmp_path / "runner-temp"
+    temporary.mkdir()
+    calls = tmp_path / "calls.txt"
+    # Execute the actual workflow shell with only Git, direnv, just and Docker
+    # replaced by local functions. No real trust, image or credential is used.
+    fixtures = """
+git() {
+  case "$1" in
+    rev-parse) printf '%s\\n' "$CANDIDATE_SHA" ;;
+    status) return 0 ;;
+    cat-file)
+      if [ "$CASE_MODE" = source-mismatch ]; then
+        printf 'different source\\n'
+      else
+        printf 'fictional verified candidate environment\\n'
+      fi ;;
+    *) return 99 ;;
+  esac
+}
+direnv() {
+  printf 'direnv %s %s\\n' "$1" "$2" >> "$CALLS"
+  if [ "$1" = deny ] && [ "$CASE_MODE" = cleanup-failure ]; then
+    return 26
+  fi
+}
+just() {
+  if [ "$1" = _javascript_nixpacks_env_args ]; then
+    if [ "$CASE_MODE" = empty-producer ]; then return 0; fi
+    printf '%s\\0%s\\0' --env OPENAPI_JSON_PATH=openapi.json
+    if [ "$CASE_MODE" = partial-producer-failure ]; then return 19; fi
+  else
+    docker build .
+    if [ "$CASE_MODE" = builder-failure ]; then return 23; fi
+  fi
+}
+docker() { printf 'docker %s\\n' "$*" >> "$CALLS"; }
+"""
+    result = subprocess.run(
+        ["/bin/bash", "-c", fixtures + script],
+        cwd=candidate,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CANDIDATE_SHA": "a" * 40,
+            "CASE_MODE": mode,
+            "CALLS": str(calls),
+            "RUNNER_TEMP": str(temporary),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == expected_status, result.stderr
+    observed = calls.read_text().splitlines() if calls.exists() else []
+    assert ("docker build ." in observed) is builder_runs
+    trust_path = str(candidate / ".envrc")
+    assert (f"direnv allow {trust_path}" in observed) is trust_runs
+    assert (f"direnv deny {trust_path}" in observed) is trust_runs
+    assert list(temporary.iterdir()) == []
 
 
 def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() -> None:
