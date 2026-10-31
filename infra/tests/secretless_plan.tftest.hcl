@@ -750,6 +750,7 @@ run "scribe_native_workload_without_session_prep" {
       SCRIBE_NATIVE_WORKLOAD_ENABLED    = "true"
       SCRIBE_NATIVE_WORKLOAD_AUDIENCE   = "10000000-0000-4000-8000-000000000001"
       SCRIBE_NATIVE_WORKLOAD_CLIENT_ID  = "10000000-0000-4000-8000-000000000002"
+      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED = "false"
       AGENT_API_ENABLED                 = "false"
       AUTHORITY_KERNEL_ENABLED          = "false"
       SESSION_PREP_PROVIDER_ENABLED     = "false"
@@ -760,10 +761,55 @@ run "scribe_native_workload_without_session_prep" {
   }
   assert {
     condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
-      length([for entry in workload.template[0].container[0].env : entry.name if startswith(entry.name, "SCRIBE_NATIVE_WORKLOAD_")]) == 0
+      length([for entry in workload.template[0].container[0].env : entry.name if startswith(entry.name, "SCRIBE_NATIVE_WORKLOAD_") || entry.name == "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED"]) == 0
     ])
     error_message = "native workload identity and audience are API-only"
   }
+}
+
+run "scribe_native_provider_context_is_read_only_api_gate" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                  = true
+      audience                 = "10000000-0000-4000-8000-000000000001"
+      client_id                = "10000000-0000-4000-8000-000000000002"
+      provider_context_enabled = true
+    }
+  }
+  assert {
+    condition = alltrue([for name, value in {
+      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED = "true"
+      SCRIBE_ENCOUNTER_CREATION_ENABLED      = "false"
+      SCRIBE_CAPTURE_ENABLED                 = "false"
+      SESSION_PREP_PROVIDER_ENABLED          = "false"
+      AUTHORITY_KERNEL_ENABLED               = "false"
+    } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
+    error_message = "private context reads must not activate capture, creation, global authority or Session Prep"
+  }
+  assert {
+    condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      length([for entry in workload.template[0].container[0].env : entry.name if entry.name == "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED"]) == 0
+    ])
+    error_message = "private context reads are API-only"
+  }
+}
+
+run "reject_native_provider_context_without_workload" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                  = false
+      audience                 = ""
+      client_id                = ""
+      provider_context_enabled = true
+    }
+  }
+  expect_failures = [var.scribe_native_workload_rollout]
 }
 
 run "reject_native_workload_zero_caller" {

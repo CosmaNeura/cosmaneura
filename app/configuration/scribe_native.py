@@ -61,6 +61,15 @@ SCRIBE_NATIVE_CAPTURE_AUTH_SETTINGS = (
     else SCRIBE_CAPTURE_AUTH_SETTINGS
 )
 
+SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED = config(
+    "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED", default=False, cast=bool
+)
+if (
+    SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED
+    and not SCRIBE_NATIVE_WORKLOAD_AUTH_SETTINGS.enabled
+):
+    raise ValueError("scribe_native_provider_context_requires_native_workload")
+
 
 def native_authority_settings(
     settings: AuthorityKernelSettings,

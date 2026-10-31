@@ -168,6 +168,7 @@ variable "python_public_vars" {
       "SCRIBE_NATIVE_WORKLOAD_ENABLED",
       "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
       "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
+      "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
       "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
       "SCRIBE_CAPTURE_NOTES_ENABLED",
       "SCRIBE_CAPTURE_RECOVERY_ENABLED",
@@ -211,9 +212,10 @@ variable "session_prep_production_rollout" {
 variable "scribe_native_workload_rollout" {
   description = "Default-off singleton Scribe native-facade caller and Core audience. Does not enable Session Prep, global Agent API/Authority Kernel, capture, or encounter creation."
   type = object({
-    enabled   = bool
-    audience  = string
-    client_id = string
+    enabled                  = bool
+    audience                 = string
+    client_id                = string
+    provider_context_enabled = optional(bool, false)
   })
   nullable = false
   default = {
@@ -231,6 +233,10 @@ variable "scribe_native_workload_rollout" {
       var.scribe_native_workload_rollout.client_id != var.session_prep_production_rollout.sovereign_client_id
     )
     error_message = "native workload activation requires one canonical nonzero Core audience and distinct Scribe receiver client UUID"
+  }
+  validation {
+    condition     = !var.scribe_native_workload_rollout.provider_context_enabled || var.scribe_native_workload_rollout.enabled
+    error_message = "native provider context reads require the dedicated native workload boundary"
   }
 }
 
