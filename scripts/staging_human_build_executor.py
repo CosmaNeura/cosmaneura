@@ -29,7 +29,7 @@ import staging_human_build_inputs as inputs
 from staging_human_build_process import BuildProcesses, build_deadline
 
 DOCKER = Path("/opt/homebrew/Cellar/docker/29.7.2/bin/docker")
-BUILDX = Path("/opt/homebrew/Cellar/docker-buildx/0.37.0/bin/docker-buildx")
+BUILDX = Path("/opt/homebrew/Cellar/docker-buildx/0.38.1/bin/docker-buildx")
 # Keep the AMD64 release build isolated from long-lived development workloads.
 SOCKET = Path("/Users/jw/.colima/staging-release/docker.sock")
 TOOLS = {
@@ -38,8 +38,8 @@ TOOLS = {
         "adb33a6b552536d8219b2d8c32f3c44def98058e76e97c8031498471c8dfdac8",
     ),
     BUILDX: (
-        62298290,
-        "16b0610021197ff1c373bb60b1adfb757b41c170b7776fe748b26e7ef68026bd",
+        64727618,
+        "f231a1eadcde8f3e8d3dd70f86e4f9079fa42b393b4278b4b5c12d4aeb2b02cf",
     ),
     Path("/bin/ps"): (
         170432,
