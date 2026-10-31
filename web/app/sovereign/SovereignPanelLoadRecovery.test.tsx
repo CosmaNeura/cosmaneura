@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 
@@ -9,7 +10,10 @@ const authority = vi.hoisted(() => ({
   getClient: vi.fn(),
   getViewAsStatus: vi.fn(),
 }))
-vi.mock("~/configuration/clerk", () => ({ getClient: authority.getClient }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: authority.getClient,
+  useBrowserPrincipal: () => syntheticClerk.principal(authority.getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({
   getViewAsStatus: authority.getViewAsStatus,
 }))
@@ -41,10 +45,15 @@ async function fixture() {
     "https://provider-sovereign.example",
   )
   authority.getViewAsStatus.mockResolvedValue({ active: false })
-  authority.getClient.mockResolvedValue({
-    user: { id: "user_synthetic_load_recovery" },
-    session: { getToken: vi.fn(async () => "synthetic-platform-token") },
-  })
+  authority.getClient.mockResolvedValue(
+    syntheticClerk.bindResource({
+      user: { id: "user_synthetic_load_recovery" },
+      session: {
+        id: "session_synthetic_load_recovery",
+        getToken: vi.fn(async () => "synthetic-platform-token"),
+      },
+    }),
+  )
   const records: string[] = []
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -134,6 +143,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  syntheticClerk.bind(null)
   vi.clearAllMocks()
   delete window.CosmaNeuraPanel
 })
