@@ -20,12 +20,17 @@ or revoked/ambiguous authority cannot use this path. Only the missing record
 scope and its ordinary binding audit are appended, followed by full existing
 lineage validation. Reads do not reconcile; the existing exchange savepoint,
 unique binding/appointment constraints and Practice/Doctor/Patient fences remain.
+Before reconciliation, the existing verified practice-move cleanup retires only
+stale mapped provider memberships. It never creates or revives the current
+membership for this path; refused provenance rolls cleanup back in the existing
+optional-exchange savepoint.
 
 Qualification uses the existing real domain fixtures and normal PostgreSQL
 conftest: current same-practice pilot versus missing/unbound/foreign/future/
 changed-identity evidence; unchanged membership/BAA/onboarding/revocation
 denials; ordinary legacy exchange/repeat and actual binding-lock SQL; fixture,
-partial/imported/foreign/revoked/practice-change rejection. Source-only syntax
+partial/imported/foreign/revoked/practice-change rejection; stale mapped-member
+cleanup/repeat and invalid-origin savepoint rollback. Source-only syntax
 or mock checks do not substitute for these database cases or live isolation.
 
 Release remains receiver-first on a reviewed merged candidate with the existing

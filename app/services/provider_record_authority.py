@@ -744,29 +744,6 @@ def _ensure_provider_record_scope(
             AuthorityTenantMembership.tenant_id == tenant.id,
         )
     ).one_or_none()
-    if session_prep:
-        legacy_binding = session.exec(
-            select(AuthorityPersonBinding)
-            .outerjoin(
-                ProviderRecordAuthority,
-                col(ProviderRecordAuthority.binding_id) == AuthorityPersonBinding.id,
-            )
-            .where(
-                AuthorityPersonBinding.binding_ref == record_ref,
-                col(ProviderRecordAuthority.id).is_(None),
-            )
-        ).one_or_none()
-        if legacy_binding is not None:
-            return _reconcile_ordinary_session_prep_scope(
-                session=session,
-                binding=legacy_binding,
-                doctor=doctor,
-                practice=practice,
-                actor=actor,
-                appointment_id=appointment.id,
-                clerk_issuer=clerk_issuer,
-                clerk_subject=clerk_subject,
-            )
     if membership is not None and (
         membership.status != "active" or membership.membership_kind != "provider"
     ):
@@ -814,6 +791,29 @@ def _ensure_provider_record_scope(
                         f"{doctor.id}:{practice.id}:{tenant.id}".encode()
                     ).hexdigest(),
                 )
+            )
+    if session_prep:
+        legacy_binding = session.exec(
+            select(AuthorityPersonBinding)
+            .outerjoin(
+                ProviderRecordAuthority,
+                col(ProviderRecordAuthority.binding_id) == AuthorityPersonBinding.id,
+            )
+            .where(
+                AuthorityPersonBinding.binding_ref == record_ref,
+                col(ProviderRecordAuthority.id).is_(None),
+            )
+        ).one_or_none()
+        if legacy_binding is not None:
+            return _reconcile_ordinary_session_prep_scope(
+                session=session,
+                binding=legacy_binding,
+                doctor=doctor,
+                practice=practice,
+                actor=actor,
+                appointment_id=appointment.id,
+                clerk_issuer=clerk_issuer,
+                clerk_subject=clerk_subject,
             )
     if membership is None:
         session.add(

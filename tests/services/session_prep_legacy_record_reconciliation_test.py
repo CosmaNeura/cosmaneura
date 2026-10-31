@@ -132,6 +132,130 @@ def _context(token):
     )
 
 
+def _stale_mapped_member(actor):
+    other = DoctorFactory.build(onboarding_completed_at=datetime.now(UTC)).save()
+    prior_practice = provision_practice_in_force(other)
+    tenant = AuthorityTenant(status="active").save()
+    mapping = ProviderPracticeAuthority(
+        practice_id=prior_practice.id, tenant_id=tenant.id
+    ).save()
+    member = AuthorityTenantMembership(
+        actor_id=actor.id,
+        tenant_id=tenant.id,
+        membership_kind="provider",
+        status="active",
+    ).save()
+    return mapping, member
+
+
+def test_ordinary_legacy_exchange_retires_stale_mapped_membership_and_reuses_scope(
+    scope,
+):
+    doctor, _practice, _patient, appointment = scope
+    rows = _legacy(scope)
+    before = _unchanged(rows)
+    stale_mapping, stale_member = _stale_mapped_member(rows[0])
+    mapping_before = _unchanged((stale_mapping,))
+    current_member = AuthorityTenantMembership.one(
+        actor_id=rows[0].id, tenant_id=rows[2].id
+    )
+    current_before = _unchanged((current_member,))
+
+    context = _context(_token(doctor, str(appointment.id)))
+
+    assert "session-prep:read" in context.capabilities
+    assert context.session_prep_context_ref is not None
+    assert AuthorityTenantMembership.one(id=stale_member.id).status == "revoked"
+    assert _unchanged((current_member,)) == current_before
+    assert _unchanged(rows) == before
+    assert _unchanged((stale_mapping,)) == mapping_before
+    active_members = AuthorityTenantMembership.where(
+        AuthorityTenantMembership.actor_id == rows[0].id,
+        AuthorityTenantMembership.status == "active",
+    ).all()
+    assert [row.id for row in active_members] == [current_member.id]
+    assert (
+        ProviderRecordAuthority.one(appointment_id=appointment.id).binding_id
+        == rows[-1].id
+    )
+    assert (
+        _context(_token(doctor, str(appointment.id))).session_prep_context_ref
+        == context.session_prep_context_ref
+    )
+    assert ProviderRecordAuthority.count() == 1
+    for event_type in (
+        "authority.provider_membership.replaced",
+        "authority.provider_record.bound",
+    ):
+        assert (
+            AuthorityAuditEvent.where(
+                AuthorityAuditEvent.event_type == event_type
+            ).count()
+            == 1
+        )
+
+
+def test_invalid_legacy_exchange_rolls_back_stale_membership_cleanup_in_savepoint(
+    scope,
+):
+    doctor, _practice, _patient, appointment = scope
+    rows = _legacy(scope, "import")
+    _mapping, stale_member = _stale_mapped_member(rows[0])
+    before = _unchanged((*rows, stale_member))
+    statements = []
+    engine = SessionManager.get_instance().get_engine()
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        # Catch inside the managed transaction: these assertions must observe
+        # the optional exchange savepoint rollback, not an outer error rollback.
+        with get_session() as session:
+            with pytest.raises(authority.AuthorityRequestDeniedError):
+                authority.exchange_context_token(
+                    clerk_issuer=AUTHORITY_SETTINGS.clerk_issuer,
+                    clerk_subject=doctor.clerk_id,
+                    requested_surface="provider_assistant",
+                    record_ref=str(appointment.id),
+                    session=session,
+                    settings=AUTHORITY_SETTINGS,
+                )
+            assert session.is_active
+            assert (
+                session.get(
+                    AuthorityTenantMembership, stale_member.id, populate_existing=True
+                ).status
+                == "active"
+            )
+            assert _unchanged((*rows, stale_member)) == before
+            assert ProviderRecordAuthority.count() == 0
+            for event_type in (
+                "authority.provider_membership.replaced",
+                "authority.provider_record.bound",
+            ):
+                assert (
+                    AuthorityAuditEvent.where(
+                        AuthorityAuditEvent.event_type == event_type
+                    ).count()
+                    == 0
+                )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    savepoint = next(i for i, s in enumerate(statements) if s.startswith("SAVEPOINT "))
+    retired = next(
+        i
+        for i, s in enumerate(statements)
+        if s.startswith("UPDATE authority_tenant_membership")
+    )
+    rolled_back = next(
+        i for i, s in enumerate(statements) if s.startswith("ROLLBACK TO SAVEPOINT ")
+    )
+    assert savepoint < retired < rolled_back
+    assert _unchanged((*rows, stale_member)) == before
+
+
 def test_owned_ordinary_legacy_exchange_adds_only_scope_and_reuses_it(scope):
     doctor, practice, patient, appointment = scope
     rows = _legacy(scope)
