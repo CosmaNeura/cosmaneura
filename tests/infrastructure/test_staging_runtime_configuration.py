@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shlex
 import subprocess
 import sys
@@ -124,6 +125,195 @@ SCHEDULER_COMMAND=synthetic-scheduler-command
 def _environment() -> dict[str, str]:
     # Do not inherit credentials, application configuration, or provider hooks.
     return {"PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C"}
+
+
+def _configuration_evidence_fixture(integration, billing, key_kind):
+    flags = (
+        "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED "
+        "AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED "
+        "STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED "
+        "AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED"
+    ).split()
+    configuration = {name: "false" for name in flags}
+    configuration.update(
+        PYTHON_ENV="staging",
+        API_BASE_URL="https://staging-app.cosmaneura.com",
+        ZOOM_REDIRECT_URI="https://staging-app.cosmaneura.com/external/v1/zoom-oauth-callback",
+        ZOOM_SUCCESS_REDIRECT="https://staging-app.cosmaneura.com/settings",
+        COOKIE_DOMAIN="staging-app.cosmaneura.com",
+        RECALL_API_BASE="https://us-west-2.recall.ai/api/v1",
+        ALLOWED_HOST_LIST="staging-app.cosmaneura.com,staging-chat.cosmaneura.com",
+        INTAKE_CHAT_DOMAIN="staging-chat.cosmaneura.com",
+        AUTHORITY_CLERK_ISSUER="https://resolved-emu-53.clerk.accounts.dev",
+        DATABASE_URL=(
+            "postgresql://synthetic:synthetic@"
+            "cosmaneura-staging-postgres.postgres.database.azure.com:5432/"
+            "staging?sslmode=verify-full"
+        ),
+        CLERK_DEPLOYMENT_PUBLISHABLE_KEY="pk_test_synthetic",
+        CLERK_PRIVATE_KEY="sk_test_synthetic",
+        ZOOM_CLIENT_ID="synthetic-zoom-client",
+        ZOOM_CLIENT_SECRET="synthetic-zoom-secret",
+        ZOOM_SECRET_TOKEN="synthetic-zoom-token",
+        RECALL_API_KEY="synthetic-recall-api",
+        RECALL_WEBHOOK_SECRET="synthetic-recall-webhook",
+        SCRIBE_WORKFLOW_ENABLED="true",
+        AGENT_API_ENABLED="true",
+        AUTHORITY_KERNEL_ENABLED="true",
+        STRIPE_INTEGRATION_ENABLED=integration,
+        STRIPE_BILLING_ENABLED=billing,
+        STRIPE_ACCOUNT_ID="acct_synthetic" if integration == "true" else key_kind,
+        STRIPE_SECRET_KEY=key_kind + "synthetic" if integration == "true" else key_kind,
+        STRIPE_WEBHOOK_SECRET="whsec_synthetic" if integration == "true" else key_kind,
+    )
+    configuration.update(_public_runtime_fixture())
+    fields = {
+        pair.partition(":")[0]: pair.partition(":")[2]
+        for pair in (
+            "clerk_publishable:CLERK_DEPLOYMENT_PUBLISHABLE_KEY "
+            "clerk_private:CLERK_PRIVATE_KEY zoom_client:ZOOM_CLIENT_ID "
+            "zoom_secret:ZOOM_CLIENT_SECRET zoom_token:ZOOM_SECRET_TOKEN "
+            "recall_api:RECALL_API_KEY recall_webhook:RECALL_WEBHOOK_SECRET "
+            "stripe_account:STRIPE_ACCOUNT_ID stripe_key:STRIPE_SECRET_KEY "
+            "stripe_webhook:STRIPE_WEBHOOK_SECRET"
+        ).split()
+    }
+    fingerprints = {
+        label + "_sha256": hashlib.sha256(configuration[name].encode()).hexdigest()
+        if configuration[name]
+        else None
+        for label, name in fields.items()
+    }
+    expected = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(fingerprints, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    return configuration, expected
+
+
+def _public_runtime_fixture():
+    contract = runpy.run_path(str(ROOT / "scripts/staging_release_contract.py"))
+    runtime = dict.fromkeys(
+        contract["FLAGS"]
+        | contract["COMPANION_FLAGS"]
+        | contract["PRESERVED_WORKFLOW_FLAGS"],
+        "true",
+    )
+    runtime.update(
+        SCRIBE_SERVICE_BASE_URL=(
+            "https://cosmaneura-staging-scribe-api.internal."
+            "politesmoke-7989878f.northcentralus.azurecontainerapps.io"
+        ),
+        SCRIBE_SERVICE_SCOPE="api://57264fe1-6a4a-4946-8412-e0be18805977/.default",
+        SCRIBE_MANAGED_IDENTITY_CLIENT_ID="11111111-1111-1111-1111-111111111111",
+        AGENT_API_SCRIBE_RECEIVER_CLIENT_ID="22222222-2222-2222-2222-222222222222",
+        AGENT_API_COMPANION_CLIENT_ID="33333333-3333-3333-3333-333333333333",
+        SCRIBE_SERVICE_TIMEOUT_SECONDS="60",
+        SCRIBE_CAPTURE_UPLOAD_ORIGINS="https://syntheticstaging.blob.core.windows.net",
+    )
+    return runtime
+
+
+def _configuration_evidence_result(
+    configuration,
+    fingerprint,
+    preservation,
+    release="",
+    *,
+    reconcile=False,
+):
+    source = DEPLOY.read_text()
+    start = source.index("\nbuild_configuration_evidence() {") + 1
+    # The embedded Python contains its own unindented closing braces.
+    end = source.index("\n}\n\nif ! CONFIGURATION_EVIDENCE_JSON", start) + 2
+    actual_function = source[start:end]
+    reconciliation = ""
+    if reconcile:
+        start = source.index("# Keep the provider-v7 runtime gates")
+        end = source.index("\nif ! jq -e", start)
+        reconciliation = source[start:end] + "\n"
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            reconciliation + actual_function + "\nbuild_configuration_evidence",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **_environment(),
+            "PYTHON_BIN": sys.executable,
+            "ENV_JSON": json.dumps(configuration),
+            "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256": fingerprint,
+            "STAGING_PRESERVE_EFFECTIVE_CONFIGURATION": preservation,
+            "STAGING_RUNTIME_PUBLIC_JSON": json.dumps(_public_runtime_fixture()),
+            "ENABLE_PROVIDER_V7": "true",
+            "REPOSITORY_ROOT": str(ROOT),
+            "RELEASE_V2_JSON": release,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("integration", "billing", "key_kind"),
+    [
+        ("false", "false", None),
+        ("false", "false", ""),
+        ("true", "false", "sk_test_"),
+        ("true", "false", "rk_test_"),
+        ("true", "true", "sk_test_"),
+        ("true", "true", "rk_test_"),
+    ],
+)
+def test_full_preservation_retains_enabled_scribe_and_existing_test_billing(
+    integration, billing, key_kind
+):
+    configuration, fingerprint = _configuration_evidence_fixture(
+        integration, billing, key_kind
+    )
+    result = _configuration_evidence_result(
+        configuration,
+        fingerprint,
+        "true",
+        reconcile=True,
+    )
+    assert result.returncode == 0
+    evidence = json.loads(result.stdout)
+    assert evidence["flags"]["SCRIBE_WORKFLOW_ENABLED"] == "true"
+    assert evidence["flags"]["STRIPE_INTEGRATION_ENABLED"] == integration
+    assert evidence["flags"]["STRIPE_BILLING_ENABLED"] == billing
+    assert evidence["identity_fingerprint_set_sha256"] == fingerprint
+    assert evidence["deployment_blockers"] == []
+    assert evidence["flags"]["AGENT_API_ENABLED"] == "true"
+    assert "synthetic-recall-api" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("preservation", "release", "scribe", "accepted"),
+    [
+        ("false", "", "false", True),
+        ("false", "", "true", False),
+        ("true", "", "false", False),
+        ("false", "v2", "true", True),
+        ("false", "v2", "false", False),
+    ],
+)
+def test_configuration_guard_retains_legacy_and_v2_scribe_boundaries(
+    preservation, release, scribe, accepted
+):
+    configuration, fingerprint = _configuration_evidence_fixture(
+        "true", "false", "sk_test_"
+    )
+    configuration["SCRIBE_WORKFLOW_ENABLED"] = scribe
+    result = _configuration_evidence_result(
+        configuration, fingerprint, preservation, release
+    )
+    assert (result.returncode == 0) == accepted
+    if not accepted:
+        assert result.stderr == "Staging configuration evidence validation failed.\n"
 
 
 def _cli(mode: str, payload: dict | str) -> subprocess.CompletedProcess[str]:

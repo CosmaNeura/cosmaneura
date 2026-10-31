@@ -718,9 +718,9 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     for forbidden in ("docker build", "docker push", "az acr import", "az acr repository delete", "az containerapp update", "az containerapp secret", "az containerapp ingress", "revision deactivate", "alembic upgrade"):
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
-    # Current executor retains reviewed readiness/traffic bindings and preserves
-    # five active workflow flags while retiring the legacy Session Prep cohort,
-    # and drops the preserved Recall input after protected resolution.
-    assert hashlib.sha256(deploy).hexdigest() == "8218a426edf2b59dfec23a73a5a875f8db4f608a554ee6fb863c6fc6fdcc2b5a"
+    # The reviewed executor retains readiness/traffic bindings and preserves the
+    # founder-selected effective runtime when the canonical preservation gate is
+    # selected; protected Recall resolution and ordinary reconciliation remain.
+    assert hashlib.sha256(deploy).hexdigest() == "f52d08918c03060a7d74d540af69c849773d43a3a3d5946de1e662075542e5bd"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on

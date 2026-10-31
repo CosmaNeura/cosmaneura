@@ -19,6 +19,7 @@ EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
 STAGING_PRESERVE_EFFECTIVE_CONFIGURATION="${STAGING_PRESERVE_EFFECTIVE_CONFIGURATION:-false}"
 EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256="${EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256:-}"
+STAGING_RUNTIME_PUBLIC_JSON="${STAGING_RUNTIME_PUBLIC_JSON:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
@@ -387,6 +388,14 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 fi
 if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
 	ENV_JSON=$(jq -c --argjson release "$RELEASE_V2_JSON" '. + $release.runtime_public' <<<"$ENV_JSON") || exit 1
+elif [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+	# Canonical service-principal preservation receives only the reviewed public
+	# group. The complete hash and live comparisons still bind every owned value.
+	STAGING_RUNTIME_PUBLIC_JSON=$(printf '%s' "$STAGING_RUNTIME_PUBLIC_JSON" |
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+			--validate-runtime-public) || exit 1
+	ENV_JSON=$(jq -c --argjson runtime "$STAGING_RUNTIME_PUBLIC_JSON" \
+		'. + $runtime' <<<"$ENV_JSON") || exit 1
 fi
 if ! jq -e '
 	.SOVEREIGN_RECORD_GRANT_SECRET |
@@ -431,7 +440,7 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
 forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
-if sys.argv[2] == "v2":
+if sys.argv[2] == "v2" or sys.argv[3] == "true":
     forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
     if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
         fail()
@@ -485,7 +494,7 @@ evidence = {
     "deployment_blockers": blockers,
 }
 print(json.dumps(evidence, separators=(",", ":"), sort_keys=True))
-' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" <<<"$ENV_JSON"
+' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" <<<"$ENV_JSON"
 }
 
 if ! CONFIGURATION_EVIDENCE_JSON=$(build_configuration_evidence); then
@@ -657,6 +666,11 @@ RUNTIME_CONTRACTS_JSON=""
 if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
 	RUNTIME_CONTRACTS_JSON=$(runtime_contracts_json) || exit 1
 	verify_effective_configuration_fingerprint || exit 1
+	CONFIGURATION_EVIDENCE_JSON=$(jq -c \
+		--arg fingerprint "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" \
+		'. + {effective_configuration_sha256: $fingerprint, effective_configuration_preserved: true}' \
+		<<<"$CONFIGURATION_EVIDENCE_JSON") || exit 1
+	emit_github_output configuration_evidence "$CONFIGURATION_EVIDENCE_JSON" || exit 1
 fi
 
 if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then

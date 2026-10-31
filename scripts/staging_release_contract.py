@@ -294,6 +294,13 @@ def verify_recovery(
 
 
 def main(argv):
+    if argv == ["--validate-runtime-public"]:
+        raw = sys.stdin.buffer.read(65537)
+        require(0 < len(raw) <= 65536)
+        runtime = json.loads(raw, object_pairs_hook=unique)
+        validate_runtime(runtime)
+        print(json.dumps(runtime, sort_keys=True, separators=(",", ":")))
+        return
     require(len(argv) in {3, 5, 7})
     plan = bound_json(argv[1], argv[2])
     if argv[0] == "--reuse-publication":

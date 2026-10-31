@@ -30,6 +30,10 @@ export default [
       ]),
     ]),
     route("/settings", "routes/settings.tsx"),
+    route(
+      "/session-prep/citations/:citation_ref",
+      "routes/session-prep/citation.tsx",
+    ),
   ]),
   // public, unauthenticated, intake chat
   route("chat/intake/:id", "routes/chat/intake.tsx"),
