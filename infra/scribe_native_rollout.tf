@@ -6,6 +6,7 @@ locals {
     SCRIBE_NATIVE_WORKLOAD_ENABLED              = tostring(var.scribe_native_workload_rollout.enabled)
     SCRIBE_NATIVE_WORKLOAD_AUDIENCE             = var.scribe_native_workload_rollout.audience
     SCRIBE_NATIVE_WORKLOAD_CLIENT_ID            = var.scribe_native_workload_rollout.client_id
+    SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED      = tostring(var.scribe_native_workload_rollout.provider_context_enabled)
     SCRIBE_CAPTURE_ENABLED                      = tostring(var.scribe_native_production_rollout.capture_enabled)
     SCRIBE_CAPTURE_LONG_VISITS_ENABLED          = tostring(var.scribe_native_production_rollout.capture_long_visits_enabled)
     SCRIBE_CAPTURE_NOTES_ENABLED                = tostring(var.scribe_native_production_rollout.capture_notes_enabled)
