@@ -511,7 +511,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
-          python3 scripts/verify_staging_candidate.py
+          python3 scripts/verify_staging_candidate.py --reverify
 
       - name: Resolve allowlisted public staging frontend configuration
         id: resolve
@@ -752,7 +752,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
-          python3 scripts/verify_staging_candidate.py
+          python3 scripts/verify_staging_candidate.py --reverify
 
       - name: Validate staging publication controls
         id: staging_contract
@@ -855,7 +855,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          python3 scripts/verify_staging_candidate.py
+          python3 scripts/verify_staging_candidate.py --reverify
 
       - name: Log in to staging registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -1094,7 +1094,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
-          python3 scripts/verify_staging_candidate.py
+          python3 scripts/verify_staging_candidate.py --reverify
 
       - name: Validate exact staging identity inputs and release controls
         env:
@@ -1262,7 +1262,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          python3 scripts/verify_staging_candidate.py
+          python3 scripts/verify_staging_candidate.py --reverify
 
       - name: Deploy candidate digest with protected-master controls
         id: deploy
