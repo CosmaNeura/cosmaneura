@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import {
   SOVEREIGN_PANEL_ASSET_PATH,
@@ -13,7 +14,10 @@ import {
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { act, render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  useBrowserPrincipal: () => syntheticClerk.principal(getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 afterEach(() => {
@@ -42,13 +46,18 @@ it("loads the pinned dashboard asset and completes preparation without a second 
     actor: null,
     target: null,
   })
-  vi.mocked(getClient).mockResolvedValue({
-    loaded: true,
-    load: async () => {},
-    user: { id: "user_provider_test" },
-    session: { getToken: async () => "synthetic-platform-token" },
-    redirectToSignIn: async () => {},
-  })
+  vi.mocked(getClient).mockResolvedValue(
+    syntheticClerk.bindResource({
+      loaded: true,
+      load: async () => {},
+      user: { id: "user_provider_test" },
+      session: {
+        id: "session_provider_test",
+        getToken: async () => "synthetic-platform-token",
+      },
+      redirectToSignIn: async () => {},
+    }),
+  )
   const token = `mctx_${"a".repeat(48)}`
   const turns: string[] = []
   let exchanges = 0
