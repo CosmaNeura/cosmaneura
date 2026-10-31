@@ -13,7 +13,13 @@ from starlette.types import Message, Receive, Scope, Send
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
-from app.configuration.scribe_native import native_authority_settings
+from app.configuration.scribe_native import (
+    native_authority_settings,
+    native_existing_patient_visits_enabled,
+)
+from app.configuration.scribe_native import (
+    native_encounter_settings as encounter_settings,
+)
 from app.routes.authority_errors import agent_problem_response
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
@@ -37,10 +43,10 @@ from app.routes.scribe_capture import (
     get_capture_settings,
 )
 from app.routes.scribe_capture_deadline import CaptureDeadlineRoute
-from app.routes.scribe_encounters import encounter_settings
 from app.services import authority
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_gateway as gateway
+from app.services import scribe_capture_notes as notes
 from app.services.companion_records import RecordUnavailable
 from app.services.provider_record_authority import ProviderRecordScopeDenied
 from app.services.scribe_capture_deadline import (
@@ -48,6 +54,7 @@ from app.services.scribe_capture_deadline import (
     check_async_capture_deadline,
 )
 from app.services.scribe_native_capture import (
+    WORKFLOW_ACTIONS,
     NativeCaptureRequest,
     execute_native_capture,
 )
@@ -189,7 +196,18 @@ async def _body(request: Request) -> tuple[NativeCaptureRequest, str]:
     raw = json.loads(
         bytes(body), object_pairs_hook=_closed_object, parse_constant=invalid
     )
-    return NativeCaptureRequest.model_validate(raw), headers["idempotency-key"]
+    data = NativeCaptureRequest.model_validate(raw)
+    key = headers["idempotency-key"]
+    if data.action == "workflow_notes":
+        if len(body) > notes.MAX_MODEL_BYTES + 8192:
+            raise ValueError
+        assert data.note_request is not None
+        if (
+            data.note_request.edit is not None
+            and str(data.note_request.edit.client_key) != key
+        ):
+            raise ValueError
+    return data, key
 
 
 @native_capture_api_app.post(PATH, response_model=None, include_in_schema=False)
@@ -214,6 +232,8 @@ async def native_capture(
         data, key = await _body(request)
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _failure(422)
+    if data.action in WORKFLOW_ACTIONS and not native_existing_patient_visits_enabled():
+        return _failure(503)
     if ledger := current_ledger():
         ledger.describe_request(data.action)
     client = None
@@ -255,7 +275,7 @@ async def native_capture(
                 "X-Cosmaneura-Prepared-Source-Start-Version": "1",
             },
         )
-    except authority.AuthorityKernelDisabledError:
+    except (authority.AuthorityKernelDisabledError, notes.CaptureNoteDisabled):
         return _failure(503)
     except (
         authority.AuthorityKernelError,
@@ -270,11 +290,13 @@ async def native_capture(
         admission.AdmissionConflict,
         gateway.CaptureOperationUnavailable,
         gateway.CaptureReceiptInvalid,
+        notes.CaptureNoteConflict,
     ):
         return _failure(409)
     except (
         admission.AdmissionError,
         gateway.CaptureOperationUnconfirmed,
+        notes.CaptureNoteUnconfirmed,
         RecordUnavailable,
         SQLAlchemyError,
         ValueError,

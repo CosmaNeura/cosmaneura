@@ -4,10 +4,11 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, field_validator, model_serializer
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
+from app.configuration.scribe_native import native_visit_actions_v2_enabled
 from app.services import authority, scribe_encounters
 from app.services.companion_appointment_setup import _current_provider
 from app.services.companion_encounter_contract import ConnectionSnapshot
@@ -31,6 +32,14 @@ class ProviderContextRequest(Closed):
     # Neither action accepts renderer-supplied authority identifiers.
     action: Literal["connection", "catalog"]
     request_nonce: UUID
+    include_native_visit_actions_v2: Literal[True] | None = None
+
+    @field_validator("include_native_visit_actions_v2", mode="before")
+    @classmethod
+    def explicit_visit_capability(cls, value):
+        if value is not True:
+            raise ValueError("native_visit_capability_opt_in_required")
+        return value
 
 
 class ProviderContextResponse(Closed):
@@ -40,6 +49,14 @@ class ProviderContextResponse(Closed):
     checked_at: AwareDatetime
     connection: ConnectionSnapshot = Field(repr=False)
     catalog: dict[str, object] | None = Field(default=None, repr=False)
+    native_visit_actions_v2: bool | None = Field(default=None, strict=True)
+
+    @model_serializer(mode="wrap")
+    def compatible_serialization(self, handler):
+        value = handler(self)
+        if self.native_visit_actions_v2 is None:
+            value.pop("native_visit_actions_v2", None)
+        return value
 
 
 def _discovered_tenant(session: Session, *, issuer: str, subject: str) -> str:
@@ -169,4 +186,9 @@ def read_provider_context(
         checked_at=datetime.now(UTC),
         connection=connection,
         catalog=catalog,
+        native_visit_actions_v2=(
+            native_visit_actions_v2_enabled()
+            if request.include_native_visit_actions_v2 is True
+            else None
+        ),
     )

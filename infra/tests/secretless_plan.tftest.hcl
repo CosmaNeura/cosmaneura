@@ -145,6 +145,7 @@ override_data {
       EMAIL_FROM_ADDRESS                         = "noreply@example.invalid"
       ENCRYPTION_KEY                             = "not-a-secret"
       ENTRA_TENANT_ID                            = "00000000-0000-0000-0000-000000000000"
+      SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED     = "false"
       INTAKE_CHAT_DOMAIN                         = "example.invalid"
       LOG_LEVEL                                  = "info"
       PORT                                       = "80"
@@ -747,15 +748,17 @@ run "scribe_native_workload_without_session_prep" {
   }
   assert {
     condition = alltrue([for name, value in {
-      SCRIBE_NATIVE_WORKLOAD_ENABLED         = "true"
-      SCRIBE_NATIVE_WORKLOAD_AUDIENCE        = "10000000-0000-4000-8000-000000000001"
-      SCRIBE_NATIVE_WORKLOAD_CLIENT_ID       = "10000000-0000-4000-8000-000000000002"
-      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED = "false"
-      AGENT_API_ENABLED                      = "false"
-      AUTHORITY_KERNEL_ENABLED               = "false"
-      SESSION_PREP_PROVIDER_ENABLED          = "false"
-      SCRIBE_CAPTURE_ENABLED                 = "false"
-      SCRIBE_ENCOUNTER_CREATION_ENABLED      = "false"
+      SCRIBE_NATIVE_WORKLOAD_ENABLED                = "true"
+      SCRIBE_NATIVE_WORKLOAD_AUDIENCE               = "10000000-0000-4000-8000-000000000001"
+      SCRIBE_NATIVE_WORKLOAD_CLIENT_ID              = "10000000-0000-4000-8000-000000000002"
+      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED        = "false"
+      SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED = "false"
+      SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED        = "false"
+      AGENT_API_ENABLED                             = "false"
+      AUTHORITY_KERNEL_ENABLED                      = "false"
+      SESSION_PREP_PROVIDER_ENABLED                 = "false"
+      SCRIBE_CAPTURE_ENABLED                        = "false"
+      SCRIBE_ENCOUNTER_CREATION_ENABLED             = "false"
     } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
     error_message = "native singleton configuration must not enable Session Prep, global Agent API/Authority Kernel or capture/encounters"
   }
@@ -781,11 +784,12 @@ run "scribe_native_provider_context_is_read_only_api_gate" {
   }
   assert {
     condition = alltrue([for name, value in {
-      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED = "true"
-      SCRIBE_ENCOUNTER_CREATION_ENABLED      = "false"
-      SCRIBE_CAPTURE_ENABLED                 = "false"
-      SESSION_PREP_PROVIDER_ENABLED          = "false"
-      AUTHORITY_KERNEL_ENABLED               = "false"
+      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED        = "true"
+      SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED = "false"
+      SCRIBE_ENCOUNTER_CREATION_ENABLED             = "false"
+      SCRIBE_CAPTURE_ENABLED                        = "false"
+      SESSION_PREP_PROVIDER_ENABLED                 = "false"
+      AUTHORITY_KERNEL_ENABLED                      = "false"
     } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
     error_message = "private context reads must not activate capture, creation, global authority or Session Prep"
   }
@@ -834,4 +838,138 @@ run "reject_native_workload_shadow" {
     python_api_only_secret_vars                    = ["SCRIBE_NATIVE_WORKLOAD_CLIENT_ID"]
   }
   expect_failures = [azurerm_container_app.app]
+}
+
+
+run "scribe_native_existing_patient_visits_require_context" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "11111111-1111-4111-8111-111111111111"
+      client_id                       = "22222222-2222-4222-8222-222222222222"
+      existing_patient_visits_enabled = true
+    }
+  }
+  expect_failures = [var.scribe_native_workload_rollout]
+}
+
+run "scribe_native_existing_patient_visits_do_not_enable_global_gates" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "11111111-1111-4111-8111-111111111111"
+      client_id                       = "22222222-2222-4222-8222-222222222222"
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = true
+    }
+  }
+  assert {
+    condition     = lookup({ for entry in azurerm_container_app.app.template[0].container[0].env : entry.name => entry.value }, "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED", "") == "true"
+    error_message = "Existing-patient gate must be projected to the existing API."
+  }
+  assert {
+    condition     = alltrue([for name in ["AUTHORITY_KERNEL_ENABLED", "AGENT_API_ENABLED", "SESSION_PREP_PROVIDER_ENABLED", "SCRIBE_ENCOUNTER_CREATION_ENABLED", "SCRIBE_CAPTURE_ENABLED"] : lookup({ for entry in azurerm_container_app.app.template[0].container[0].env : entry.name => entry.value }, name, "false") == "false"])
+    error_message = "Native visit selection must not enable other global or capture gates."
+  }
+  assert {
+    condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      length([for entry in workload.template[0].container[0].env : entry.name if entry.name == "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED"]) == 0
+    ])
+    error_message = "The native visit gate is API-only."
+  }
+}
+
+run "scribe_native_v2_full_actions_use_existing_api_only" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "11111111-1111-4111-8111-111111111111"
+      client_id                       = "22222222-2222-4222-8222-222222222222"
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = true
+      native_visit_actions_v2_enabled = true
+    }
+  }
+  assert {
+    condition     = one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"]) == "true"
+    error_message = "The typed full-v2 gate must reach only the existing Core API."
+  }
+  assert {
+    condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      length([for entry in workload.template[0].container[0].env : entry.name if entry.name == "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"]) == 0
+    ])
+    error_message = "Full-v2 selection must not enable a worker or scheduler gate."
+  }
+  assert {
+    condition     = alltrue([for name in ["AUTHORITY_KERNEL_ENABLED", "AGENT_API_ENABLED", "SESSION_PREP_PROVIDER_ENABLED", "SCRIBE_ENCOUNTER_CREATION_ENABLED", "SCRIBE_CAPTURE_ENABLED", "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"] : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == "false"])
+    error_message = "Full native visit selection must not change separate global, capture or Zoom controls."
+  }
+}
+
+run "scribe_native_v2_full_actions_require_existing_visits" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "11111111-1111-4111-8111-111111111111"
+      client_id                       = "22222222-2222-4222-8222-222222222222"
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = false
+      native_visit_actions_v2_enabled = true
+    }
+  }
+  expect_failures = [var.scribe_native_workload_rollout]
+}
+
+run "scribe_native_v2_full_actions_reject_public_shadow" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_public_vars                             = ["SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"]
+  }
+  expect_failures = [var.python_public_vars]
+}
+
+run "scribe_bundle_default_keeps_three_containers_dark" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+  }
+  assert {
+    condition     = local.scribe_bundle_api_values == { SCRIBE_BUNDLE_API_ENABLED = "false" } && local.scribe_bundle_worker_values == { SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = "false" } && local.scribe_bundle_scheduler_values == local.scribe_bundle_worker_values && length(data.azurerm_user_assigned_identity.scribe_bundle_translation) == 0 && length(azurerm_container_app.worker.identity[0].identity_ids) == 1
+    error_message = "default bundle must not attach an identity, stage configuration or activate any of the three Core containers"
+  }
+}
+
+run "scribe_bundle_does_not_shadow_generic_settings" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_api_only_secret_vars                    = ["SCRIBE_BUNDLE_API_ENABLED"]
+  }
+  expect_failures = [azurerm_container_app.app]
+}
+
+run "scribe_bundle_worker_requires_separate_identity_preparation" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_core_bundle                             = { captured_worker_enabled = true }
+  }
+  expect_failures = [var.scribe_core_bundle]
 }
