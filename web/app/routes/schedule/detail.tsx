@@ -107,6 +107,13 @@ function CaptureAuthorization({
           linked visit for any partial notes. You can continue with Scribe after
           confirming consent. The bot will not restart automatically.
         </p>
+        {meeting.appointment_id && (
+          <Button variant="outline" asChild className="mt-3 w-full sm:w-auto">
+            <Link to={href("/notes/:id", { id: meeting.appointment_id })}>
+              Open linked visit
+            </Link>
+          </Button>
+        )}
       </div>
     )
   }
