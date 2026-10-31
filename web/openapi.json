@@ -207,6 +207,64 @@
         ]
       }
     },
+    "/internal/v1/session-prep/citations/{final_ref}/{ordinal}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Retained Session Prep Citation",
+        "operationId": "retained_session_prep_citation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "final_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Final Ref"
+            }
+          },
+          {
+            "name": "ordinal",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 64,
+              "minimum": 1,
+              "title": "Ordinal"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetainedCitationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/notes/revisions/{note_id}/source-correction": {
       "post": {
         "tags": [
@@ -4710,6 +4768,47 @@
         ],
         "title": "DailyVolumeRow"
       },
+      "DisplayCitation": {
+        "properties": {
+          "citation_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._~-]{8,160}$",
+            "title": "Citation Ref"
+          },
+          "ordinal": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Ordinal"
+          },
+          "source_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Source At"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "section": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Section"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "citation_ref",
+          "ordinal",
+          "source_at",
+          "reviewed_at",
+          "section"
+        ],
+        "title": "DisplayCitation"
+      },
       "DoctorNoteSchema": {
         "properties": {
           "id": {
@@ -7360,6 +7459,63 @@
           "source"
         ],
         "title": "ResourceLink"
+      },
+      "RetainedCitationResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0.0",
+            "title": "Schema Version"
+          },
+          "citation": {
+            "$ref": "#/components/schemas/DisplayCitation"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Sha256"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/RetainedCitationSection"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Sections"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "citation",
+          "content_sha256",
+          "sections"
+        ],
+        "title": "RetainedCitationResponse"
+      },
+      "RetainedCitationSection": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 18000,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "text"
+        ],
+        "title": "RetainedCitationSection"
       },
       "ReviewNoteForSessionPrepRequest": {
         "properties": {

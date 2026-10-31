@@ -88,7 +88,8 @@ describe("Sovereign panel terminal authorization integration", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
-        if (url.endsWith("/embed/history")) return json(emptyHistory())
+        if (url.endsWith("/embed/history-retained"))
+          return json({ ...emptyHistory(), schema_version: "1.2.0" })
         if (url === "/embed/v1/context-tokens/exchange") {
           exchanges += 1
           return json(contextTokenResponse(firstToken), 201)

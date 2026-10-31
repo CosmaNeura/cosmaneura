@@ -120,6 +120,15 @@ const historyEnvelope = z
     return position === value.history.messages.length
   })
 
+// Shared structural validation only. Citation display uses a separate read lane.
+export const sovereignHistoryMessageSchema = message
+export const sovereignHistoryTurnSchema = turn
+export function parseSovereignHistory(value: unknown): SovereignHistory {
+  const parsed = historyEnvelope.safeParse(value)
+  if (!parsed.success) throw new Error("Recent conversation is unavailable")
+  return parsed.data
+}
+
 export type SovereignHistory = z.infer<typeof historyEnvelope>
 export class HistoryAccessDeniedError extends Error {}
 

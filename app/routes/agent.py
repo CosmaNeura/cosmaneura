@@ -26,6 +26,7 @@ import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
+import app.services.authority_conversation_display as retained_history
 import app.services.authority_conversation_read as history
 import app.services.authority_usage
 import app.services.provider_chat_admission as admission
@@ -1805,7 +1806,15 @@ async def report_model_usage_event(
 
 
 @agent_api_app.post(
+    "/conversation-turns/read-retained",
+    response_model=retained_history.RetainedConversationReadResponse,
+)
+@agent_api_app.post(
     "/conversation-turns/read", response_model=history.ConversationReadResponse
+)
+@agent_api_app.post(
+    "/conversation-turns/read-with-citations",
+    response_model=retained_history.ConversationCitationReadResponse,
 )
 async def read_conversation_turns(
     request: Request,
@@ -1847,7 +1856,14 @@ async def read_conversation_turns(
             if len(chunk) > 8192 - len(raw):
                 return problem("VALIDATION_FAILED", 422)
             raw.extend(chunk)
-        body = history.ConversationReadRequest.model_validate(
+        request_model = (
+            retained_history.RetainedConversationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-retained")
+            else retained_history.ConversationCitationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-with-citations")
+            else history.ConversationReadRequest
+        )
+        body = request_model.model_validate(
             json.loads(raw, object_pairs_hook=_closed_json_object)
         )
     except (ValueError, UnicodeDecodeError, RecursionError):
@@ -1855,6 +1871,22 @@ async def read_conversation_turns(
 
     def read_in_session():
         with get_session() as managed:
+            if isinstance(body, retained_history.RetainedConversationReadRequest):
+                return retained_history.read_retained_conversation(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
+            if isinstance(body, retained_history.ConversationCitationReadRequest):
+                return retained_history.read_current_with_citations(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
             return history.read_conversation(
                 session=cast(Session, managed),
                 workload_client_id=principal.client_id,
