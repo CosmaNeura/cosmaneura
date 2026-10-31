@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { citationCoordinates, parseRetainedCitation } from "./RetainedCitation"
 import { retainedFixture } from "./RetainedCitation.fixture"
-import {
-  citationFixture,
-  finalReference,
-} from "./SovereignCitationDisplay.fixture"
+import { finalReference } from "./SovereignCitationDisplay.fixture"
 
 describe("exact retained citation bytes", () => {
   it("checks the original ordered Unicode sections and accepted ordinal", async () => {
