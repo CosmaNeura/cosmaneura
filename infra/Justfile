@@ -66,9 +66,11 @@ azure_open:
 tofu_init:
 	tofu init
 
-# init each run to make sure latest package versions are pulled
+# Production apply must consume the founder-reviewed, current-source saved plan.
+# A bare local apply could consume an old saved plan and revert runtime auth.
 tofu_apply:
-	tofu {{TOFU_GLOBAL_OPTIONS}} apply
+	@echo "Production applies require the reviewed Terraform Production Plan and founder-only Terraform Apply workflows."
+	@exit 1
 
 # additional azure configuration that cannot be done via tf
 azure_configure:
