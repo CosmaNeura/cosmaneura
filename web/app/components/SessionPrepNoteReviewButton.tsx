@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -16,6 +16,10 @@ export function SessionPrepNoteReviewButton({
   const [reviewed, setReviewed] = useState(Boolean(review.reviewed_at))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setReviewed(Boolean(review.reviewed_at))
+  }, [review])
 
   async function markReviewed() {
     if (pending || reviewed) return
