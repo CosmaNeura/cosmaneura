@@ -91,7 +91,7 @@ def _context(**overrides: str) -> CandidateContext:
         "triggering_actor": "JohnClem",
     }
     values.update(overrides)
-    return CandidateContext(**values)
+    return CandidateContext(**values, reverify=False)
 
 
 def _stdout(command: list[str]) -> str:
