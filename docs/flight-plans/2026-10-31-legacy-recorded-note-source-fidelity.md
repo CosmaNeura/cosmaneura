@@ -15,6 +15,8 @@ Indexed capture keeps its existing rendered role text and grounding; its effecti
 - Fifteen new pure real-function cases exercise four accepted185 indexed prompt baselines, complete synthetic source inputs, terminology, absent/stated purposes, template/example/custom constraints and fake-SDK result/parameter preservation.
 - Seven existing augmentation cases verify recording duration does not become care-time evidence and that augmentation adds only the AI-assistance disclosure.
 - The historical default numbered block stays intact in the existing test as a baseline; only its inferred-reason rule is replaced in the expected new prompt.
+- Three existing terminology tests now assert recorded-draft wording instead of model participation. Their actual bodies passed all twelve assertions with real prompt/terminology functions and explicit in-memory model substitutes; this does not establish DB-backed integration.
+- Both existing optional live plan-purpose evaluations now compare against their recorded transcripts. Their fixtures, generation calls and skip gates are unchanged; live evaluations were not run.
 - These tests use fixed repository AST functions and synthetic settings/fake SDK. No application, DB, external model or actual patient authority is exercised. Normal existing DB-backed customization tests and required public CI remain separate.
 - Prompt instructions do not guarantee hallucinations are eliminated. Current fictional drafts still need actual supported correction and review; six Session Prep answers, citation opening/persistence and live authority acceptance are separate gates.
 
@@ -22,4 +24,4 @@ Indexed capture keeps its existing rendered role text and grounding; its effecti
 
 Publish only after independent final-source review and source authorization, then normal required CI. Deploy a reviewed merged candidate through existing release controls after actual package/desired-configuration/clinical gates; this plan authorizes no runtime action. No migration or configuration change is required.
 
-Recover by reverting this complete four-file source outcome and releasing a reviewed candidate through the same controls. Existing notes/review snapshots remain immutable; neither rollout nor rollback silently regenerates, repairs or marks historical/current drafts reviewed. A source rollback restores the prior prompt limitation and must be reported honestly.
+Recover by reverting this complete six-file source outcome, including the matching existing-test updates, and releasing a reviewed candidate through the same controls. Existing notes/review snapshots remain immutable; neither rollout nor rollback silently regenerates, repairs or marks historical/current drafts reviewed. A source rollback restores the prior prompt limitation and must be reported honestly.
