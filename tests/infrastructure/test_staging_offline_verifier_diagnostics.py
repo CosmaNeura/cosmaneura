@@ -379,9 +379,27 @@ def test_only_fixed_probe_consumer_and_no_policy_wiring() -> None:
     assert b"staging_offline_verifier_diagnostics.py" in fixed_probe.read_bytes()
     tree = ast.parse(source.read_text())
     assert not any(isinstance(node, ast.If) for node in tree.body)
+    dependency_inventory = ROOT / "scripts/canonical_staging_control_dependencies.json"
+    inventory = json.loads(dependency_inventory.read_text())
+    assert set(inventory) == {
+        "control_inventory_sha256",
+        "files",
+        "schema",
+        "selfExcluded",
+        "sourceBase",
+    }
+    assert inventory["schema"] == "canonical_staging_audited_dependencies_v1"
+    # The pinned JSON audit names source dependencies; it does not execute them.
+    dependency = "scripts/staging_offline_verifier_diagnostics.py"
+    assert inventory["files"].count(dependency) == 1
+    inventory["files"].remove(dependency)
+    assert "staging_offline_verifier_diagnostics" not in json.dumps(inventory)
     for directory in (ROOT / "scripts", ROOT / ".github/workflows"):
         for path in directory.iterdir():
-            if path not in {source, fixed_probe} and path.is_file():
+            if (
+                path not in {source, fixed_probe, dependency_inventory}
+                and path.is_file()
+            ):
                 assert b"staging_offline_verifier_diagnostics" not in path.read_bytes()
     policy = json.loads(
         (
