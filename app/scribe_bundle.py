@@ -237,7 +237,14 @@ class CoreBundleGateway:
                 raw_path=raw_path + (b"?" + query if query else b"")
             )
             async with client.stream(
-                scope["method"], url, headers=headers, content=body()
+                scope["method"],
+                url,
+                headers=headers,
+                content=body(),
+                timeout=100
+                if scope["path"]
+                in {"/provider/v1/capture-admissions", "/provider/v1/capture-notes"}
+                else 60,
             ) as response:
                 await send(
                     {
