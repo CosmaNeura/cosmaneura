@@ -117,7 +117,8 @@ async function fixture() {
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.endsWith("/embed/history")) return json(emptyHistory())
+      if (url.endsWith("/embed/history-retained"))
+        return json({ ...emptyHistory(), schema_version: "1.2.0" })
       const authorization = new Headers(init?.headers).get("authorization")
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges.push({
