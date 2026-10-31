@@ -3,6 +3,9 @@ locals {
   # environment projection. Their defaults make the production revisions dark,
   # and any activation must be an independently reviewed source change.
   scribe_native_api_public_values = {
+    SCRIBE_NATIVE_WORKLOAD_ENABLED              = tostring(var.scribe_native_workload_rollout.enabled)
+    SCRIBE_NATIVE_WORKLOAD_AUDIENCE             = var.scribe_native_workload_rollout.audience
+    SCRIBE_NATIVE_WORKLOAD_CLIENT_ID            = var.scribe_native_workload_rollout.client_id
     SCRIBE_CAPTURE_ENABLED                      = tostring(var.scribe_native_production_rollout.capture_enabled)
     SCRIBE_CAPTURE_LONG_VISITS_ENABLED          = tostring(var.scribe_native_production_rollout.capture_long_visits_enabled)
     SCRIBE_CAPTURE_NOTES_ENABLED                = tostring(var.scribe_native_production_rollout.capture_notes_enabled)
@@ -28,6 +31,9 @@ locals {
   # projections here beside the source-controlled values so adding another
   # generic environment set cannot silently reintroduce duplicate entries.
   scribe_native_controlled_env_names = toset(keys(local.scribe_native_api_public_values))
+  scribe_native_workload_prerequisites_valid = (
+    !var.scribe_native_workload_rollout.enabled || local.session_prep_clerk_issuer_valid
+  )
 
   scribe_native_api_generic_env_names = setunion(
     var.python_public_vars,
