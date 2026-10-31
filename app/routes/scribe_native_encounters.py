@@ -1,4 +1,4 @@
-"""Default-off human and singleton-workload existing-patient visit facade."""
+"""Default-off human and singleton-workload native visit facade versions."""
 
 import asyncio
 import json
@@ -14,6 +14,7 @@ from app.configuration.scribe_native import (
     native_authority_settings,
     native_encounter_settings,
     native_existing_patient_visits_enabled,
+    native_visit_actions_v2_enabled,
 )
 from app.routes.companion_records import RecordBoundary, problem
 from app.routes.dependencies.entra_service import EntraServicePrincipal
@@ -30,7 +31,11 @@ from app.services.provider_record_authority import ProviderRecordScopeDenied
 from app.services.scribe_encounter_contract import (
     CreateRequest,
     ExistingPatient,
+    PatientMatchCandidatesRequest,
+    PatientMatchSaveRequest,
     PatientsRequest,
+    PrivateNoteReadRequest,
+    PrivateNoteSaveRequest,
 )
 from app.services.scribe_native_encounters import execute_native_encounter
 from app.services.superadmin_capability import SuperadminCapabilityError
@@ -69,12 +74,29 @@ async def native_encounters(
         )
     ):
         return problem(403)
-    if request.headers.getlist("x-cosmaneura-scribe-encounter-version") != ["1"]:
+    versions = request.headers.getlist("x-cosmaneura-scribe-encounter-version")
+    if versions not in (["1"], ["2"]):
         return problem(426)
+    full_visit = versions == ["2"]
+    if full_visit and not native_visit_actions_v2_enabled():
+        return problem(503)
     try:
         data = await read_body(request)
-        if not isinstance(data, (PatientsRequest, CreateRequest)) or (
-            isinstance(data, CreateRequest)
+        allowed = (
+            (
+                PatientsRequest,
+                CreateRequest,
+                PatientMatchCandidatesRequest,
+                PatientMatchSaveRequest,
+                PrivateNoteReadRequest,
+                PrivateNoteSaveRequest,
+            )
+            if full_visit
+            else (PatientsRequest, CreateRequest)
+        )
+        if not isinstance(data, allowed) or (
+            not full_visit
+            and isinstance(data, CreateRequest)
             and not isinstance(data.patient, ExistingPatient)
         ):
             raise ValueError
@@ -96,9 +118,11 @@ async def native_encounters(
                     enabled
                     and native_existing_patient_visits_enabled()
                     and native_encounter_settings().enabled
+                    and (not full_visit or native_visit_actions_v2_enabled())
                 )
             ),
             deadline=deadline,
+            **({"native_visit_actions_v2": True} if full_visit else {}),
         )
         companion_records.check_deadline(deadline)
         raw = json.dumps(
@@ -111,7 +135,7 @@ async def native_encounters(
             media_type="application/json",
             headers={
                 "Cache-Control": "no-store",
-                "X-Cosmaneura-Scribe-Encounter-Version": "1",
+                "X-Cosmaneura-Scribe-Encounter-Version": "2" if full_visit else "1",
             },
         )
     except scribe_encounters.EncounterConflict:

@@ -372,7 +372,7 @@ def test_native_route_rejects_unsupported_or_unbound_operation(monkeypatch, bad)
     if bad == "cookie":
         h["Cookie"] = "synthetic=1"
     if bad == "version":
-        h["X-Cosmaneura-Scribe-Encounter-Version"] = "2"
+        h["X-Cosmaneura-Scribe-Encounter-Version"] = "3"
     if bad == "private_note":
         body["action"] = "private_note_save"
     if bad == "missing_workload":

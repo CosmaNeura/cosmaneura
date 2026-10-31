@@ -101,6 +101,27 @@ def native_existing_patient_visits_enabled() -> bool:
     return SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED
 
 
+SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED = config(
+    "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED", default=False, cast=bool
+)
+if SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED and not (
+    SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED
+    and SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED
+    and SCRIBE_NATIVE_WORKLOAD_AUTH_SETTINGS.enabled
+):
+    raise ValueError("native_visit_actions_v2_require_existing_native_workflow")
+
+
+def native_visit_actions_v2_enabled() -> bool:
+    # A full-visit request never substitutes a broader browser/global gate.
+    return (
+        SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED
+        and native_existing_patient_visits_enabled()
+        and SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED
+        and SCRIBE_NATIVE_WORKLOAD_AUTH_SETTINGS.enabled
+    )
+
+
 def native_encounter_settings() -> ScribeEncounterSettings:
     # Only native facade dependencies use this selection. Browser and every
     # other consumer keep SCRIBE_ENCOUNTER_SETTINGS, including its false gate.
