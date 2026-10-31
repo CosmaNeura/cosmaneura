@@ -165,6 +165,9 @@ variable "python_public_vars" {
       "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
       "SESSION_PREP_PROVIDER_ENABLED",
       "SCRIBE_CAPTURE_ENABLED",
+      "SCRIBE_NATIVE_WORKLOAD_ENABLED",
+      "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
+      "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
       "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
       "SCRIBE_CAPTURE_NOTES_ENABLED",
       "SCRIBE_CAPTURE_RECOVERY_ENABLED",
@@ -202,6 +205,32 @@ variable "session_prep_production_rollout" {
       var.session_prep_production_rollout.agent_api_audience != "00000000-0000-0000-0000-000000000000"
     )
     error_message = "Session Prep production activation requires nonzero canonical Entra audience and Sovereign client UUIDs"
+  }
+}
+
+variable "scribe_native_workload_rollout" {
+  description = "Default-off singleton Scribe native-facade caller and Core audience. Does not enable Session Prep, global Agent API/Authority Kernel, capture, or encounter creation."
+  type = object({
+    enabled   = bool
+    audience  = string
+    client_id = string
+  })
+  nullable = false
+  default = {
+    enabled   = false
+    audience  = ""
+    client_id = ""
+  }
+
+  validation {
+    condition = !var.scribe_native_workload_rollout.enabled || (
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.scribe_native_workload_rollout.audience)) &&
+      var.scribe_native_workload_rollout.audience != "00000000-0000-0000-0000-000000000000" &&
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.scribe_native_workload_rollout.client_id)) &&
+      var.scribe_native_workload_rollout.client_id != "00000000-0000-0000-0000-000000000000" &&
+      var.scribe_native_workload_rollout.client_id != var.session_prep_production_rollout.sovereign_client_id
+    )
+    error_message = "native workload activation requires one canonical nonzero Core audience and distinct Scribe receiver client UUID"
   }
 }
 

@@ -733,3 +733,59 @@ run "scribe_database_admin_refuses_disabled_entra_auth" {
     var.enable_scribe_database_migration_administrator,
   ]
 }
+
+run "scribe_native_workload_without_session_prep" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled   = true
+      audience  = "10000000-0000-4000-8000-000000000001"
+      client_id = "10000000-0000-4000-8000-000000000002"
+    }
+  }
+  assert {
+    condition = alltrue([for name, value in {
+      SCRIBE_NATIVE_WORKLOAD_ENABLED    = "true"
+      SCRIBE_NATIVE_WORKLOAD_AUDIENCE   = "10000000-0000-4000-8000-000000000001"
+      SCRIBE_NATIVE_WORKLOAD_CLIENT_ID  = "10000000-0000-4000-8000-000000000002"
+      AGENT_API_ENABLED                 = "false"
+      AUTHORITY_KERNEL_ENABLED          = "false"
+      SESSION_PREP_PROVIDER_ENABLED     = "false"
+      SCRIBE_CAPTURE_ENABLED            = "false"
+      SCRIBE_ENCOUNTER_CREATION_ENABLED = "false"
+    } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
+    error_message = "native singleton configuration must not enable Session Prep, global Agent API/Authority Kernel or capture/encounters"
+  }
+  assert {
+    condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      length([for entry in workload.template[0].container[0].env : entry.name if startswith(entry.name, "SCRIBE_NATIVE_WORKLOAD_")]) == 0
+    ])
+    error_message = "native workload identity and audience are API-only"
+  }
+}
+
+run "reject_native_workload_zero_caller" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled   = true
+      audience  = "10000000-0000-4000-8000-000000000001"
+      client_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
+  expect_failures = [var.scribe_native_workload_rollout]
+}
+
+run "reject_native_workload_shadow" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_api_only_secret_vars                    = ["SCRIBE_NATIVE_WORKLOAD_CLIENT_ID"]
+  }
+  expect_failures = [azurerm_container_app.app]
+}
