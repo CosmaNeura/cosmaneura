@@ -380,6 +380,7 @@ class BuildTests(unittest.TestCase):
                 os.environ,
                 {
                     "GH_TOKEN": "invented-ambient",
+                    "DOCKER_CONFIG": "/invented/ambient-docker-config",
                     "DOCKER_CONTEXT": "wrong",
                     "BASH_ENV": "/invented",
                 },
@@ -398,7 +399,9 @@ class BuildTests(unittest.TestCase):
     def test_complete_mock_pipeline_exports_bound_archive_without_credentials_or_publication(
         self,
     ):
+        parent_home = os.environ.get("HOME")
         result = self.build()
+        self.assertEqual(os.environ.get("HOME"), parent_home)
         self.assertEqual(result.image_id, APP_ID)
         self.assertEqual(result.sha256, m.sha(result.path.read_bytes()))
         self.assertEqual(result.candidate_sha, "a" * 40)
@@ -418,7 +421,6 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(
                 set(environment),
                 {
-                    "HOME",
                     "BUILDX_NO_DEFAULT_ATTESTATIONS",
                     "DOCKER_CONFIG",
                     "DOCKER_HOST",
@@ -429,10 +431,17 @@ class BuildTests(unittest.TestCase):
                 },
             )
             self.assertNotIn("GH_TOKEN", environment)
+            self.assertNotIn("HOME", environment)
             self.assertNotIn("DOCKER_CONTEXT", environment)
             self.assertNotIn("BASH_ENV", environment)
             self.assertEqual(cwd, self.prepared.root / "source")
-            self.assertTrue(environment["HOME"].startswith(str(self.prepared.root)))
+            self.assertEqual(
+                environment["DOCKER_CONFIG"], str(self.prepared.root / "docker-config")
+            )
+            self.assertEqual(
+                (Path(environment["DOCKER_CONFIG"]) / "config.json").read_bytes(),
+                b"{}\n",
+            )
             self.assertEqual(environment["BUILDX_NO_DEFAULT_ATTESTATIONS"], "1")
             self.assertNotIn("push", argv)
             self.assertNotIn("login", argv)
