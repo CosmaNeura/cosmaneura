@@ -74,7 +74,7 @@ def resolve_session_prep_provider_access(
         select(col(PilotAccessGrandfatherGrant.id))
         .where(
             PilotAccessGrandfatherGrant.clerk_id == doctor.clerk_id,
-            PilotAccessGrandfatherGrant.revoked_at == None,
+            PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
         )
         .correlate(None)
         .exists()
@@ -83,7 +83,7 @@ def resolve_session_prep_provider_access(
         select(col(PilotAccessGrandfatherGrant.id))
         .where(
             PilotAccessGrandfatherGrant.clerk_id == doctor.clerk_id,
-            PilotAccessGrandfatherGrant.revoked_at != None,
+            PilotAccessGrandfatherGrant.revoked_at != None,  # noqa: E711
             ~active_pilot_grant,
         )
         .order_by(col(PilotAccessGrandfatherGrant.revoked_at).desc())

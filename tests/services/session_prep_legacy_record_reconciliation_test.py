@@ -35,9 +35,11 @@ from sqlalchemy import event
 from tests.factories import DoctorFactory, save_practice_member
 from tests.routes.utils import provision_practice_in_force
 from tests.services.provider_record_authority_test import (
-    scope as scope,  # noqa: PLC0414
+    scope as record_scope_fixture,
 )
 from tests.services.session_prep_authority_test import AUTHORITY_SETTINGS, _token
+
+scope = record_scope_fixture
 
 
 def _legacy(scope, invalid=None):
