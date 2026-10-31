@@ -21,7 +21,7 @@ RECEIVER = "10000000-0000-4000-8000-000000000003"
 FOREIGN = "10000000-0000-4000-8000-000000000004"
 
 
-def configured(monkeypatch, **overrides):
+def configured(monkeypatch, **overrides: str):
     monkeypatch.setattr(
         native,
         "AUTHORITY_KERNEL_SETTINGS",
@@ -29,8 +29,12 @@ def configured(monkeypatch, **overrides):
             False, 900, 300, clerk_issuer="https://clerk.example.invalid"
         ),
     )
-    values = dict(enabled=True, tenant_id=TENANT, audience=AUDIENCE, client_id=RECEIVER)
-    return native.native_workload_settings(**(values | overrides))
+    return native.native_workload_settings(
+        enabled=True,
+        tenant_id=overrides.get("tenant_id", TENANT),
+        audience=overrides.get("audience", AUDIENCE),
+        client_id=overrides.get("client_id", RECEIVER),
+    )
 
 
 def test_disabled_seam_preserves_every_existing_workload_policy():
