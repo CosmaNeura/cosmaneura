@@ -113,6 +113,14 @@ export default function VisitNoteViewer({
         )}
       </div>
 
+      {review && !(sourceEditable && sourceEditing) && (
+        <SessionPrepNoteReviewButton
+          key={`${note.id}:${review.content_sha256}`}
+          noteId={note.id}
+          review={review}
+        />
+      )}
+
       <CollapsibleContent className="mt-3">
         <div>
           {Object.entries(note.note).map(([sectionTitle, noteContent]) => (
@@ -150,13 +158,6 @@ export default function VisitNoteViewer({
             digest={review.content_sha256}
             fields={note.note}
             onEditingChange={setSourceEditing}
-          />
-        )}
-        {review && !(sourceEditable && sourceEditing) && (
-          <SessionPrepNoteReviewButton
-            key={`${note.id}:${review.content_sha256}`}
-            noteId={note.id}
-            review={review}
           />
         )}
         {transcript !== undefined && (

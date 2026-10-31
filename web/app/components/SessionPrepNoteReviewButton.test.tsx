@@ -26,6 +26,7 @@ describe("SessionPrepNoteReviewButton", () => {
       />,
     )
     expect(reviewNoteForSessionPrep).not.toHaveBeenCalled()
+    expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
     fireEvent.click(
       screen.getByRole("button", { name: "Mark reviewed for Session Prep" }),
     )
@@ -58,6 +59,7 @@ describe("SessionPrepNoteReviewButton", () => {
         status === 409 ? "Reload the page" : "could not be saved",
       )
       expect(screen.queryByRole("status")).not.toBeInTheDocument()
+      expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
       expect(screen.getByRole("button")).toBeEnabled()
     },
   )

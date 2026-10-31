@@ -76,7 +76,6 @@ vi.mock("~/components/shared/InnerScrollableContent", () => ({
     <div>{children}</div>
   ),
 }))
-vi.mock("~/components/shared/StatusBadge", () => ({ StatusBadge: () => null }))
 vi.mock("~/components/shared/EngagementBadge", () => ({
   EngagementBadge: () => null,
 }))
@@ -215,6 +214,15 @@ describe("Session Prep provider discovery", () => {
     expect(
       screen.queryByText("Prior visits for Session Prep"),
     ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Not reviewed for Session Prep"),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Reviewed for Session Prep"),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Mark reviewed for Session Prep" }),
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -224,6 +232,8 @@ describe("note detail page heading", () => {
     const headings = screen.getAllByRole("heading", { level: 1 })
     expect(headings).toHaveLength(1)
     expect(headings[0]).toHaveTextContent("Synthetic Patient")
+    expect(screen.getByText("AI note ready")).toBeVisible()
+    expect(screen.queryByText("Note ready")).not.toBeInTheDocument()
   })
 })
 
@@ -241,12 +251,14 @@ describe("a note arriving for a just-uploaded visit", () => {
     expect(result.current.startedAt.has("appointment_fixture")).toBe(false)
     expect(result.current.justReady.has("appointment_fixture")).toBe(true)
     expect(toast).toHaveBeenCalledOnce()
-    expect(toast).toHaveBeenCalledWith({ title: "Your note is ready" })
+    expect(toast).toHaveBeenCalledWith({ title: "Your AI note is ready" })
   })
 
   it("says plainly when a visit has no note", () => {
     show({ notes: [], transcript: null })
     expect(screen.getByText("No note for this visit yet.")).toBeVisible()
+    expect(screen.getByText("No note yet")).toBeVisible()
+    expect(screen.queryByText("AI note ready")).not.toBeInTheDocument()
   })
 })
 

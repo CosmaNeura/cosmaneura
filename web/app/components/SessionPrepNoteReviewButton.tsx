@@ -55,6 +55,9 @@ export function SessionPrepNoteReviewButton({
       ) : (
         <>
           <p className="text-muted-foreground mb-2 text-sm">
+            Not reviewed for Session Prep
+          </p>
+          <p className="text-muted-foreground mb-2 text-sm">
             After reviewing this note, make it available for future visit
             preparation.
           </p>
