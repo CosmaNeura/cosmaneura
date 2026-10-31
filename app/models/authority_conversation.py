@@ -13,6 +13,7 @@ from app.models.authority import (
     AuthorityTenant,
     InteractionLineage,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, UniqueConstraint
 
 
@@ -146,6 +147,19 @@ class CanonicalConversationFinalPhase(
         ),
     )
 
+    __table_args__ += (
+        sa.CheckConstraint(
+            "reviewed_excerpt_bindings IS NULL OR (outcome = 'completed' "
+            "AND presentation_mode = 'standard' AND NOT suppress_citations "
+            "AND jsonb_typeof(reviewed_excerpt_bindings) = 'object' "
+            "AND reviewed_excerpt_bindings ->> 'schema_version' = '1.0.0' "
+            "AND jsonb_typeof(reviewed_excerpt_bindings -> 'excerpts') = 'array' "
+            "AND jsonb_array_length(reviewed_excerpt_bindings -> 'excerpts') BETWEEN 1 AND 64 "
+            "AND octet_length(reviewed_excerpt_bindings::text) <= 65536) IS TRUE",
+            name="ck_conversation_reviewed_excerpt_bindings",
+        ).ddl_if(dialect="postgresql"),
+    )
+
     # This foreign key targets the unique accepted-phase turn key, rather than
     # the turn table directly, so the database cannot manufacture a final phase
     # without a durably accepted user phase.
@@ -155,6 +169,17 @@ class CanonicalConversationFinalPhase(
         foreign_key="canonical_conversation_user_phase.turn_id",
     )
     outcome: str = Field(max_length=16)
+    reviewed_excerpt_bindings: dict | None = Field(
+        default=None,
+        sa_column=sa.Column(
+            sa.JSON(none_as_null=True).with_variant(
+                JSONB(none_as_null=True), "postgresql"
+            ),
+            nullable=True,
+        ),
+        exclude=True,
+        repr=False,
+    )
     content_type: str = Field(max_length=32)
     content: str = Field(min_length=1, max_length=20_000)
     presentation_mode: str = Field(max_length=32)

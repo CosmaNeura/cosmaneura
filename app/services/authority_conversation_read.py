@@ -17,6 +17,7 @@ from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
+from app.services import reviewed_excerpt_citations as citations
 from app.services.provider_database_deadline import provider_database_deadline
 from app.services.session_prep import (
     OpaqueRef,
@@ -352,6 +353,14 @@ def _verified(
         "response": {"content_type": final.content_type, "content": final.content},
         "presentation": _presentation(final),
     }
+    bindings = final.reviewed_excerpt_bindings
+    if bindings is not None:
+        try:
+            payload["reviewed_excerpts"] = citations.canonical_bindings(bindings)[
+                "selection"
+            ]
+        except ValueError:
+            raise ConversationContextChanged from None
     dependencies = []
     for operation, key in (
         (prep.OPERATION, "provider_context_ref"),
@@ -376,7 +385,7 @@ def _verified(
     # Missing direct/inherited receipts cannot masquerade as legacy independence:
     # their omitted ref changes the immutable final hash.
     if final.request_digest != conversation._request_digest(
-        conversation._canonical_payload(payload)
+        conversation._canonical_payload(payload), bindings
     ):
         raise ConversationContextChanged
     return (
@@ -659,6 +668,15 @@ def validate_final_history(
         != f"h1|{cutoff.isoformat()}|{dependency.id if dependency else '-'}"
     ):
         raise ConversationContextChanged
+    return {
+        "context_ref": str(receipt.id),
+        "response_ref": receipt.response_ref,
+        "request_digest": receipt.request_digest,
+        "cutoff": cutoff.isoformat(),
+        "dependency_ref": str(dependency.id) if dependency else None,
+        "source_version_digest": result.source_version_digest,
+        "members": members,
+    }
 
 
 @provider_database_deadline

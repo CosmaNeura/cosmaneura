@@ -59,7 +59,8 @@ async function fixture() {
           expires_at: new Date(now + 900000).toISOString(),
         })
       }
-      if (String(input).endsWith("/embed/history")) return json(emptyHistory())
+      if (String(input).endsWith("/embed/history-retained"))
+        return json({ ...emptyHistory(), schema_version: "1.2.0" })
       if (String(input).endsWith("/welcome")) {
         return json({
           persona: "provider",

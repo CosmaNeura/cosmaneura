@@ -12,6 +12,7 @@ from celery.worker.request import Request as CeleryRequest
 from app import log, root
 from app.configuration.redis import redis_url
 from app.configuration.sentry import configure_sentry
+from app.scribe_bundle import register_schedule
 
 from activemodel.celery import register_celery_typeid_encoder
 
@@ -211,7 +212,7 @@ def install_metadata_only_worker_inspection() -> None:
     key censor does not recognize every extension key.
     """
 
-    panel = getattr(import_module("celery.worker.control"), "Panel")
+    panel = import_module("celery.worker.control").Panel
     panel.data["conf"] = _metadata_only_worker_configuration
     panel.data["dump_conf"] = _metadata_only_worker_configuration
     panel.data["report"] = _metadata_only_worker_report
@@ -591,6 +592,8 @@ celery_app.conf.beat_schedule = {
 }
 
 # Import crontab at the top of the file
+
+register_schedule(celery_app.conf.beat_schedule)
 
 # from app.configuration.database import clear_engine
 # @task_prerun.connect

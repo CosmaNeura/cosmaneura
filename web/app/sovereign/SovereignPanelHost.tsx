@@ -4,8 +4,15 @@ import { createPortal } from "react-dom"
 import { getClient } from "~/configuration/clerk"
 import type { PriorNoteOverview } from "~/configuration/client"
 import { appointmentDateFormat } from "~/lib/date"
+import { withReadDeadline } from "~/lib/read-deadline"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import {
+  type CitationDisplay,
+  type CitationDisplayOptions,
+  citationHref,
+  loadCitationDisplay,
+} from "./SovereignCitationDisplay"
 import {
   HistoryAccessDeniedError,
   type SovereignHistory,
@@ -52,6 +59,11 @@ type PanelMountOptions = {
     recordId: string,
     options: { signal: AbortSignal },
   ) => Promise<SovereignHistory>
+  loadCitationHistory: (
+    recordId: string,
+    options: CitationDisplayOptions,
+  ) => Promise<CitationDisplay>
+  citationHref: (reference: string) => string
   onSessionPrepStateChange?: (state: SessionPrepUiState) => void
   shiftContent: boolean
   fabBottom?: string
@@ -626,6 +638,54 @@ export function SovereignPanelHost({
               )
             }
           },
+          citationHref,
+          loadCitationHistory: async (recordId, options) => {
+            const controller = new AbortController()
+            const abort = () => controller.abort()
+            const signals = [options.signal, statusController.signal]
+            signals.forEach((source) =>
+              source.addEventListener("abort", abort, { once: true }),
+            )
+            if (signals.some((source) => source.aborted)) abort()
+            const assertCurrent = () => {
+              controller.signal.throwIfAborted()
+              if (cancelled || accessLost || recordId !== appointmentId)
+                throw new DOMException("Open record changed", "AbortError")
+            }
+            try {
+              const display = await withReadDeadline(
+                (signal) =>
+                  loadCitationDisplay({
+                    origin: config.origin,
+                    getToken: () => mountTokenProvider.getToken(),
+                    assertCurrent,
+                    options: { ...options, signal },
+                  }),
+                { signal: controller.signal },
+              )
+              assertCurrent()
+              return display
+            } catch (error) {
+              if (
+                !cancelled &&
+                !accessLost &&
+                error instanceof HistoryAccessDeniedError
+              ) {
+                discardMounted()
+                setRecovery("unavailable")
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              throw error
+            } finally {
+              signals.forEach((source) =>
+                source.removeEventListener("abort", abort),
+              )
+            }
+          },
           onAccessChange: (granted) => {
             if (cancelled || accessLost) return
             if (granted) {
@@ -677,12 +737,23 @@ export function SovereignPanelHost({
     <>
       <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
       {presentationTarget &&
-        patientName &&
+        (patientName ||
+          priorNotes?.newer_prior_note_awaiting_review === true) &&
         createPortal(
           <div className="py-3">
-            <p className="font-semibold">{patientName}</p>
+            {patientName && <p className="font-semibold">{patientName}</p>}
             {appointmentDate && (
               <p>Visit · {appointmentDateFormat(appointmentDate)}</p>
+            )}
+            {priorNotes?.newer_prior_note_awaiting_review === true && (
+              <p
+                role="status"
+                className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+              >
+                A newer prior-visit note is awaiting your review. Session Prep
+                still shows earlier reviewed history. Review the newer note,
+                then refresh Session Prep to include it.
+              </p>
             )}
             {includedNotes.length > 0 && (
               <details className="mt-2">
