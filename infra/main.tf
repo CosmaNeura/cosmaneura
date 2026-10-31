@@ -776,6 +776,10 @@ resource "azurerm_container_app" "app" {
       condition     = length(local.scribe_native_api_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic API environment-name sets"
     }
+    precondition {
+      condition     = local.scribe_native_workload_prerequisites_valid
+      error_message = "native workload activation requires the existing canonical Clerk issuer"
+    }
 
     precondition {
       condition     = length(local.session_prep_api_env_name_collisions) == 0

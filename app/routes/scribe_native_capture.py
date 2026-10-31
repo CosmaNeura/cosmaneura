@@ -13,12 +13,17 @@ from starlette.types import Message, Receive, Scope, Send
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
+from app.configuration.scribe_native import native_authority_settings
 from app.routes.authority_errors import agent_problem_response
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
-    authenticate_scribe_capture_request,
     request_signing_keys,
+)
+from app.routes.dependencies.entra_service import (
+    authenticate_scribe_native_agent_request as authenticate_agent_api_request,
+)
+from app.routes.dependencies.entra_service import (
+    authenticate_scribe_native_capture_request as authenticate_scribe_capture_request,
 )
 from app.routes.dependencies.view_as import view_as_browser_session_present
 from app.routes.embed_context import (
@@ -222,7 +227,7 @@ async def native_capture(
             workload_client_id=principal.client_id,
             data=data,
             key=key,
-            authority_settings=auth,
+            authority_settings=native_authority_settings(auth),
             capture_settings=settings,
             encounter_settings=encounters,
             client=client,
