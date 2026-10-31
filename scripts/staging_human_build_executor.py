@@ -441,8 +441,9 @@ class Builder:
         )
         self.validate_authority, self.tick = validate_authority, tick
         self.public_files: tuple[tuple[str, str], ...] = ()
+        # Omit HOME from this closed child environment. Docker credentials and
+        # plugins use the owned, empty DOCKER_CONFIG instead.
         self.environment = {
-            "HOME": str(prepared.root / "home"),
             # Docker's containerd image store otherwise makes a single-platform
             # build plus the default provenance attestation an OCI index. A
             # docker-save archive contains the runnable image config, not that
