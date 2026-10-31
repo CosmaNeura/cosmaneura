@@ -543,7 +543,10 @@ def _ordered_instructions(
         )
     if c.require_plan_reason:
         out.append(
-            f'Plan section bullets MUST include the reason for each action -- the "why" -- using "for X" or "to X" phrasing. For example: "Order MRI to rule out disc pathology" rather than "Order MRI"; "Continue metformin for ongoing diabetes management" rather than just "Continue metformin"; "Avoid heavy lifting to prevent re-injury" rather than just "Avoid heavy lifting"; "Follow up in two weeks to reassess back pain and review MRI results" rather than just "Follow up in two weeks" or "Follow up if symptoms worsen". This applies to EVERY Plan bullet, no exceptions -- including follow-up bullets, monitoring bullets, and continue-current-treatment bullets. A trigger condition (e.g. "if symptoms worsen") is NOT a reason; the bullet must state the PURPOSE of the action (e.g. "to monitor for new neurological symptoms"). When the transcript does not explicitly state the reason, infer it from the clinical context (the {t.patient}\'s complaint, the assessment, the medication\'s indication). Do not invent reasons unrelated to the visit.'
+            "Plan section bullets MUST include the reason for an action only when the transcript explicitly states that reason. "
+            "Preserve the stated purpose without inventing a rationale. When no reason is recorded, describe the documented action and leave the purpose unstated; "
+            'do not add "for X" or "to X" phrasing. A complaint, diagnosis, medication indication, template or example is not a recorded reason. '
+            "Preserve a stated trigger condition without inferring a purpose from it."
         )
     if c.ros_distinct_from_subjective:
         out.append(
@@ -601,10 +604,19 @@ def build_structured_prompt(
 
     if action_items is None:
         action_items = extract_action_items(transcript, t)
-    maybe_doctor_bio = "You are a medical professional.\n"
+    maybe_doctor_bio = (
+        "You are a medical professional.\n"
+        if source_indexes
+        else "You are drafting an unreviewed clinical note from a recorded encounter.\n"
+    )
     if doctor and doctor.biography:
+        biography_role = (
+            "You are a medical professional with the following bio:"
+            if source_indexes
+            else "You are drafting an unreviewed clinical note from a recorded encounter. The recorded clinician biography is context for this draft:"
+        )
         maybe_doctor_bio = dedent(f"""
-        You are a medical professional with the following bio:
+        {biography_role}
 
         <bio>
         {doctor.biography.strip()}
@@ -617,12 +629,15 @@ def build_structured_prompt(
     # (dedent() is a no-op there because interpolated transcript/schema text
     # injects column-0 lines that zero the common prefix).
     indented_block = textwrap.indent(_instruction_block(c, t), "        ")
+    encounter_task = (
+        f"You need to write a clinical note for a medical appointment that you just had with a {t.patient}. Your goal is to accurately summarize the key information from the appointment in a structured, professional format."
+        if source_indexes
+        else f"Draft an unreviewed clinical note from the supplied recording of an encounter with a {t.patient}, for the recorded {t.provider} to review. Accurately summarize the recorded information in a structured, professional format."
+    )
     prompt = dedent(f"""
         {maybe_doctor_bio}
 
-        You need to write a clinical note for a medical appointment that you just had with a {
-        t.patient
-    }. Your goal is to accurately summarize the key information from the appointment in a structured, professional format.
+        {encounter_task}
 
         Here is the transcript from the appointment:
 
@@ -659,10 +674,27 @@ def build_structured_prompt(
     """)
     label_note = transcript_label_note(t)
     if label_note:
+        if not source_indexes:
+            label_note = (
+                f'Note: "Doctor:" labels the recorded {t.provider}; "Patient:" labels the recorded {t.patient}. '
+                f'The note itself must use the term "{t.patient}", not "patient".'
+            )
         prompt += "\n\n" + label_note
     if c.custom_instructions:
         prompt += (
             "\n\nAdditional provider instructions:\n" + c.custom_instructions.strip()
+        )
+    if not source_indexes:
+        # Keep this after schema, example and custom text. Indexed capture
+        # already supplies its own source-grounding contract and stays exact.
+        prompt += (
+            "\n\nLegacy recorded-note source fidelity: You document the supplied sources; you do not provide medical advice. "
+            "This is an unreviewed draft for the clinician to edit. Template, example and custom text are source context, "
+            "not evidence of care performed. Template headings and examples do not establish visit dates, clinician identity, "
+            "a signature or an attestation. Do not assert that you conducted, personally reviewed, signed or attested this encounter, "
+            "or that its actions are medically necessary. If a clinician explicitly states an action, reason or attestation in the recording, "
+            "document it as attributed reported speech, not as a completed system signature. Include only source-supported facts or plans; "
+            "do not infer a reason for an action, diagnosis, treatment, performed examination or negative finding."
         )
     return prompt
 
@@ -674,11 +706,12 @@ def build_action_item_prompt(
         [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
     )
     return dedent(f"""
-    You are a {t.provider} reviewing the transcript of a {t.patient} visit that you conducted.
-    You are looking for the actions you told the {t.patient} you would take as a result of this visit.
-    You are also looking for actions that you told the {t.patient} to take.
+    Extract documented action items from the recorded encounter of a {t.patient}, for the recorded {t.provider}'s draft note.
+    Identify only actions explicitly stated in the transcript, with the source's attribution, conditions and uncertainty.
+    Include a purpose only when the transcript states it; leave an absent purpose unstated.
+    You did not conduct or review this encounter. Do not add a signature, attestation or medical-necessity claim.
 
-    Actions for you might include (but not be limited to):
+    Examples of recorded {t.provider} actions, only if explicitly stated:
       - ordering labs
       - prescribing medications
       - scheduling follow-up appointments
@@ -688,7 +721,7 @@ def build_action_item_prompt(
       - requesting records from other providers
       - sending educational information to the {t.patient}
 
-    Actions for the {t.patient} might include (but not be limited to):
+    Examples of recorded {t.patient} actions, only if explicitly stated:
       - taking medications
       - making lifestyle changes
       - monitoring for specific symptoms
