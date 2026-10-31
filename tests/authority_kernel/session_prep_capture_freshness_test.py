@@ -25,6 +25,7 @@ from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_capture_notes as notes
 from app.services import session_prep_capture_freshness as freshness
+from app.services.doctor_access import resolve_doctor_access
 from app.services.provider_record_authority import validate_provider_record_scope
 from app.services.scribe_capture_admission import authorize_admitted_capture
 from app.services.scribe_capture_protocol import OPERATION_ADAPTER
@@ -158,7 +159,12 @@ async def case(f, monkeypatch):
             context_snapshot_ref="synthetic-capture-context-" + uuid4().hex,
         )
     )
+    # Generic Scribe capture also allows providers still onboarding. This
+    # fixture exercises Session Prep, so persist its real access prerequisite.
+    f.case.doctor.onboarding_completed_at = datetime.now(UTC)
+    f.session.add(f.case.doctor)
     f.session.commit()
+    assert resolve_doctor_access(f.case.doctor).allowed
     monkeypatch.setattr(
         review_route.configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
