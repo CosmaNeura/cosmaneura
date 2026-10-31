@@ -4,6 +4,7 @@ locals {
   # and any activation must be an independently reviewed source change.
   scribe_native_api_public_values = {
     SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED = tostring(var.scribe_native_workload_rollout.existing_patient_visits_enabled)
+    SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED        = tostring(var.scribe_native_workload_rollout.native_visit_actions_v2_enabled)
     SCRIBE_NATIVE_WORKLOAD_ENABLED                = tostring(var.scribe_native_workload_rollout.enabled)
     SCRIBE_NATIVE_WORKLOAD_AUDIENCE               = var.scribe_native_workload_rollout.audience
     SCRIBE_NATIVE_WORKLOAD_CLIENT_ID              = var.scribe_native_workload_rollout.client_id

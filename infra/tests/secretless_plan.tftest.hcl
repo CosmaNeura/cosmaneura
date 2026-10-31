@@ -145,6 +145,7 @@ override_data {
       EMAIL_FROM_ADDRESS                         = "noreply@example.invalid"
       ENCRYPTION_KEY                             = "not-a-secret"
       ENTRA_TENANT_ID                            = "00000000-0000-0000-0000-000000000000"
+      SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED     = "false"
       INTAKE_CHAT_DOMAIN                         = "example.invalid"
       LOG_LEVEL                                  = "info"
       PORT                                       = "80"
@@ -752,6 +753,7 @@ run "scribe_native_workload_without_session_prep" {
       SCRIBE_NATIVE_WORKLOAD_CLIENT_ID              = "10000000-0000-4000-8000-000000000002"
       SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED        = "false"
       SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED = "false"
+      SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED        = "false"
       AGENT_API_ENABLED                             = "false"
       AUTHORITY_KERNEL_ENABLED                      = "false"
       SESSION_PREP_PROVIDER_ENABLED                 = "false"
@@ -881,6 +883,63 @@ run "scribe_native_existing_patient_visits_do_not_enable_global_gates" {
     ])
     error_message = "The native visit gate is API-only."
   }
+}
+
+run "scribe_native_v2_full_actions_use_existing_api_only" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "11111111-1111-4111-8111-111111111111"
+      client_id                       = "22222222-2222-4222-8222-222222222222"
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = true
+      native_visit_actions_v2_enabled = true
+    }
+  }
+  assert {
+    condition     = one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"]) == "true"
+    error_message = "The typed full-v2 gate must reach only the existing Core API."
+  }
+  assert {
+    condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      length([for entry in workload.template[0].container[0].env : entry.name if entry.name == "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"]) == 0
+    ])
+    error_message = "Full-v2 selection must not enable a worker or scheduler gate."
+  }
+  assert {
+    condition     = alltrue([for name in ["AUTHORITY_KERNEL_ENABLED", "AGENT_API_ENABLED", "SESSION_PREP_PROVIDER_ENABLED", "SCRIBE_ENCOUNTER_CREATION_ENABLED", "SCRIBE_CAPTURE_ENABLED", "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"] : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == "false"])
+    error_message = "Full native visit selection must not change separate global, capture or Zoom controls."
+  }
+}
+
+run "scribe_native_v2_full_actions_require_existing_visits" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "11111111-1111-4111-8111-111111111111"
+      client_id                       = "22222222-2222-4222-8222-222222222222"
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = false
+      native_visit_actions_v2_enabled = true
+    }
+  }
+  expect_failures = [var.scribe_native_workload_rollout]
+}
+
+run "scribe_native_v2_full_actions_reject_public_shadow" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_public_vars                             = ["SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"]
+  }
+  expect_failures = [var.python_public_vars]
 }
 
 run "scribe_bundle_default_keeps_three_containers_dark" {
