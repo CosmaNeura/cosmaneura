@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 import pytest
 
+import scripts.verify_staging_candidate as verifier_module
 from scripts.verify_staging_candidate import (
     CandidateContext,
     CandidateVerificationError,
@@ -16,6 +17,19 @@ CANDIDATE = "8fa02a71f4b880cd43f4fccc8c81c92a0d635623"
 MASTER = "6cea63e59203a8730af39497a3672b3f4598ba98"
 BASE_SCHEMA = "89c31f0ae275"
 EXPECTED_SCHEMA = "9a2399212488"
+
+
+@pytest.fixture(autouse=True)
+def source_context_unit_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These existing invented-response cases cover source/actor decisions only.
+    # Real audited controller/Git closure coverage is in the separate test file.
+    monkeypatch.setattr(
+        verifier_module,
+        "_verify_audited_controller",
+        lambda *_args, **_kwargs: frozenset(),
+    )
+
+
 MIGRATION_PATHS = (
     "migrations/versions/2026_08_24_89c31f0ae275_base.py",
     "migrations/versions/2026_08_29_9a2399212488_head.py",
@@ -417,6 +431,7 @@ def test_cli_uses_github_environment_defaults_and_preserves_flag_override(
     args = _parse_args(["--candidate-sha", CANDIDATE])
 
     assert vars(args) == {
+        "reverify": False,
         "candidate_sha": CANDIDATE,
         "approval_pr_number": "230",
         "expected_schema_after": EXPECTED_SCHEMA,
