@@ -77,7 +77,9 @@ async function fixture(
     throw new Error("Unexpected synthetic request")
   })
   vi.stubGlobal("fetch", fetch)
-  const { SOVEREIGN_PANEL_ASSET_PATH } = await import("./SovereignPanelAsset")
+  // Original read1.0 contract regressions continue against the retained legacy asset.
+  const SOVEREIGN_PANEL_ASSET_PATH =
+    "/vendor/cosmaneura-panel.v1.1b24151bb15c9d2968a5567a42c6dd94f24087a177b722725bbd881bdbcae59c.js"
   const source = readFileSync(
     join(process.cwd(), "public", SOVEREIGN_PANEL_ASSET_PATH),
     "utf8",
