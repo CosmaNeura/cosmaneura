@@ -1544,11 +1544,17 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         if path.name == "deploy_staging_candidate.yml"
         else "Backend"
     )
-    assert aggregator["needs"] == ["backend-quality", "backend-tests"]
+    if path.name == "deploy_staging_candidate.yml":
+        assert aggregator["needs"] == ["authorize", "backend-quality", "backend-tests"]
+        assert aggregator["if"] == (
+            "${{ always() && needs.authorize.outputs.recovery_verified != 'true' }}"
+        )
+    else:
+        assert aggregator["needs"] == ["backend-quality", "backend-tests"]
     if path.name == "build_and_publish_local.yml":
         assert "always()" in aggregator["if"]
         assert "inputs.github_hosted_fallback_authorized" in aggregator["if"]
-    else:
+    elif path.name != "deploy_staging_candidate.yml":
         assert aggregator["if"] == "${{ always() }}"
     assert aggregator["timeout-minutes"] == 5
     assert "continue-on-error" not in quality
