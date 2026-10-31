@@ -59,7 +59,7 @@ def load_prompt_functions():
         "log": SimpleNamespace(debug=lambda *args, **kwargs: None),
     }
     enum_tree = ast.parse((ROOT / "app/models/note_type_customization.py").read_text())
-    enum_nodes = [
+    enum_nodes: list[ast.stmt] = [
         n
         for n in enum_tree.body
         if isinstance(n, ast.ClassDef)
@@ -89,10 +89,10 @@ def load_prompt_functions():
     )
     namespace["terminology_terms"] = lambda doctor: namespace["Terms"](*doctor.terms)
     tree = ast.parse((ROOT / "app/jobs/summarize.py").read_text())
-    nodes = [
+    nodes: list[ast.stmt] = [
         n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in FUNCTIONS
     ]
-    assert {n.name for n in nodes} == FUNCTIONS
+    assert {n.name for n in nodes if isinstance(n, ast.FunctionDef)} == FUNCTIONS
     exec(  # noqa: S102 - only fixed repository AST, never model/user input
         compile(
             ast.Module(body=nodes, type_ignores=[]),
