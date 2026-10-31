@@ -5,12 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  useBrowserPrincipal: () => syntheticClerk.principal(getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 const inactiveViewAs = {
@@ -64,15 +68,18 @@ describe("Sovereign panel terminal authorization integration", () => {
     )
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
     vi.mocked(getViewAsStatus).mockResolvedValue(inactiveViewAs)
-    vi.mocked(getClient).mockResolvedValue({
-      loaded: true,
-      load: async () => {},
-      user: { id: "user_provider_test" },
-      session: {
-        getToken: vi.fn(async () => "platform-session-token"),
-      },
-      redirectToSignIn: async () => {},
-    })
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource({
+        loaded: true,
+        load: async () => {},
+        user: { id: "user_provider_test" },
+        session: {
+          id: "session_provider_test",
+          getToken: vi.fn(async () => "platform-session-token"),
+        },
+        redirectToSignIn: async () => {},
+      }),
+    )
 
     const firstToken = `mctx_${"a".repeat(48)}`
     const rotatedToken = `mctx_${"b".repeat(48)}`
