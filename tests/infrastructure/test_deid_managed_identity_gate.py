@@ -289,12 +289,31 @@ def test_cli_failure_does_not_disclose_identifiers(monkeypatch, capsys) -> None:
 def test_terraform_models_default_off_adoption_and_exact_least_privilege() -> None:
     main = (ROOT / "infra" / "main.tf").read_text()
     variables = (ROOT / "infra" / "variables.tf").read_text()
+    bundle = (ROOT / "infra" / "scribe_core_bundle.tf").read_text()
 
     assert (
         "default     = false"
         in variables[variables.index('variable "enable_deid_managed_identity"') :]
     )
-    assert "identity_ids = [azurerm_user_assigned_identity.health_services.id]" in main
+    worker_identity = main.split('resource "azurerm_container_app" "worker" {', 1)[
+        1
+    ].split("  template {", 1)[0]
+    assert (
+        'identity { type = "UserAssigned" identity_ids = '
+        "concat([azurerm_user_assigned_identity.health_services.id], "
+        "var.scribe_core_bundle.attach_existing_translation_identity ? "
+        "[data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id] : []) }"
+    ) in " ".join(worker_identity.split())
+    bundle_variable, translation_identity = bundle.split(
+        'data "azurerm_user_assigned_identity" "scribe_bundle_translation" {', 1
+    )
+    assert "attach_existing_translation_identity = optional(bool, false)" in " ".join(
+        bundle_variable.split()
+    )
+    assert "default = {}" in " ".join(bundle_variable.split())
+    assert (
+        "count = var.scribe_core_bundle.attach_existing_translation_identity ? 1 : 0"
+    ) in " ".join(translation_identity.split("locals {", 1)[0].split())
     assert 'name  = "AZURE_DEID_AUTH_MODE"' in main
     assert 'name  = "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID"' in main
     assert "scope                = local.deid_service_resource_id" in main
