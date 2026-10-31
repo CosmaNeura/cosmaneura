@@ -169,6 +169,7 @@ variable "python_public_vars" {
       "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
       "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
       "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
+      "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
       "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
       "SCRIBE_CAPTURE_NOTES_ENABLED",
       "SCRIBE_CAPTURE_RECOVERY_ENABLED",
@@ -210,12 +211,13 @@ variable "session_prep_production_rollout" {
 }
 
 variable "scribe_native_workload_rollout" {
-  description = "Default-off singleton Scribe native-facade caller and Core audience. Does not enable Session Prep, global Agent API/Authority Kernel, capture, or encounter creation."
+  description = "Default-off singleton Scribe native-facade caller and Core audience with optional native context and existing-patient visit gates. Does not enable Session Prep, global Agent API/Authority Kernel or capture gates."
   type = object({
-    enabled                  = bool
-    audience                 = string
-    client_id                = string
-    provider_context_enabled = optional(bool, false)
+    enabled                         = bool
+    audience                        = string
+    client_id                       = string
+    provider_context_enabled        = optional(bool, false)
+    existing_patient_visits_enabled = optional(bool, false)
   })
   nullable = false
   default = {
@@ -237,6 +239,12 @@ variable "scribe_native_workload_rollout" {
   validation {
     condition     = !var.scribe_native_workload_rollout.provider_context_enabled || var.scribe_native_workload_rollout.enabled
     error_message = "native provider context reads require the dedicated native workload boundary"
+  }
+  validation {
+    condition = !var.scribe_native_workload_rollout.existing_patient_visits_enabled || (
+      var.scribe_native_workload_rollout.enabled && var.scribe_native_workload_rollout.provider_context_enabled
+    )
+    error_message = "native existing-patient visits require current provider context and the dedicated native workload boundary"
   }
 }
 

@@ -13,7 +13,12 @@ from starlette.types import Message, Receive, Scope, Send
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
-from app.configuration.scribe_native import native_authority_settings
+from app.configuration.scribe_native import (
+    native_authority_settings,
+)
+from app.configuration.scribe_native import (
+    native_encounter_settings as encounter_settings,
+)
 from app.routes.authority_errors import agent_problem_response
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
@@ -37,7 +42,6 @@ from app.routes.scribe_capture import (
     get_capture_settings,
 )
 from app.routes.scribe_capture_deadline import CaptureDeadlineRoute
-from app.routes.scribe_encounters import encounter_settings
 from app.services import authority
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_gateway as gateway

@@ -663,6 +663,14 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
+        for_each = local.scribe_bundle_api_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
         for_each = merge(
           local.session_prep_shared_public_values,
           local.session_prep_authority_runtime_public_values,
@@ -904,6 +912,13 @@ resource "azurerm_container_app" "scheduler" {
 
       # Beat is lightweight: it polls Redis every few seconds and enqueues
       # the occasional task. Half a CPU and 512Mi is generous.
+      dynamic "env" {
+        for_each = local.scribe_bundle_scheduler_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
       cpu    = 0.25
       memory = "0.5Gi"
     }
@@ -986,7 +1001,7 @@ resource "azurerm_container_app" "worker" {
   # user-assigned identity rather than permitting an ambient credential chain.
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.health_services.id]
+    identity_ids = concat([azurerm_user_assigned_identity.health_services.id], var.scribe_core_bundle.attach_existing_translation_identity ? [data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id] : [])
   }
 
   template {
@@ -1075,6 +1090,14 @@ resource "azurerm_container_app" "worker" {
       dynamic "env" {
         for_each = local.zoom_durable_public_values
 
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.scribe_bundle_worker_values
         content {
           name  = env.key
           value = env.value
