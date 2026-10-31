@@ -8,7 +8,7 @@ import textwrap
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -176,9 +176,30 @@ INDEXED_BASELINE = {
 }
 
 
-def test_no_application_modules_are_loaded():
+def test_loader_introduces_no_application_module_imports(monkeypatch):
+    before = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "app" or name.startswith("app.")
+    }
     load_prompt_functions()
-    assert not any(n == "app" or n.startswith("app.") for n in sys.modules)
+    assert {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "app" or name.startswith("app.")
+    } == before
+
+    # A preexisting module models normal-suite bootstrap without importing app.
+    name = "app.synthetic_preexisting_prompt_test"
+    module = ModuleType(name)
+    monkeypatch.setitem(sys.modules, name, module)
+    before = {**before, name: module}
+    load_prompt_functions()
+    assert {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "app" or name.startswith("app.")
+    } == before
 
 
 @pytest.mark.parametrize("terms,bio,example,custom,expected", INDEXED_BASELINE.values())
