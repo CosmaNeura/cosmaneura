@@ -59,7 +59,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, col, create_engine, select
 
 from tests.authority_kernel.scribe_capture_admission_test import (
-    admission_case as _admission_case,
+    admission_case_data,
 )
 from tests.authority_kernel.scribe_capture_scope_test import (
     REAL_VIEW_AS_GUARD,
@@ -67,7 +67,10 @@ from tests.authority_kernel.scribe_capture_scope_test import (
 )
 from tests.authority_kernel.scribe_configured_capture_test import note_setup
 
-admission_case = _admission_case
+
+@pytest.fixture
+def admission_case(capture_engine):
+    yield from admission_case_data(capture_engine, normal_provider_record=True)
 
 
 @pytest.fixture
@@ -126,52 +129,14 @@ async def case(f, monkeypatch):
         observed_at=datetime.now(UTC),
     )
     f.session.commit()
-    # The capture-only fixture starts with an explicitly imported authority
-    # binding. Add the reviewed real-record links for this synthetic provider
-    # so normal Session Prep token renewal can use the same clinical scope.
-    from app.models.authority import AuthorityPersonOrigin
-    from app.models.provider_record_authority import (
-        ProviderPracticeAuthority,
-        ProviderRecordAuthority,
-    )
-
-    practice_scope = ProviderPracticeAuthority(
-        practice_id=f.case.practice.id, tenant_id=f.case.tenant.id
-    )
-    f.session.add(practice_scope)
-    f.session.flush()
-    f.case.person_binding.actor_id = f.case.actor.id
-    f.session.add(f.case.person_binding)
-    f.session.add(
-        AuthorityPersonOrigin(
-            person_id=f.case.person.id,
-            origin="provider_entry",
-            source_ref=str(f.case.patient.id),
-        )
-    )
-    f.session.add(
-        ProviderRecordAuthority(
-            binding_id=f.case.person_binding.id,
-            practice_authority_id=practice_scope.id,
-            doctor_id=f.case.doctor.id,
-            appointment_id=f.case.appointment.id,
-            patient_id=f.case.patient.id,
-            context_snapshot_ref="synthetic-capture-context-" + uuid4().hex,
-        )
-    )
-    # Generic Scribe capture also allows providers still onboarding. This
-    # fixture exercises Session Prep, so persist its real access prerequisite.
-    f.case.doctor.onboarding_completed_at = datetime.now(UTC)
-    f.session.add(f.case.doctor)
-    f.session.commit()
     assert resolve_doctor_access(f.case.doctor).allowed
     monkeypatch.setattr(
         review_route.configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
         SessionPrepProviderSettings(enabled=True),
     )
-    # The newly reviewed real-record association changes the context digest;
-    # exchange a fresh human grant before any subsequent capture operation.
+    # Exchange a fresh human grant after publishing the reviewed note, while
+    # retaining the ordinary provider-record association prepared at admission.
     token = authority.exchange_context_token(
         clerk_issuer=f.case.identity.issuer,
         clerk_subject=f.case.identity.subject,
@@ -768,7 +733,7 @@ async def test_foreign_frontier_does_not_affect_another_capture(
 
     from tests.authority_kernel.scribe_capture_scope_test import make_scope_case
 
-    other_case = make_scope_case(f.session)
+    other_case = make_scope_case(f.session, normal_provider_record=True)
     binding = resolve_capture_binding(**other_case.arguments)
     other = SimpleNamespace(
         engine=f.engine,
