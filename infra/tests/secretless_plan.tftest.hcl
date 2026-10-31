@@ -747,15 +747,15 @@ run "scribe_native_workload_without_session_prep" {
   }
   assert {
     condition = alltrue([for name, value in {
-      SCRIBE_NATIVE_WORKLOAD_ENABLED    = "true"
-      SCRIBE_NATIVE_WORKLOAD_AUDIENCE   = "10000000-0000-4000-8000-000000000001"
-      SCRIBE_NATIVE_WORKLOAD_CLIENT_ID  = "10000000-0000-4000-8000-000000000002"
+      SCRIBE_NATIVE_WORKLOAD_ENABLED         = "true"
+      SCRIBE_NATIVE_WORKLOAD_AUDIENCE        = "10000000-0000-4000-8000-000000000001"
+      SCRIBE_NATIVE_WORKLOAD_CLIENT_ID       = "10000000-0000-4000-8000-000000000002"
       SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED = "false"
-      AGENT_API_ENABLED                 = "false"
-      AUTHORITY_KERNEL_ENABLED          = "false"
-      SESSION_PREP_PROVIDER_ENABLED     = "false"
-      SCRIBE_CAPTURE_ENABLED            = "false"
-      SCRIBE_ENCOUNTER_CREATION_ENABLED = "false"
+      AGENT_API_ENABLED                      = "false"
+      AUTHORITY_KERNEL_ENABLED               = "false"
+      SESSION_PREP_PROVIDER_ENABLED          = "false"
+      SCRIBE_CAPTURE_ENABLED                 = "false"
+      SCRIBE_ENCOUNTER_CREATION_ENABLED      = "false"
     } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
     error_message = "native singleton configuration must not enable Session Prep, global Agent API/Authority Kernel or capture/encounters"
   }
