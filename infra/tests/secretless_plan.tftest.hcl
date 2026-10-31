@@ -278,11 +278,12 @@ run "secretless_static_plan" {
 
   assert {
     condition = (
-      !azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].active_directory_auth_enabled &&
       azurerm_postgresql_flexible_server.main.authentication[0].password_auth_enabled &&
+      azurerm_postgresql_flexible_server.main.authentication[0].tenant_id == "d51754d0-bba5-4810-820e-afac542844d6" &&
       length(azurerm_postgresql_flexible_server_active_directory_administrator.scribe_database_migrations) == 0
     )
-    error_message = "PostgreSQL Entra auth and the Scribe migration administrator must remain absent by default while existing password auth remains enabled"
+    error_message = "Production PostgreSQL must retain exact-tenant Entra and password auth by default without granting a migration administrator"
   }
 }
 
@@ -703,7 +704,6 @@ run "scribe_database_entra_auth_can_remain_after_admin_cleanup" {
   variables {
     adopt_existing_production_postgres_egress_rule = false
     production_container_apps_egress_ipv4          = "198.51.100.10"
-    enable_scribe_database_entra_auth              = true
   }
 
   assert {
@@ -722,6 +722,7 @@ run "scribe_database_admin_refuses_disabled_entra_auth" {
   variables {
     adopt_existing_production_postgres_egress_rule = false
     production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_entra_auth              = false
     enable_scribe_database_migration_administrator = true
     scribe_database_migration_identity_binding = {
       resource_id  = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-database-migrations"
@@ -731,7 +732,21 @@ run "scribe_database_admin_refuses_disabled_entra_auth" {
   }
 
   expect_failures = [
-    var.enable_scribe_database_migration_administrator,
+    var.enable_scribe_database_entra_auth,
+  ]
+}
+
+run "scribe_database_auth_false_override_is_rejected_without_admin" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_database_entra_auth              = false
+  }
+
+  expect_failures = [
+    var.enable_scribe_database_entra_auth,
   ]
 }
 
