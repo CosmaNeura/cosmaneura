@@ -45,7 +45,7 @@ def request(action):
                 provisional=True,
             )
         )
-    values = dict(
+    values: dict[str, object] = dict(
         action=action,
         expected_actor_ref=existing.ACTOR,
         expected_tenant_ref=existing.TENANT,
@@ -380,14 +380,14 @@ def test_context_capability_is_explicit_and_old_reply_shape_is_preserved(
     monkeypatch.setattr(
         scribe_provider_context, "_connection", lambda **_: existing.connection()
     )
-    values = dict(action="connection", request_nonce=uuid4())
+    values: dict[str, object] = dict(action="connection", request_nonce=uuid4())
     if opted:
         values["include_native_visit_actions_v2"] = True
     result = scribe_provider_context.read_provider_context(
         issuer=existing.ISSUER,
         subject="user_synthetic",
         session_id="sess_synthetic",
-        request=scribe_provider_context.ProviderContextRequest(**values),
+        request=scribe_provider_context.ProviderContextRequest.model_validate(values),
         authority_settings=existing.AUTH,
         deadline=time.monotonic() + 10,
     )
