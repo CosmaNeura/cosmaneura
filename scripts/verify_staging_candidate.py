@@ -25,6 +25,29 @@ MASTER_REF = "refs/heads/master"
 REPOSITORY = "CosmaNeura/cosmaneura"
 ALEMBIC_CONFIG = "alembic.ini"
 MIGRATION_DIRECTORY = "migrations/versions"
+# Business trees may advance only while a pinned audit proves the canonical
+# controller executes/reads exclusively the protected dependency closure below.
+# This is an audited source snapshot, not an inferred generic import graph.
+CANDIDATE_ONLY_PREFIXES = (
+    "app/",
+    "web/",
+    "migrations/",
+    "tests/",
+    "docs/flight-plans/",
+)
+AUDITED_DEPENDENCIES_PATH = "scripts/canonical_staging_control_dependencies.json"
+AUDITED_DEPENDENCIES_SHA256 = (
+    "4b21b24d92ca53ae7662e0c566d8276c54954ce3a177876133dc5cb60572880b"
+)
+REQUIRED_CONTROL_PATHS = frozenset(
+    {
+        ".github/workflows/deploy_staging_candidate.yml",
+        "scripts/verify_staging_candidate.py",
+        "infra-staging/deploy.sh",
+        "AGENTS.md",
+        "CLAUDE.md",
+    }
+)
 
 
 class CandidateVerificationError(RuntimeError):
@@ -43,6 +66,7 @@ class CandidateContext:
     ref_protected: str
     actor: str
     triggering_actor: str
+    reverify: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +324,126 @@ def _candidate_schema_head(
     return heads.pop()
 
 
+def _control_inventory(
+    sha: str,
+    *,
+    stdout: Callable[[list[str]], str],
+    extra_control_paths: frozenset[str] = frozenset(),
+) -> dict[str, tuple[str, str, str]]:
+    """Compare Git blob identity AND mode; never import descendant source."""
+    tree = stdout(["git", "ls-tree", "--full-tree", "-r", "-z", sha])
+    inventory: dict[str, tuple[str, str, str]] = {}
+    seen: set[str] = set()
+    for entry in tree.split("\0"):
+        if not entry:
+            continue
+        try:
+            metadata, path = entry.split("\t", 1)
+            mode, kind, object_sha = metadata.split(" ")
+        except ValueError:
+            raise CandidateVerificationError(
+                "protected control inventory is invalid"
+            ) from None
+        if (
+            not path
+            or path in seen
+            or path.startswith("/")
+            or any(part in {".", "..", ""} for part in path.split("/"))
+            or any(ord(character) < 32 or ord(character) == 127 for character in path)
+            or FULL_SHA.fullmatch(object_sha) is None
+            or (mode, kind)
+            not in {
+                ("100644", "blob"),
+                ("100755", "blob"),
+                ("120000", "blob"),
+                ("160000", "commit"),
+            }
+        ):
+            raise CandidateVerificationError("protected control inventory is invalid")
+        seen.add(path)
+        if path in extra_control_paths or not path.startswith(CANDIDATE_ONLY_PREFIXES):
+            inventory[path] = (mode, kind, object_sha)
+    if not REQUIRED_CONTROL_PATHS <= inventory.keys():
+        raise CandidateVerificationError("protected control inventory is incomplete")
+    return inventory
+
+
+def _verify_audited_controller(
+    controller_sha: str, *, stdout: Callable[[list[str]], str]
+) -> frozenset[str]:
+    if type(controller_sha) is not str or FULL_SHA.fullmatch(controller_sha) is None:
+        raise CandidateVerificationError("controller SHA is invalid")
+    raw = stdout(["git", "show", f"{controller_sha}:{AUDITED_DEPENDENCIES_PATH}"])
+    if hashlib.sha256(raw.encode()).hexdigest() != AUDITED_DEPENDENCIES_SHA256:
+        raise CandidateVerificationError(
+            "canonical dependency audit manifest changed or is missing"
+        )
+    try:
+        audit = json.loads(raw)
+        files = audit["files"]
+        paths = frozenset(files)
+    except (ValueError, KeyError, TypeError):
+        raise CandidateVerificationError(
+            "canonical dependency audit manifest is invalid"
+        ) from None
+    inventory = _control_inventory(
+        controller_sha, stdout=stdout, extra_control_paths=paths
+    )
+    selected = {path: inventory.get(path) for path in files}
+    observed = hashlib.sha256(
+        json.dumps(selected, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if observed != audit["control_inventory_sha256"]:
+        raise CandidateVerificationError(
+            "canonical controller dependency bytes or mode are unaudited"
+        )
+    return paths
+
+
+def _verify_unchanged_descendant_controls(
+    controller_sha: str,
+    current_master: str,
+    *,
+    stdout: Callable[[list[str]], str],
+    commit_exists: Callable[[str], bool],
+    is_ancestor: Callable[[str, str], bool],
+    audited_dependencies: frozenset[str] | None = None,
+) -> None:
+    if audited_dependencies is None:
+        audited_dependencies = _verify_audited_controller(controller_sha, stdout=stdout)
+    if not commit_exists(current_master):
+        # Fetch only the authenticated exact SHA. No refs, working tree,
+        # submodules, hooks or descendant scripts are updated/executed.
+        stdout(
+            [
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "fetch",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--no-recurse-submodules",
+                "--no-auto-maintenance",
+                f"https://github.com/{REPOSITORY}.git",
+                current_master,
+            ]
+        )
+    if not commit_exists(current_master) or not is_ancestor(
+        controller_sha, current_master
+    ):
+        raise CandidateVerificationError(
+            "current protected master is not a descendant of the dispatched controls"
+        )
+    if _control_inventory(
+        controller_sha, stdout=stdout, extra_control_paths=audited_dependencies
+    ) != _control_inventory(
+        current_master, stdout=stdout, extra_control_paths=audited_dependencies
+    ):
+        raise CandidateVerificationError(
+            "protected deployment controls changed after dispatch; start a new reviewed deployment"
+        )
+
+
 def _verify_candidate_source(
     *,
     candidate_sha: str,
@@ -310,6 +454,8 @@ def _verify_candidate_source(
     stdout: Callable[[list[str]], str],
     commit_exists: Callable[[str], bool],
     is_ancestor: Callable[[str, str], bool],
+    reverify: bool = False,
+    audited_dependencies: frozenset[str] | None = None,
 ) -> dict[str, str | int]:
     """Shared source decision only; no actor or execution authority."""
     if repository != REPOSITORY or not all(
@@ -343,8 +489,17 @@ def _verify_candidate_source(
 
     current_master = _protected_master_sha(repository, stdout=stdout)
     if current_master != controller_sha:
-        raise CandidateVerificationError(
-            "master advanced after dispatch; start a new reviewed deployment"
+        if not reverify:
+            raise CandidateVerificationError(
+                "master advanced after dispatch; start a new reviewed deployment"
+            )
+        _verify_unchanged_descendant_controls(
+            controller_sha,
+            current_master,
+            stdout=stdout,
+            commit_exists=commit_exists,
+            is_ancestor=is_ancestor,
+            audited_dependencies=audited_dependencies,
         )
     if not commit_exists(candidate_sha):
         raise CandidateVerificationError("candidate commit is unavailable")
@@ -407,6 +562,8 @@ def verify_candidate(
     commit_exists: Callable[[str], bool] = _commit_exists,
     is_ancestor: Callable[[str, str], bool] = _is_ancestor,
 ) -> dict[str, str | int]:
+    if type(context.reverify) is not bool:
+        raise CandidateVerificationError("candidate verification phase is invalid")
     if context.repository != REPOSITORY:
         raise CandidateVerificationError("unexpected repository")
     if context.event_name != "workflow_dispatch":
@@ -421,6 +578,9 @@ def verify_candidate(
         raise CandidateVerificationError(
             "staging deployment and reruns are restricted to the founder account"
         )
+    audited_dependencies = _verify_audited_controller(
+        context.workflow_sha, stdout=stdout
+    )
     return _verify_candidate_source(
         candidate_sha=context.candidate_sha,
         approval_pr_number=context.approval_pr_number,
@@ -430,6 +590,8 @@ def verify_candidate(
         stdout=stdout,
         commit_exists=commit_exists,
         is_ancestor=is_ancestor,
+        reverify=context.reverify,
+        audited_dependencies=audited_dependencies,
     )
 
 
@@ -528,6 +690,11 @@ def verify_human_candidate(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--reverify",
+        action="store_true",
+        help="Reverify after initial authorization; permit only unchanged protected descendant controls.",
+    )
     arguments = {
         "--candidate-sha": "CANDIDATE_SHA",
         "--approval-pr-number": "APPROVAL_PR_NUMBER",
@@ -559,6 +726,7 @@ def main() -> int:
         ref_protected=args.ref_protected,
         actor=args.actor,
         triggering_actor=args.triggering_actor,
+        reverify=args.reverify,
     )
     try:
         result = verify_candidate(context)
