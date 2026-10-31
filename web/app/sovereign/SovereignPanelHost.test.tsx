@@ -101,6 +101,122 @@ describe("SovereignPanelHost", () => {
     delete window.CosmaNeuraPanel
   })
 
+  it("keeps dated Prep accessible while a newer prior note awaits review and clears the warning after review without sending display data", async () => {
+    const setRecord = vi.fn(async () => 1)
+    const openSessionPrep = vi.fn()
+    const invalidateSessionPrep = vi.fn()
+    const target = document.createElement("div")
+    document.body.appendChild(target)
+    mountImplementation = () => ({
+      setRecord,
+      openSessionPrep,
+      invalidateSessionPrep,
+      recordPresentationTarget: target,
+      destroy: vi.fn(),
+    })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+    const priorNotes = {
+      notes: [
+        {
+          note_id: "note_synthetic",
+          appointment_id: "visit_prior",
+          appointment_date: "2026-10-01T12:00:00Z",
+          note_type: "SOAP",
+          status: "included" as const,
+        },
+        {
+          note_id: "note_synthetic_newer",
+          appointment_id: "visit_prior_newer",
+          appointment_date: "2026-10-10T12:00:00Z",
+          note_type: "SOAP",
+          status: "needs_review" as const,
+        },
+      ],
+      included_count: 1,
+      more_notes: false,
+      selection_limited: false,
+      selected_source_fingerprint: "sha256_" + "a".repeat(64),
+      newer_prior_note_awaiting_review: true,
+    }
+    const props = {
+      appointmentId: "appointment_source_refresh",
+      patientName: "Synthetic Morgan",
+      appointmentDate: "2026-10-20T12:00:00Z",
+      priorNotes,
+    }
+    const view = render(
+      <SovereignPanelHost
+        {...props}
+        priorNotes={{
+          ...priorNotes,
+          notes: [priorNotes.notes[0]],
+          newer_prior_note_awaiting_review: false,
+        }}
+      />,
+    )
+    await waitFor(() => expect(target).toHaveTextContent("Synthetic Morgan"))
+    expect(target.querySelector("a")).toHaveAttribute(
+      "href",
+      "/notes/visit_prior?reviewNote=note_synthetic#note-note_synthetic",
+    )
+    expect(invalidateSessionPrep).not.toHaveBeenCalled()
+    expect(target.querySelector('[role="status"]')).toBeNull()
+    // A new unreviewed source changes the warning without invalidating useful
+    // reviewed history whose server-owned selected fingerprint is unchanged.
+    view.rerender(<SovereignPanelHost {...props} />)
+    expect(target.querySelector('[role="status"]')).toHaveTextContent(
+      "A newer prior-visit note is awaiting your review",
+    )
+    expect(target).toHaveTextContent(
+      "Session Prep still shows earlier reviewed history",
+    )
+    expect(target).toHaveTextContent("Reviewed sources available · 1")
+    expect(invalidateSessionPrep).not.toHaveBeenCalled()
+    view.rerender(<SovereignPanelHost {...props} patientName={undefined} />)
+    expect(target.querySelector('[role="status"]')).toBeInTheDocument()
+    view.rerender(<SovereignPanelHost {...props} openRequest={1} />)
+    await waitFor(() => expect(openSessionPrep).toHaveBeenCalledTimes(1))
+    expect(target.querySelector('[role="status"]')).toBeInTheDocument()
+    view.rerender(
+      <SovereignPanelHost
+        {...props}
+        openRequest={1}
+        priorNotes={{
+          ...priorNotes,
+          selected_source_fingerprint: "sha256_" + "b".repeat(64),
+          newer_prior_note_awaiting_review: false,
+          included_count: 2,
+          notes: priorNotes.notes.map((note) => ({
+            ...note,
+            status: "included" as const,
+          })),
+        }}
+      />,
+    )
+    expect(invalidateSessionPrep).toHaveBeenCalledExactlyOnceWith(
+      "appointment_source_refresh",
+    )
+    expect(mount).toHaveBeenCalledTimes(1)
+    expect(openSessionPrep).toHaveBeenCalledTimes(1)
+    expect(target.querySelector('[role="status"]')).toBeNull()
+    expect(target).toHaveTextContent("Reviewed sources available · 2")
+    expect(mount.mock.calls[0][0]).not.toHaveProperty("patientName")
+    expect(mount.mock.calls[0][0]).not.toHaveProperty("priorNotes")
+    expect(await mount.mock.calls[0][0].getContext()).toEqual({
+      clientId: "appointment_source_refresh",
+    })
+    view.unmount()
+    target.remove()
+  })
+
   it("opens prep directly and invalidates a same-note source revision without remounting or sending display data", async () => {
     const setRecord = vi.fn(async () => 1)
     const openSessionPrep = vi.fn()

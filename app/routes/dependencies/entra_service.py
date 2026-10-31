@@ -11,6 +11,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient, PyJWTError
 
 from app import log
+from app.configuration.scribe_native import (
+    SCRIBE_NATIVE_AGENT_AUTH_SETTINGS,
+    SCRIBE_NATIVE_CAPTURE_AUTH_SETTINGS,
+)
 from app.configuration.service_auth import (
     AGENT_API_AUTH_SETTINGS,
     COMPANION_SESSION_PREP_AUTH_SETTINGS,
@@ -219,6 +223,12 @@ authenticate_sovereign_tool_request = EntraServiceAuthenticator(
 )
 authenticate_scribe_capture_request = EntraServiceAuthenticator(
     SCRIBE_CAPTURE_AUTH_SETTINGS
+)
+authenticate_scribe_native_agent_request = EntraServiceAuthenticator(
+    SCRIBE_NATIVE_AGENT_AUTH_SETTINGS
+)
+authenticate_scribe_native_capture_request = EntraServiceAuthenticator(
+    SCRIBE_NATIVE_CAPTURE_AUTH_SETTINGS
 )
 
 authenticate_companion_session_prep_request = EntraServiceAuthenticator(

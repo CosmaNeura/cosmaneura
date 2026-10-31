@@ -689,7 +689,7 @@ def validate_final_context(
     authorized: authority.AuthorizedInteraction,
     payload: dict[str, Any],
     settings: AuthorityKernelSettings,
-) -> None:
+) -> ProviderQuestionResultLike | None:
     """Runs under the final writer's authority locks and commit, including replay."""
     receipt = _read_receipt(session, authorized)
     reference = payload.get("provider_context_ref")
@@ -732,6 +732,7 @@ def validate_final_context(
         raise ProviderContextChanged
     if result.state != "ready" and payload["outcome"] != "unavailable":
         raise ProviderContextChanged
+    return result
 
 
 def _lock_final_sources(

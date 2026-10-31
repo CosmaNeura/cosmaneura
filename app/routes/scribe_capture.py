@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -39,7 +39,10 @@ from app.services.scribe_capture_deadline import (
     DeadlineScribeClient,
     check_capture_deadline,
 )
-from app.services.scribe_capture_notebook import ScratchNotes
+from app.services.scribe_capture_note_request import NoteRequest as NoteRequest
+from app.services.scribe_capture_note_request import (
+    NoteScopeRequest as NoteScopeRequest,
+)
 from app.services.scribe_capture_protocol import CaptureOperation
 from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
 from app.services.scribe_failure_diagnostics import report_unconfirmed
@@ -121,17 +124,6 @@ class OperationRequest(BaseModel):
     expected_session_id: UUID | None = None
 
 
-class NoteScopeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
-    binding_ref: str = Field(
-        pattern=r"^scribe_capture_binding_[0-7][0-9a-hjkmnp-tv-z]{25}$"
-    )
-    workspace_id: UUID
-    request_nonce: UUID
-    expected_session_id: UUID
-
-
 class PrepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     binding_ref: str = Field(
@@ -139,40 +131,6 @@ class PrepRequest(BaseModel):
     )
     workspace_id: UUID
     request_nonce: UUID
-
-
-class NoteRequest(NoteScopeRequest):
-    schema_ref: str | None = Field(
-        default=None, pattern=r"^doctor_note_schema_[0-7][0-9a-hjkmnp-tv-z]{25}$"
-    )
-    action: Literal[
-        "read",
-        "prepare",
-        "templates",
-        "template_preference",
-        "save",
-        "resolve",
-        "save_status",
-    ]
-    edit: note_edits.NoteEdit | None = None
-    scratch_notes: ScratchNotes | None = None
-
-    @model_validator(mode="after")
-    def template_selection(self) -> NoteRequest:
-        if (self.action in {"templates", "template_preference"}) != (
-            self.schema_ref is None
-        ):
-            raise ValueError("invalid_template_selection")
-        if (self.action in {"save", "resolve", "save_status"}) != (
-            self.edit is not None
-        ):
-            raise ValueError("invalid_note_edit_selection")
-        if self.scratch_notes is not None and (
-            self.action not in {"read", "prepare"}
-            or self.scratch_notes.workspace_id != self.workspace_id
-        ):
-            raise ValueError("invalid_notebook_source")
-        return self
 
 
 def get_admission_client_factory() -> Callable[[], ScribeWorkflowClient]:

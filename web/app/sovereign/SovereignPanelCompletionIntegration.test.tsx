@@ -66,7 +66,8 @@ it("loads the pinned dashboard asset and completes preparation without a second 
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.endsWith("/embed/history")) return json(emptyHistory())
+      if (url.endsWith("/embed/history-retained"))
+        return json({ ...emptyHistory(), schema_version: "1.2.0" })
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges += 1
         expect(JSON.parse(String(init?.body)).record_ref).toBe(

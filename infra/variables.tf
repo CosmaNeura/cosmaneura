@@ -165,6 +165,12 @@ variable "python_public_vars" {
       "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
       "SESSION_PREP_PROVIDER_ENABLED",
       "SCRIBE_CAPTURE_ENABLED",
+      "SCRIBE_NATIVE_WORKLOAD_ENABLED",
+      "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
+      "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
+      "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
+      "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
+      "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
       "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
       "SCRIBE_CAPTURE_NOTES_ENABLED",
       "SCRIBE_CAPTURE_RECOVERY_ENABLED",
@@ -202,6 +208,53 @@ variable "session_prep_production_rollout" {
       var.session_prep_production_rollout.agent_api_audience != "00000000-0000-0000-0000-000000000000"
     )
     error_message = "Session Prep production activation requires nonzero canonical Entra audience and Sovereign client UUIDs"
+  }
+}
+
+variable "scribe_native_workload_rollout" {
+  description = "Default-off singleton Scribe native-facade caller and Core audience with optional native context, existing-patient visit and full native v2 gates. Does not enable Session Prep, global Agent API/Authority Kernel or capture gates."
+  type = object({
+    enabled                         = bool
+    audience                        = string
+    client_id                       = string
+    provider_context_enabled        = optional(bool, false)
+    existing_patient_visits_enabled = optional(bool, false)
+    native_visit_actions_v2_enabled = optional(bool, false)
+  })
+  nullable = false
+  default = {
+    enabled   = false
+    audience  = ""
+    client_id = ""
+  }
+
+  validation {
+    condition = !var.scribe_native_workload_rollout.enabled || (
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.scribe_native_workload_rollout.audience)) &&
+      var.scribe_native_workload_rollout.audience != "00000000-0000-0000-0000-000000000000" &&
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.scribe_native_workload_rollout.client_id)) &&
+      var.scribe_native_workload_rollout.client_id != "00000000-0000-0000-0000-000000000000" &&
+      var.scribe_native_workload_rollout.client_id != var.session_prep_production_rollout.sovereign_client_id
+    )
+    error_message = "native workload activation requires one canonical nonzero Core audience and distinct Scribe receiver client UUID"
+  }
+  validation {
+    condition     = !var.scribe_native_workload_rollout.provider_context_enabled || var.scribe_native_workload_rollout.enabled
+    error_message = "native provider context reads require the dedicated native workload boundary"
+  }
+  validation {
+    condition = !var.scribe_native_workload_rollout.existing_patient_visits_enabled || (
+      var.scribe_native_workload_rollout.enabled && var.scribe_native_workload_rollout.provider_context_enabled
+    )
+    error_message = "native existing-patient visits require current provider context and the dedicated native workload boundary"
+  }
+  validation {
+    condition = !var.scribe_native_workload_rollout.native_visit_actions_v2_enabled || (
+      var.scribe_native_workload_rollout.enabled &&
+      var.scribe_native_workload_rollout.provider_context_enabled &&
+      var.scribe_native_workload_rollout.existing_patient_visits_enabled
+    )
+    error_message = "full native v2 visit actions require the dedicated workload, current provider context and existing native visit gates"
   }
 }
 
