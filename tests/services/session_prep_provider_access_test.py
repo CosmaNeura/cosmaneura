@@ -35,14 +35,20 @@ def _doctor(label: str, *, onboarded: bool = True) -> Doctor:
 
 
 def _pilot_grant(
-    doctor: Doctor, *, practice: Practice | None = None
+    doctor: Doctor,
+    *,
+    practice: Practice | None = None,
+    snapshot_doctor: Doctor | None = None,
+    granted_at: datetime | None = None,
 ) -> PilotAccessGrandfatherGrant:
     now = datetime.now(UTC)
     assert doctor.email is not None
     email = doctor.email.lower()
     return PilotAccessGrandfatherGrant(
         clerk_id=doctor.clerk_id,
-        doctor_id_snapshot=doctor.id,
+        doctor_id_snapshot=(
+            snapshot_doctor.id if snapshot_doctor is not None else doctor.id
+        ),
         practice_id_snapshot=practice.id if practice is not None else None,
         email_snapshot=email,
         email_sha256=hashlib.sha256(email.encode()).hexdigest(),
@@ -51,7 +57,7 @@ def _pilot_grant(
         grant_plan_sha256="b" * 64,
         granted_by_ref="test-suite",
         grant_reason="Prove pilot access cannot replace Session Prep prerequisites",
-        granted_at=now - timedelta(minutes=1),
+        granted_at=granted_at if granted_at is not None else now - timedelta(minutes=1),
     ).save()
 
 
@@ -311,23 +317,20 @@ def test_pilot_entitlement_requires_current_bound_grant(invalid: str) -> None:
     practice.subscription_status = None
     practice.save()
     if invalid != "missing":
-        grant = _pilot_grant(
-            doctor, practice=None if invalid == "unbound_practice" else practice
-        )
+        grant_practice = None if invalid == "unbound_practice" else practice
         if invalid == "other_practice":
-            grant.practice_id_snapshot = provision_practice_in_force(
-                _doctor("other-practice")
-            ).id
-            grant.save()
-        elif invalid == "future":
-            grant.granted_at = datetime.now(UTC) + timedelta(days=1)
-            grant.save()
-        elif invalid == "email":
+            grant_practice = provision_practice_in_force(_doctor("other-practice"))
+        _pilot_grant(
+            doctor,
+            practice=grant_practice,
+            snapshot_doctor=_doctor("other-doctor") if invalid == "doctor" else None,
+            granted_at=(
+                datetime.now(UTC) + timedelta(days=1) if invalid == "future" else None
+            ),
+        )
+        if invalid == "email":
             doctor.email = f"changed-{secrets.token_hex(4)}@example.com"
             doctor.save()
-        elif invalid == "doctor":
-            grant.doctor_id_snapshot = _doctor("other-doctor").id
-            grant.save()
 
     decision = resolve_session_prep_provider_access(doctor)
 
