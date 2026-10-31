@@ -101,8 +101,10 @@ def test_therapist_structured_prompt_and_label_note():
     with patch.object(summarize, "extract_action_items", return_value="- none"):
         prompt = build_structured_prompt(transcript, None, schema)
 
-    assert "you just had with a client" in prompt
-    assert 'lines labeled "Patient:" are the client' in prompt
+    assert "supplied recording of an encounter with a client" in prompt
+    assert "for the recorded therapist to review" in prompt
+    assert '"Patient:" labels the recorded client' in prompt
+    assert "you just had with a client" not in prompt
 
 
 def test_default_structured_prompt_has_no_label_note():
@@ -115,7 +117,9 @@ def test_default_structured_prompt_has_no_label_note():
     with patch.object(summarize, "extract_action_items", return_value="- none"):
         prompt = build_structured_prompt(transcript, None, schema)
 
-    assert "you just had with a patient" in prompt
+    assert "supplied recording of an encounter with a patient" in prompt
+    assert "for the recorded doctor to review" in prompt
+    assert "you just had with a patient" not in prompt
     assert "lines labeled" not in prompt
 
 
@@ -125,9 +129,13 @@ def test_therapist_action_item_prompt():
 
     prompt = build_action_item_prompt(transcript, THERAPIST)
 
-    assert "You are a therapist reviewing the transcript of a client visit" in prompt
-    assert "Actions for the client" in prompt
-    assert "Actions for the patient" not in prompt
+    assert (
+        "recorded encounter of a client, for the recorded therapist's draft note"
+        in prompt
+    )
+    assert "Examples of recorded client actions, only if explicitly stated" in prompt
+    assert "Examples of recorded patient actions" not in prompt
+    assert "You are a therapist reviewing" not in prompt
 
 
 def test_therapist_augmented_note_wording():

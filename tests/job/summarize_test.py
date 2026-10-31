@@ -944,7 +944,7 @@ def _soap_schema_and_transcript() -> tuple[DoctorNoteSchema, AIVisitTranscript]:
     return schema, transcript
 
 
-def test_require_plan_reason_default_keeps_reasons():
+def test_require_plan_reason_keeps_only_recorded_reasons():
     schema, transcript = _soap_schema_and_transcript()
     customization = NoteTypeCustomization(
         doctor_note_schema_id=schema.id, require_plan_reason=True
@@ -962,8 +962,16 @@ def test_require_plan_reason_default_keeps_reasons():
     eval_n_of_m(
         call_llm=create,
         criteria=(
-            "Every bullet in the Plan section states a reason or purpose for the "
-            "action (e.g. a 'to ...' or 'for ...' clause), not just the bare action."
+            "Compare the Plan to the recorded transcript below. Preserve a reason "
+            "or purpose when explicitly recorded. If an action has no recorded "
+            "reason, its purpose must remain unstated; a bare documented action "
+            "is valid. Do not infer reasons from diagnoses, medication indications "
+            "or trigger conditions. Preserve recorded actions and conditions.\n\n"
+            + "Recorded transcript:\n"
+            + "\n".join(
+                f"{entry.speaker}: {entry.content}"
+                for entry in transcript.transcript_data
+            )
         ),
         n=1,
         m=2,
