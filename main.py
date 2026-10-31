@@ -42,9 +42,15 @@ if __name__ == "__main__":
 
     PORT = config("PORT", cast=int)
 
+    from app.scribe_bundle import API_FLAG, enabled
+
+    bundled = enabled(API_FLAG)
+    if bundled:
+        additional_args["factory"] = True
+
     uvicorn.run(
         # a import path is required for dev, so we use that for prod as well
-        app="app.server:api_app",
+        app="app.scribe_bundle:create_app" if bundled else "app.server:api_app",
         # bind on all interfaces
         host="0.0.0.0",
         port=PORT,
