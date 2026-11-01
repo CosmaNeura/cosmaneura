@@ -1267,6 +1267,9 @@ jobs:
       - name: Deploy candidate digest with protected-master controls
         id: deploy
         env:
+          STAGING_APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
