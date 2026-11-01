@@ -40,6 +40,36 @@ ROOT = Path(__file__).resolve().parents[1]
 # A substantive normalizer change requires a fresh SQL-contract review.
 NORMALIZATION_SOURCE_CONTRACTS = (
     (
+        "app/services/pilot_access_grandfather.py",
+        None,
+        "_normalize_email",
+        "8da6369dce26470504c6ca1531cf15e779e4a561025443e8031c36b0ae86b19a",
+    ),
+    (
+        "app/services/pilot_access_grandfather.py",
+        None,
+        "_normalize_clerk_id",
+        "6f88b776d02a69e6e403196126f620b0023a0a03ca19f258e9dc1357d177a555",
+    ),
+    (
+        "app/services/pilot_access_grandfather.py",
+        None,
+        "_email_sha256",
+        "7b5790f1bb6c0d438528ec20b6c882328eafdf318b8a7cadb273cdeef0b838a0",
+    ),
+    (
+        "app/services/pilot_access_grandfather.py",
+        None,
+        "active_pilot_access_grant",
+        "2fac22a6def8b8aa475204f6b6a7b05676cebdc621814c39c19cde7b57136892",
+    ),
+    (
+        "app/services/session_prep_provider_access.py",
+        None,
+        "resolve_session_prep_provider_access",
+        "bceba723b59de6606e5077c19045bb105ddb27a2e9fe9da8da7baf790e25a76b",
+    ),
+    (
         "app/models/practice.py",
         "Practice",
         "has_authoritative_stripe_subscription_binding",
@@ -125,6 +155,7 @@ SELECT check_name, violations
                 SELECT 1
                   FROM pilot_access_grandfather_grant
                  WHERE revoked_at IS NULL
+                    OR (granted_at <= %s AND revoked_at > %s)
                  GROUP BY clerk_id
                 HAVING count(*) > 1
                ) AS duplicate_active_pilot_grants
@@ -188,6 +219,12 @@ SELECT check_name, violations
         SELECT 'unsupported_identity_or_billing_normalization', count(*)::bigint
           FROM (
                 SELECT email AS value FROM doctor
+                UNION ALL
+                SELECT clerk_id FROM doctor
+                UNION ALL
+                SELECT clerk_id FROM pilot_access_grandfather_grant
+                UNION ALL
+                SELECT email_snapshot FROM pilot_access_grandfather_grant
                 UNION ALL
                 SELECT approved_email FROM organization_roster_approval
                 UNION ALL
@@ -317,7 +354,8 @@ provider_state AS (
             )
         )
             THEN 'baa_not_in_force'
-        WHEN NOT CASE
+        WHEN NOT (
+        CASE
             WHEN practice.subscription_status IN ('pending_verification', 'invalid')
                 THEN false
             WHEN practice.billing_exempt
@@ -353,6 +391,8 @@ provider_state AS (
             ELSE practice.trial_ends_at IS NOT NULL
              AND practice.trial_ends_at > parameters.observed_at
         END
+        OR coalesce(pilot_entitlement.matches_current_practice, false)
+        )
             THEN 'entitlement_not_in_force'
         ELSE 'eligible'
     END AS classification
@@ -361,6 +401,35 @@ provider_state AS (
       LEFT JOIN practice_member AS member ON member.doctor_id = doctor.id
       LEFT JOIN practice ON practice.id = member.practice_id
       LEFT JOIN pilot_state ON pilot_state.clerk_id = doctor.clerk_id
+      LEFT JOIN LATERAL (
+          SELECT count(*) = 1 AND bool_and(
+              doctor.clerk_id = btrim(doctor.clerk_id)
+              AND left(doctor.clerk_id, 5) = 'user_'
+              AND char_length(doctor.clerk_id) BETWEEN 6 AND 255
+              AND position(' ' IN doctor.clerk_id) = 0
+              AND doctor.email IS NOT NULL
+              AND char_length(btrim(doctor.email)) BETWEEN 1 AND 320
+              AND (
+                  char_length(btrim(doctor.email))
+                  - char_length(replace(btrim(doctor.email), '@', ''))
+              ) = 1
+              AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 1) <> ''
+              AND position(
+                  '.' IN split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2)
+              ) > 0
+              AND (pilot_grant.doctor_id_snapshot IS NULL OR pilot_grant.doctor_id_snapshot = doctor.id)
+              AND pilot_grant.practice_id_snapshot = practice.id
+              AND pilot_grant.email_snapshot = lower(btrim(doctor.email) COLLATE "C")
+              AND pilot_grant.email_sha256 = encode(
+                  sha256(convert_to(lower(btrim(doctor.email) COLLATE "C"), 'UTF8')),
+                  'hex'
+              )
+          ) AS matches_current_practice
+            FROM pilot_access_grandfather_grant AS pilot_grant
+           WHERE pilot_grant.clerk_id = doctor.clerk_id
+             AND pilot_grant.granted_at <= parameters.observed_at
+             AND (pilot_grant.revoked_at IS NULL OR pilot_grant.revoked_at > parameters.observed_at)
+      ) AS pilot_entitlement ON true
       LEFT JOIN organization_roster_approval AS roster_approval
         ON roster_approval.id = member.organization_roster_approval_id
       LEFT JOIN roster_history
@@ -716,7 +785,9 @@ def collect_inventory(
     """Read aggregate eligibility state; never select or return identifiers."""
 
     validate_runtime_normalization_contract()
-    _parse_integrity(connection.execute(INTEGRITY_QUERY).fetchall())
+    _parse_integrity(
+        connection.execute(INTEGRITY_QUERY, (observed_at, observed_at)).fetchall()
+    )
     contract = migration_contract or repository_migration_contract()
     migration_head = validate_migration_compatibility(
         _observed_migration_heads(connection.execute(MIGRATION_HEAD_QUERY).fetchall()),
