@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { toast } from "~/hooks/use-toast"
+
 import { MedicationPanel } from "./MedicationPanel"
 import {
   act,
@@ -96,6 +98,79 @@ beforeEach(() => {
 })
 
 describe("MedicationPanel", () => {
+  it("declares held-reader support on all four reads while preserving patient and abort options", async () => {
+    stubList([CONFIRMED])
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+    )
+    await screen.findByTestId("confirmed-medication")
+
+    const signal = medicationList.mock.calls[0][0].signal
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(signal.aborted).toBe(false)
+    for (const read of [
+      medicationList,
+      patientReferenceResources,
+      medicationDrugReference,
+      medicationNutrientDepletions,
+    ]) {
+      expect(read).toHaveBeenCalledExactlyOnceWith({
+        path: { patient_id: "patient_1" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
+        signal,
+      })
+    }
+  })
+
+  it("shows an unavailable list after a 409 reader refusal and retries without reloading", async () => {
+    stubList([{ ...CONFIRMED, status: "held" }])
+    medicationList.mockResolvedValueOnce({
+      error: { detail: "Medication reader upgrade required" },
+      response: { status: 409 },
+    })
+    const reload = vi.spyOn(window.location, "reload")
+    const href = window.location.href
+    try {
+      render(
+        <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+      )
+      await screen.findByRole("status")
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Could not load the medication list for this patient.",
+      )
+      expect(
+        screen.queryByText("No medications recorded yet."),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId("confirmed-medication"),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("textbox", { name: /Add a medication/ }),
+      ).not.toBeInTheDocument()
+      expect(medicationCreate).not.toHaveBeenCalled()
+      expect(medicationUpdate).not.toHaveBeenCalled()
+      expect(medicationDelete).not.toHaveBeenCalled()
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Retry medication list" }),
+      )
+      await screen.findByText(/held temporarily/)
+      expect(screen.queryByRole("status")).not.toBeInTheDocument()
+      expect(medicationList).toHaveBeenCalledTimes(2)
+      for (const [options] of medicationList.mock.calls) {
+        expect(options.path).toEqual({ patient_id: "patient_1" })
+        expect(options.headers).toEqual({
+          "X-Cosmaneura-Medication-Reader": "held-v1",
+        })
+      }
+      expect(medicationList.mock.calls[0][0].signal.aborted).toBe(true)
+      expect(reload).not.toHaveBeenCalled()
+      expect(window.location.href).toBe(href)
+    } finally {
+      reload.mockRestore()
+    }
+  })
+
   it("distinguishes held status in current, prior and confirmed rows without writer controls", async () => {
     stubList([
       { ...CONFIRMED, status: "held" },
@@ -263,9 +338,25 @@ describe("MedicationPanel", () => {
     await waitFor(() =>
       expect(medicationUpdate).toHaveBeenCalledWith({
         path: { medication_id: "patient_medication_2" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
         body: { confirmed: true },
       }),
     )
+  })
+
+  it("declares held-reader support when dismissing an open-visit suggestion", async () => {
+    stubList([UNCONFIRMED])
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }))
+    await waitFor(() =>
+      expect(medicationDelete).toHaveBeenCalledExactlyOnceWith({
+        path: { medication_id: "patient_medication_2" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
+      }),
+    )
+    await waitFor(() => expect(medicationList).toHaveBeenCalledTimes(2))
   })
 
   it("keeps dated historical and unknown suggestions read-only while confirmed medications remain patient-wide", async () => {
@@ -384,9 +475,51 @@ describe("MedicationPanel", () => {
     await waitFor(() =>
       expect(medicationCreate).toHaveBeenCalledWith({
         path: { patient_id: "patient_1" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
         body: { name: "Synthetic medication" },
       }),
     )
+  })
+
+  it("retains a manual draft after a 409 mutation refusal and clears it only after success", async () => {
+    stubList([CONFIRMED])
+    medicationCreate.mockResolvedValueOnce({
+      error: { detail: "Medication reader upgrade required" },
+      response: { status: 409 },
+    })
+    vi.mocked(toast).mockClear()
+    const reload = vi.spyOn(window.location, "reload")
+    try {
+      render(
+        <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+      )
+      await screen.findByTestId("confirmed-medication")
+      const input = screen.getByRole("textbox", { name: /Add a medication/ })
+      fireEvent.change(input, { target: { value: "Unsaved synthetic entry" } })
+      fireEvent.click(screen.getByRole("button", { name: "Add" }))
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith({
+          title: "Could not add",
+          variant: "destructive",
+        }),
+      )
+      expect(input).toHaveValue("Unsaved synthetic entry")
+      expect(screen.getByRole("button", { name: "Add" })).toBeEnabled()
+      expect(medicationList).toHaveBeenCalledTimes(1)
+      expect(medicationCreate).toHaveBeenCalledExactlyOnceWith({
+        path: { patient_id: "patient_1" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
+        body: { name: "Unsaved synthetic entry" },
+      })
+      expect(reload).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByRole("button", { name: "Add" }))
+      await waitFor(() => expect(medicationCreate).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(input).toHaveValue(""))
+      expect(medicationList).toHaveBeenCalledTimes(2)
+    } finally {
+      reload.mockRestore()
+    }
   })
 
   it("ignores a late mutation completion after switching away and back to the same patient", async () => {
@@ -428,6 +561,7 @@ describe("MedicationPanel", () => {
     expect(medicationList).toHaveBeenCalledTimes(3)
     expect(medicationCreate).toHaveBeenCalledWith({
       path: { patient_id: "patient_old" },
+      headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
       body: { name: "Original draft" },
     })
   })
