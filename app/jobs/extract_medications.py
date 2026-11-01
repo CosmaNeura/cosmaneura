@@ -58,7 +58,8 @@ def build_extraction_prompt(transcript_text: str) -> str:
     return dedent(f"""
     You are reviewing the transcript of a clinical visit. Extract every
     medication, over-the-counter drug, and dietary supplement the patient
-    says they are taking or that the provider tells them to take.
+    says they are taking, explicitly stopped, or temporarily held, or that
+    the provider tells them to take, stop or temporarily hold.
 
     <TRANSCRIPT>
     {transcript_text}
@@ -69,7 +70,12 @@ def build_extraction_prompt(transcript_text: str) -> str:
       other supplements.
     - Do NOT include foods, procedures, or conditions.
     - Use the plain ingredient/drug name; keep dose/frequency separately.
-    - If the patient says they stopped something, mark status "stopped".
+    - Use "held" only when the source explicitly says a medication is temporarily
+      held, paused or on hold. Do not label a temporary hold "active" or "stopped".
+    - Use "stopped" for an explicit discontinuation or stop, and "active" for
+      stated current use or an instruction to take the medication.
+    - Do not infer a restart, hold duration or purpose that was not stated.
+      Omit medications whose status is unclear rather than guessing.
     - Do not invent anything not stated in the transcript.
 
     Respond only in JSON with this schema:
@@ -79,7 +85,7 @@ def build_extraction_prompt(transcript_text: str) -> str:
           "name": string,            // e.g. "metformin"
           "kind": "prescription" | "otc" | "supplement" | "unknown",
           "dosage": string | null,   // e.g. "500mg twice daily"
-          "status": "active" | "stopped"
+          "status": "active" | "stopped" | "held"
         }}
       ]
     }}
@@ -145,6 +151,11 @@ def perform(transcript_id: str | TypeID | TypeIDType):
         if not name:
             continue
 
+        status_value = item.get("status")
+        if status_value not in {s.value for s in MedicationStatus}:
+            # An unsupported or missing classification is not evidence of use.
+            continue
+
         kind = item.get("kind")
         if kind not in _VALID_KINDS:
             kind = MedicationKind.unknown.value
@@ -169,11 +180,7 @@ def perform(transcript_id: str | TypeID | TypeIDType):
             normalized_name=normalized_name,
             rxnorm_cui=rxnorm_cui,
             kind=MedicationKind(kind),
-            status=MedicationStatus(
-                item.get("status")
-                if item.get("status") in {"active", "stopped"}
-                else "active"
-            ),
+            status=MedicationStatus(status_value),
             source=MedicationSource.transcript,
             dosage=item.get("dosage"),
             confirmed=False,

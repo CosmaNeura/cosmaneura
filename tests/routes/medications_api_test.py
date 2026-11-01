@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import cast
 
 from fastapi import status
@@ -148,19 +148,27 @@ def test_extract_endpoint_queues_job(
     assert "ibuprofen" in names
 
 
-def test_reader_round_trips_held_without_enabling_held_inputs(
+def test_owner_hold_resume_preserves_source_and_other_confirmed_states(
     authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
     patient = _patient_for(doctor)
+    source = AppointmentFactory.build(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_date=datetime(2026, 10, 31, 12, 0),
+    ).save()
+    confirmation = datetime(2026, 10, 31, 13, 0, tzinfo=timezone.utc)
     rows = [
         PatientMedication(
             doctor_id=doctor.id,
             patient_id=patient.id,
+            appointment_id=source.id,
             name="Synthetic medication",
             status=value,
-            source=MedicationSource.manual,
+            source=MedicationSource.transcript,
             confirmed=True,
+            confirmed_at=confirmation,
         ).save()
         for value in (
             MedicationStatus.active,
@@ -168,27 +176,84 @@ def test_reader_round_trips_held_without_enabling_held_inputs(
             MedicationStatus.held,
         )
     ]
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(rows[0].id))
+    for target in ("held", "active"):
+        response = authenticated_client.patch(endpoint, json={"status": target})
+        assert response.status_code == status.HTTP_200_OK
+        body = response.json()
+        assert body["status"] == target and body["confirmed"] is True
+        assert body["appointment_id"] == str(source.id)
+        assert (
+            datetime.fromisoformat(body["source_appointment_date"])
+            == source.appointment_date
+        )
+        assert datetime.fromisoformat(body["confirmed_at"]) == confirmation
+        assert body["list_updated_at"] is not None
+        row = PatientMedication.one(id=rows[0].id)
+        assert row.status.value == target and row.confirmed
+        assert row.confirmed_at == confirmation
+    assert PatientMedication.one(id=rows[1].id).status == MedicationStatus.stopped
+    assert PatientMedication.one(id=rows[2].id).status == MedicationStatus.held
     response = authenticated_client.get(
         api_app.url_path_for("medication_list", patient_id=str(patient.id))
     )
     assert response.status_code == status.HTTP_200_OK
-    assert {m["status"] for m in response.json()} == {"active", "stopped", "held"}
     assert {m["id"] for m in response.json()} == {str(row.id) for row in rows}
-    for route, body in (
-        (
-            api_app.url_path_for("medication_create", patient_id=str(patient.id)),
-            {"name": "Synthetic", "status": "held"},
-        ),
-        (
-            api_app.url_path_for("medication_update", medication_id=str(rows[0].id)),
-            {"status": "held"},
-        ),
-    ):
-        response = authenticated_client.request(
-            "POST" if "patients" in route else "PATCH", route, json=body
+    assert {m["status"] for m in response.json()} == {"active", "stopped", "held"}
+
+
+def test_owner_confirms_held_suggestion_and_manual_held_entry(
+    authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    row = PatientMedication(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        name="Synthetic metformin",
+        source=MedicationSource.transcript,
+        status=MedicationStatus.stopped,
+    ).save()
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(row.id))
+    response = authenticated_client.patch(endpoint, json={"status": "held"})
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["status"] == "held" and not response.json()["confirmed"]
+    response = authenticated_client.patch(endpoint, json={"confirmed": True})
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["status"] == "held" and response.json()["confirmed"]
+    assert response.json()["confirmed_at"] is not None
+    response = authenticated_client.post(
+        api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+        json={"name": "Synthetic held entry", "status": "held"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["status"] == "held" and response.json()["confirmed"]
+    assert response.json()["source"] == "manual"
+
+
+def test_foreign_hold_resume_and_create_are_denied(authenticated_client: TestClient):
+    _authed_doctor()
+    other = DoctorFactory.build().save()
+    patient = _patient_for(other)
+    row = PatientMedication(
+        doctor_id=other.id,
+        patient_id=patient.id,
+        name="Synthetic",
+        status=MedicationStatus.held,
+        confirmed=True,
+    ).save()
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(row.id))
+    for target in ("active", "held"):
+        response = authenticated_client.patch(
+            endpoint, json={"status": target, "confirmed": True}
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert PatientMedication.one(id=rows[0].id).status == MedicationStatus.active
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    response = authenticated_client.post(
+        api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+        json={"name": "Synthetic", "status": "held"},
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert PatientMedication.one(id=row.id).status == MedicationStatus.held
     assert (
-        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 3
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 1
     )
