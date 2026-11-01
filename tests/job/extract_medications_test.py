@@ -87,3 +87,21 @@ def test_extraction_is_idempotent_per_appointment():
 def test_missing_transcript_is_noop():
     # should not raise
     perform("ai_visit_transcript_00000000000000000000000000")
+
+
+def test_reader_stage_extraction_cannot_write_new_held_status(monkeypatch):
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    transcript = _transcript(doctor, patient, [("Patient", "Metformin is on hold.")])
+    monkeypatch.setattr(
+        job,
+        "extract_from_text",
+        lambda _text: [{"name": "metformin", "kind": "prescription", "status": "held"}],
+    )
+    monkeypatch.setattr(job, "normalize_drug_name", lambda _name: (None, None))
+    perform(transcript.id)
+    row = PatientMedication.one(patient_id=patient.id)
+    assert (
+        row.status.value == "active"
+    )  # old classification retained until all readers upgrade
+    assert not row.confirmed

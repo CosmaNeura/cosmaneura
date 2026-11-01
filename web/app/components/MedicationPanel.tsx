@@ -257,6 +257,9 @@ export function MedicationPanel({
           <span className="flex-1">
             {medication.display_name ?? medication.name}
             {medication.dosage ? ` · ${medication.dosage}` : ""}
+            {medication.status === "held" && (
+              <span className="text-muted-foreground"> (held temporarily)</span>
+            )}
             {medication.status === "stopped" && (
               <span className="text-muted-foreground">
                 {" "}
@@ -437,6 +440,12 @@ export function MedicationPanel({
                 <span className="flex-1">
                   {m.name}
                   {m.dosage ? ` · ${m.dosage}` : ""}
+                  {m.status === "held" && (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      (held temporarily)
+                    </span>
+                  )}
                   {m.status === "stopped" && (
                     <span className="text-muted-foreground"> (stopped)</span>
                   )}

@@ -12,6 +12,7 @@ from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.patient_medication import (
     MedicationSource,
+    MedicationStatus,
     PatientMedication,
 )
 
@@ -145,3 +146,49 @@ def test_extract_endpoint_queues_job(
     names = {r.normalized_name for r in rows}
     assert "lisinopril" in names
     assert "ibuprofen" in names
+
+
+def test_reader_round_trips_held_without_enabling_held_inputs(
+    authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    rows = [
+        PatientMedication(
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            name="Synthetic medication",
+            status=value,
+            source=MedicationSource.manual,
+            confirmed=True,
+        ).save()
+        for value in (
+            MedicationStatus.active,
+            MedicationStatus.stopped,
+            MedicationStatus.held,
+        )
+    ]
+    response = authenticated_client.get(
+        api_app.url_path_for("medication_list", patient_id=str(patient.id))
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert {m["status"] for m in response.json()} == {"active", "stopped", "held"}
+    assert {m["id"] for m in response.json()} == {str(row.id) for row in rows}
+    for route, body in (
+        (
+            api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+            {"name": "Synthetic", "status": "held"},
+        ),
+        (
+            api_app.url_path_for("medication_update", medication_id=str(rows[0].id)),
+            {"status": "held"},
+        ),
+    ):
+        response = authenticated_client.request(
+            "POST" if "patients" in route else "PATCH", route, json=body
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert PatientMedication.one(id=rows[0].id).status == MedicationStatus.active
+    assert (
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 3
+    )

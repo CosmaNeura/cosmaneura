@@ -96,6 +96,35 @@ beforeEach(() => {
 })
 
 describe("MedicationPanel", () => {
+  it("distinguishes held status in current, prior and confirmed rows without writer controls", async () => {
+    stubList([
+      { ...CONFIRMED, status: "held" },
+      { ...UNCONFIRMED, status: "held" },
+      {
+        ...UNCONFIRMED,
+        id: "prior",
+        status: "held",
+        appointment_id: "prior_visit",
+      },
+    ])
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+    )
+    await waitFor(() =>
+      expect(screen.getAllByText(/held temporarily/)).toHaveLength(3),
+    )
+    expect(
+      screen.queryByRole("button", { name: "Hold" }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Resume" }),
+    ).not.toBeInTheDocument()
+    expect(medicationUpdate).not.toHaveBeenCalled()
+    expect(
+      within(screen.getByTestId("historical-medication")).queryByRole("button"),
+    ).not.toBeInTheDocument()
+  })
+
   it("separates unconfirmed extracted rows from confirmed ones and shows links", async () => {
     stubList([CONFIRMED, UNCONFIRMED])
 

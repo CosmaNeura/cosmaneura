@@ -3338,6 +3338,8 @@ class MedicationData(BaseModel, extra="forbid"):
     confirmed: bool
     appointment_id: str | None = None
     source_appointment_date: datetime | None = None
+    confirmed_at: datetime | None = None
+    list_updated_at: datetime | None = None
 
 
 def _medication_data(row: PatientMedication) -> MedicationData:
@@ -3364,6 +3366,8 @@ def _medication_data(row: PatientMedication) -> MedicationData:
         source=row.source,
         dosage=row.dosage,
         confirmed=row.confirmed,
+        confirmed_at=row.confirmed_at,
+        list_updated_at=row.updated_at,
         appointment_id=str(source.id) if source is not None else None,
         source_appointment_date=source.appointment_date if source is not None else None,
     )
@@ -3416,7 +3420,9 @@ def medication_list(
 class CreateMedication(BaseModel, extra="forbid"):
     name: str = Field(min_length=1, max_length=300)
     kind: MedicationKind = MedicationKind.unknown
-    status: MedicationStatus = MedicationStatus.active
+    status: Literal[MedicationStatus.active, MedicationStatus.stopped] = (
+        MedicationStatus.active
+    )
     dosage: str | None = Field(default=None, max_length=300)
 
 
@@ -3450,7 +3456,7 @@ def medication_create(
 class UpdateMedication(BaseModel, extra="forbid"):
     name: str | None = Field(default=None, min_length=1, max_length=300)
     kind: MedicationKind | None = None
-    status: MedicationStatus | None = None
+    status: Literal[MedicationStatus.active, MedicationStatus.stopped] | None = None
     dosage: str | None = Field(default=None, max_length=300)
     confirmed: bool | None = None
 
