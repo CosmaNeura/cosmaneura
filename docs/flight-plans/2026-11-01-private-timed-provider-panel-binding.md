@@ -21,8 +21,10 @@ verbatim `app/panel.delivery.js` from reviewed private provider SOURCE9
 The matching provider delivery manifest is copied verbatim. The Core digest,
 SRI, upstream commit and formatter exclusions advance together. All existing
 immutable assets remain unchanged, including the prior `0c04de96…` asset. No
-compiler, dependency, authorization, migration, configuration or Scribe code
-changes accompany the projection.
+compiler, dependency, migration, configuration or Scribe code changes accompany
+the projection. Its necessary Host integration correction retains the existing
+principal checks and applies the existing bounded authentication-failure fence
+to direct context reads.
 
 The upstream commit currently names private local source. It is not a claim of
 GitHub publication, authenticated artifact admission or a deployed compatible
@@ -38,12 +40,23 @@ using the already qualified local frontend dependencies. The Source9 minified
 expiry receipt may carry only because its exact artifact bytes are unchanged.
 No repeated provider96 or Core26 suite is implied.
 
-Existing current-asset Core DOM fixtures still model the earlier retained-read
-endpoints. Their timed1.3 metadata and fresh-export expectations require a
-separate focused compatibility closure before this candidate can pass all
-normal release checks. Preserve the old closed1.0/1.1/1.2 transport tests and
-historical-asset assertions. Asset hash/pin checks alone do not qualify the
-provider workflow, live browser, own-record access or production export.
+The five current-asset Core DOM fixtures now model the timed1.3 endpoint and
+authoritative UTC metadata. Ordinary fake timer advancement moves wall and
+monotonic clocks together; the separate provider expiry harness retains the OS
+sleep/discontinuity cases. Display tests open the authenticated provider panel;
+held and denied bootstrap cases remain closed. Fresh exports preserve exact
+answer bytes and server verification/expiry clocks; unavailable timed reads
+withhold the answer and preserve the draft.
+
+The original post-chat SDK rejection/stall assertions exposed a real bridge
+gap. `getContext` now uses the same bounded read/authentication-state mechanism
+as governed history reads. Pending or failed SDK verification revokes the mount
+and its token and returns the existing `authenticationUnavailable` failure;
+normal current-principal and record checks remain. Retain initial failures and
+record final affected asset, Host and DOM results separately. The unchanged old
+closed1.0/1.1/1.2 transport tests and historical-asset assertions remain in place.
+These local checks do not qualify the live browser, production caller, database
+or deployed export.
 
 ## Paired release order and recovery
 
