@@ -3448,7 +3448,7 @@ def medication_list(
         .all()
     )
 
-    owned_rows = cast(list[PatientMedication], rows)
+    owned_rows = cast(list[PatientMedication], list(rows))
     _require_medication_reader(request, (row.status for row in owned_rows))
     return [_medication_data(r) for r in owned_rows]
 
@@ -3456,9 +3456,7 @@ def medication_list(
 class CreateMedication(BaseModel, extra="forbid"):
     name: str = Field(min_length=1, max_length=300)
     kind: MedicationKind = MedicationKind.unknown
-    status: Literal[MedicationStatus.active, MedicationStatus.stopped] = (
-        MedicationStatus.active
-    )
+    status: MedicationStatus = MedicationStatus.active
     dosage: str | None = Field(default=None, max_length=300)
 
 
@@ -3468,6 +3466,7 @@ def medication_create(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     patient = _reference_patient_or_404(doctor, patient_id)
+    _require_medication_reader(request, (data.status,))
 
     row = PatientMedication(
         doctor_id=doctor.id,
@@ -3492,7 +3491,7 @@ def medication_create(
 class UpdateMedication(BaseModel, extra="forbid"):
     name: str | None = Field(default=None, min_length=1, max_length=300)
     kind: MedicationKind | None = None
-    status: Literal[MedicationStatus.active, MedicationStatus.stopped] | None = None
+    status: MedicationStatus | None = None
     dosage: str | None = Field(default=None, max_length=300)
     confirmed: bool | None = None
 
