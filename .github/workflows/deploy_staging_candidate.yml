@@ -1293,7 +1293,23 @@ jobs:
           ZOOM_WATCHDOG_ENABLED: "false"
         run: |
           set -euo pipefail
+          trap 'unset RECALL_API_KEY_INPUT' EXIT
+          # Preserve the installed key; the resolver independently checks all three ready Core apps.
+          if ! RECALL_API_KEY_INPUT=$(
+            timeout 20s env -i HOME="$HOME" PATH="$PATH" LANG=C LC_ALL=C \
+              AZURE_LOGGING_ENABLE_LOG_FILE=false AZURE_CORE_COLLECT_TELEMETRY=false \
+              AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
+              az containerapp secret list --name cosmaneura-staging-app \
+                --resource-group cosmaneura-staging --subscription bab2a709-1fcb-4c87-a9fc-802f7477ec13 \
+                --show-values --query "[?name=='recall-api-key'].value" \
+                --only-show-errors --output tsv 2>/dev/null | head -c 4097
+          ) || [[ -z "$RECALL_API_KEY_INPUT" ]]; then
+            printf '%s\n' 'Failed to read the installed staging Recall key.' >&2
+            exit 1
+          fi
+          export RECALL_API_KEY_INPUT
           bash infra-staging/deploy.sh "$CANDIDATE_SHA" "$IMAGE_DIGEST"
+          unset RECALL_API_KEY_INPUT
 
       - name: Run bounded staging health smoke
         id: smoke
