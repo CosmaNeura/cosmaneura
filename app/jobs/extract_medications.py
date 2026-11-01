@@ -152,7 +152,9 @@ def perform(transcript_id: str | TypeID | TypeIDType):
             continue
 
         status_value = item.get("status")
-        if status_value not in {s.value for s in MedicationStatus}:
+        if not isinstance(status_value, str) or status_value not in {
+            s.value for s in MedicationStatus
+        }:
             # An unsupported or missing classification is not evidence of use.
             continue
 

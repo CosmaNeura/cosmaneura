@@ -172,8 +172,10 @@ def test_existing_explicit_extraction_statuses_are_preserved(monkeypatch, status
         {"name": "metformin"},
         {"name": "metformin", "status": "unknown"},
         {"name": "metformin", "status": None},
+        {"name": "metformin", "status": []},
+        {"name": "metformin", "status": {}},
     ],
-    ids=["missing", "unknown", "null"],
+    ids=["missing", "unknown", "null", "list", "object"],
 )
 def test_missing_or_unknown_status_does_not_invent_active(monkeypatch, item):
     doctor = DoctorFactory.build().save()
