@@ -10,6 +10,7 @@ from app.server import api_app
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor import Doctor
+from app.models.drug_reference import DrugReference
 from app.models.patient import Patient
 from app.models.patient_medication import (
     MedicationSource,
@@ -269,7 +270,8 @@ def test_legacy_nonheld_reader_is_compatible_and_header_is_not_ownership(
         PatientMedication(
             doctor_id=doctor.id,
             patient_id=patient.id,
-            name="Synthetic",
+            name="metformin",
+            normalized_name="metformin",
             status=value,
             confirmed=True,
         ).save()
@@ -296,6 +298,24 @@ def test_legacy_nonheld_reader_is_compatible_and_header_is_not_ownership(
     assert response.status_code == status.HTTP_200_OK
     assert {item["id"] for item in response.json()} == {str(row.id) for row in rows}
     assert str(deleted.id) not in response.text
+    DrugReference.find_or_create_by(normalized_name="metformin")
+    for route in (
+        "patient_reference_resources",
+        "medication_drug_reference",
+        "medication_nutrient_depletions",
+    ):
+        reference = authenticated_client.get(
+            api_app.url_path_for(route, patient_id=str(patient.id))
+        )
+        assert reference.status_code == status.HTTP_200_OK
+        entries = reference.json()["medications"]
+        ids = {
+            item["medication"]["id"]
+            if route == "patient_reference_resources"
+            else item["medication_id"]
+            for item in entries
+        }
+        assert ids == {str(row.id) for row in rows}
     foreign = DoctorFactory.build().save()
     foreign_patient = _patient_for(foreign)
     foreign_row = PatientMedication(

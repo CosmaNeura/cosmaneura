@@ -3448,7 +3448,7 @@ def medication_list(
         .all()
     )
 
-    owned_rows = cast(list[PatientMedication], rows)
+    owned_rows = cast(list[PatientMedication], list(rows))
     _require_medication_reader(request, (row.status for row in owned_rows))
     return [_medication_data(r) for r in owned_rows]
 
