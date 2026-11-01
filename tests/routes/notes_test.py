@@ -363,9 +363,13 @@ def test_note_count():
     # paranoid check that the db is empty, we are still figuring out the right pattern for seeds, etc
     assert DoctorNoteSchema.count() == 2
 
-    note_schema = DoctorNoteSchemaFactory.build().save()
+    note_schema = DoctorNoteSchemaFactory.build(
+        note_type="Synthetic count first"
+    ).save()
 
-    note_schema2 = DoctorNoteSchemaFactory.build(doctor_id=note_schema.doctor_id).save()
+    note_schema2 = DoctorNoteSchemaFactory.build(
+        doctor_id=note_schema.doctor_id, note_type="Synthetic count second"
+    ).save()
     DoctorNoteExampleFactory.build(
         doctor_note_schema_id=note_schema2.id, doctor_id=note_schema2.doctor_id
     ).save()
