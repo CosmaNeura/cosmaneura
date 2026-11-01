@@ -861,11 +861,22 @@ def admit(run_id: int, attempt: int, artifact_id: int) -> dict[str, Any]:
 
 
 def record(
-    run_id: int, attempt: int, artifact_id: int, configuration: Path, output: Path
+    run_id: int,
+    attempt: int,
+    artifact_id: int,
+    configuration: Path,
+    output: Path,
+    admission_path: Path | None = None,
 ) -> None:
     context = candidate.source_context()
     prepared, accepted = prepare(context, run_id, attempt, artifact_id)
-    config = candidate.public_configuration(candidate.read_json(configuration))
+    config = candidate.public_configuration(
+        candidate.read_json(configuration), context["source_sha"], admission_path
+    )
+    require(
+        prepared["frontend_authority_enabled"]
+        is (config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "true")
+    )
     require(digest(canonical(config)) == prepared["public_configuration_digest"])
     observation = observe(context, prepared)
     require(candidate.source_context() == context)
@@ -923,6 +934,7 @@ def main() -> int:
     parser.add_argument("--run-attempt", type=int, required=True)
     parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--configuration", type=Path)
+    parser.add_argument("--frontend-admission", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
@@ -934,9 +946,14 @@ def main() -> int:
                 args.artifact_id,
                 args.configuration,
                 args.output,
+                args.frontend_admission,
             )
         else:
-            require(args.configuration is None and args.output is None)
+            require(
+                args.configuration is None
+                and args.output is None
+                and args.frontend_admission is None
+            )
             print(
                 canonical(
                     check(args.run_id, args.run_attempt, args.artifact_id)
