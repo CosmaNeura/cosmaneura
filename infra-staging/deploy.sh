@@ -242,8 +242,46 @@ verify_founder_release_source() {
 	fi
 }
 
+verify_staging_release_source() {
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
+		verify_founder_release_source
+		return $?
+	fi
+	local source_result
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" != "service-principal" || \
+		"$GIT_SHA" != "${CANDIDATE_SHA:-}" || "$STAGING_IMAGE_DIGEST" != "${IMAGE_DIGEST:-}" || \
+		! "$GIT_SHA" =~ ^[0-9a-f]{40}$ || ! "$STAGING_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ || \
+		! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ || \
+		! "${WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ || \
+		! "$EXPECTED_SCHEMA_BEFORE" =~ ^[0-9a-f]{12}$ || ! "$EXPECTED_SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]; then
+		echo "Hosted staging requires the exact canonical candidate, published digest, PR and schema inputs."
+		return 1
+	fi
+	if ! source_result=$(cd "$REPOSITORY_ROOT" && "$PYTHON_BIN" -I -S -B \
+		scripts/verify_staging_candidate.py --reverify --candidate-sha "$GIT_SHA" \
+		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" --expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
+		--workflow-sha "$WORKFLOW_SHA"); then
+		echo "Hosted staging candidate provenance reverification failed."
+		return 1
+	fi
+	if ! printf '%s' "$source_result" | jq -e --arg candidate "$GIT_SHA" \
+		--argjson approval_pr "$STAGING_APPROVAL_PR_NUMBER" --arg schema "$EXPECTED_SCHEMA_AFTER" '
+		type == "object" and keys == ["approval_pr_number","candidate_sha","master_sha","schema_head"] and
+		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and .schema_head == $schema and
+		(.master_sha | test("^[0-9a-f]{40}$"))' >/dev/null; then
+		echo "Hosted staging candidate source evidence is invalid."
+		return 1
+	fi
+	# Bind the existing migration selectors only after the canonical founder
+	# dispatch, protected-master/PR/schema verifier and published digest agree.
+	FOUNDER_CANDIDATE_SHA=$GIT_SHA
+	FOUNDER_CANDIDATE_IMAGE_DIGEST=$STAGING_IMAGE_DIGEST
+	FOUNDER_APPROVAL_PR_NUMBER=$STAGING_APPROVAL_PR_NUMBER
+	FOUNDER_EXPECTED_SCHEMA_AFTER=$EXPECTED_SCHEMA_AFTER
+}
+
 case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
-service-principal) ;;
+service-principal) verify_staging_release_source || exit 1 ;;
 founder-user) verify_founder_release_source || exit 1 ;;
 *) echo "Unsupported staging deployment identity mode."; exit 1 ;;
 esac
@@ -1163,7 +1201,7 @@ verify_migration_job_template() {
 	local compatibility_args=()
 	# Version-2 candidates already escape the URL in migrations/env.py.
 	# Keep the old bootstrap only for the historical pinned release.
-	if [[ -z "${RELEASE_V2_JSON:-}" ]]; then
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && -z "${RELEASE_V2_JSON:-}" ]]; then
 		compatibility_args+=(--staging-alembic-compatibility)
 	fi
 	if ! migration_template=$(az containerapp job show \
@@ -1327,9 +1365,9 @@ run_migrations() {
 	fi
 
 	# Build secrets and env var args from the same source as the app containers.
-	local migration_command command_flag=--staging-alembic-command
-	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
-		command_flag=--alembic-command
+	local migration_command command_flag=--alembic-command
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && -z "${RELEASE_V2_JSON:-}" ]]; then
+		command_flag=--staging-alembic-command
 	fi
 	migration_command=$("$PYTHON_BIN" -I -S -B \
 		"$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
@@ -1832,7 +1870,7 @@ wait_for_incompatible_worker_replicas_to_drain() {
 }
 
 # Run migrations before deploying new containers
-verify_founder_release_source || exit 1
+verify_staging_release_source || exit 1
 verify_azure_deployment_identity || exit 1
 verify_preserved_runtime || exit 1
 run_migrations
