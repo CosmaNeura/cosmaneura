@@ -13,6 +13,7 @@ from app.routes.embed_context import (
 from app.server import api_app
 
 from app.models.doctor import Doctor
+from app.models.patient_medication import MedicationStatus, PatientMedication
 from app.models.practice import PracticeMember
 from app.models.superadmin_capability import (
     SuperadminCapabilityEnvironment,
@@ -20,7 +21,11 @@ from app.models.superadmin_capability import (
 )
 from app.models.view_as import ViewAsAuditEvent, ViewAsSession
 
-from tests.factories import SimpleIncompleteIntakeFactory, save_practice_member
+from tests.factories import (
+    PatientFactory,
+    SimpleIncompleteIntakeFactory,
+    save_practice_member,
+)
 from tests.routes.utils import (
     MOCK_CLERK_ISSUER,
     get_clerk_dev_user,
@@ -465,3 +470,61 @@ def test_malformed_target_is_value_minimally_audited_for_capable_actor(
     assert audit.event_type == "rejected"
     assert audit.reason_code == "target_unavailable"
     assert audit.target_doctor_id is None
+
+
+def test_medication_reader_capability_cannot_authorize_view_as_mutations(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    _staging_environment(monkeypatch)
+    _, _, clerk_user = get_clerk_dev_user()
+    actor = Doctor.one(clerk_id=clerk_user.id)
+    grant_test_superadmin_capability(actor, SuperadminCapabilityKind.view_as)
+    target = Doctor(
+        clerk_id="user_held_reader_target",
+        email="held-reader@example.net",
+        biography="",
+    ).save()
+    provision_practice_in_force(target)
+    patient = PatientFactory.build(doctor_id=target.id).save()
+    row = PatientMedication(
+        doctor_id=target.id,
+        patient_id=patient.id,
+        name="Synthetic",
+        status=MedicationStatus.held,
+    ).save()
+    before = row.model_dump()
+    began = authenticated_client.post(
+        api_app.url_path_for("begin_view_as"), json={"target_doctor_id": str(target.id)}
+    )
+    assert began.status_code == status.HTTP_200_OK
+    headers = {
+        "X-Cosmaneura-View-As-Binding": began.json()["request_binding"],
+        "X-Cosmaneura-Medication-Reader": "held-v1",
+    }
+    for method, route, body in (
+        (
+            "POST",
+            api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+            {"name": "Synthetic"},
+        ),
+        (
+            "PATCH",
+            api_app.url_path_for("medication_update", medication_id=str(row.id)),
+            {"status": "active"},
+        ),
+        (
+            "DELETE",
+            api_app.url_path_for("medication_delete", medication_id=str(row.id)),
+            None,
+        ),
+    ):
+        response = authenticated_client.request(
+            method, route, json=body, headers=headers
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert (
+            response.json()["detail"]
+            == "View-as is read-only. Exit view-as before making changes."
+        )
+    assert PatientMedication.one(id=row.id).model_dump() == before

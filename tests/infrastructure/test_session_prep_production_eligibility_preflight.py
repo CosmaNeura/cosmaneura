@@ -25,6 +25,7 @@ from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
+from sqlalchemy.exc import MultipleResultsFound
 
 from tests.factories import save_practice_member
 from tests.routes.utils import provision_practice_in_force
@@ -61,7 +62,7 @@ class _AggregateConnection:
         params: tuple[Any, ...] = (),
     ) -> _Rows:
         if query == preflight.INTEGRITY_QUERY:
-            assert params == ()
+            assert len(params) == 2 and params[0] == params[1]
             return _Rows(self.integrity)
         if query == preflight.MIGRATION_HEAD_QUERY:
             assert params == ()
@@ -393,34 +394,66 @@ def _doctor(label: str, *, onboarded: bool = True) -> Doctor:
 
 def _pilot_grant(
     doctor: Doctor,
-    practice: Practice,
+    practice: Practice | None,
     *,
     observed_at: datetime,
     revoked: bool,
     label: str,
+    snapshot_doctor: Doctor | None = None,
+    omit_doctor_snapshot: bool = False,
+    email_snapshot: str | None = None,
+    email_sha256: str | None = None,
+    granted_at: datetime | None = None,
+    revoked_at: datetime | None = None,
 ) -> PilotAccessGrandfatherGrant:
     assert doctor.email is not None
-    email = doctor.email.lower()
-    revoked_at = observed_at - timedelta(days=1) if revoked else None
+    email = doctor.email.strip().lower() if email_snapshot is None else email_snapshot
+    effective_revoked_at = (
+        revoked_at
+        if revoked_at is not None
+        else observed_at - timedelta(days=1)
+        if revoked
+        else None
+    )
     return PilotAccessGrandfatherGrant(
         clerk_id=doctor.clerk_id,
-        doctor_id_snapshot=doctor.id,
-        practice_id_snapshot=practice.id,
+        doctor_id_snapshot=(
+            None
+            if omit_doctor_snapshot
+            else snapshot_doctor.id
+            if snapshot_doctor is not None
+            else doctor.id
+        ),
+        practice_id_snapshot=practice.id if practice is not None else None,
         email_snapshot=email,
-        email_sha256=hashlib.sha256(email.encode()).hexdigest(),
+        email_sha256=(
+            hashlib.sha256(email.encode()).hexdigest()
+            if email_sha256 is None
+            else email_sha256
+        ),
         source_ref=f"test:eligibility-inventory:{label}",
         source_sha256=hashlib.sha256(f"source:{label}".encode()).hexdigest(),
         grant_plan_sha256=hashlib.sha256(f"plan:{label}".encode()).hexdigest(),
         granted_by_ref="test-suite",
         grant_reason="Verify aggregate Session Prep eligibility precedence",
-        granted_at=observed_at - timedelta(days=2),
-        revoked_at=revoked_at,
-        revoked_by_ref="test-suite" if revoked else None,
-        revocation_reason="Test revocation" if revoked else None,
-        revocation_plan_sha256=(
-            hashlib.sha256(f"revoke:{label}".encode()).hexdigest() if revoked else None
+        granted_at=(
+            observed_at - timedelta(days=2) if granted_at is None else granted_at
         ),
-        retain_until=(revoked_at + timedelta(days=2922) if revoked_at else None),
+        revoked_at=effective_revoked_at,
+        revoked_by_ref="test-suite" if effective_revoked_at is not None else None,
+        revocation_reason="Test revocation"
+        if effective_revoked_at is not None
+        else None,
+        revocation_plan_sha256=(
+            hashlib.sha256(f"revoke:{label}".encode()).hexdigest()
+            if effective_revoked_at is not None
+            else None
+        ),
+        retain_until=(
+            effective_revoked_at + timedelta(days=2922)
+            if effective_revoked_at is not None
+            else None
+        ),
     ).save()
 
 
@@ -599,3 +632,129 @@ def test_aggregate_query_matches_the_live_strict_provider_predicate() -> None:
     assert (
         after_report["migration_head"] == preflight.repository_migration_contract().head
     )
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_classification"),
+    [
+        ("valid", "eligible"),
+        ("no_doctor_snapshot", "eligible"),
+        ("normalized_email", "eligible"),
+        ("missing", "entitlement_not_in_force"),
+        ("unbound_practice", "entitlement_not_in_force"),
+        ("other_practice", "entitlement_not_in_force"),
+        ("future", "entitlement_not_in_force"),
+        ("email", "entitlement_not_in_force"),
+        ("hash", "entitlement_not_in_force"),
+        ("doctor", "entitlement_not_in_force"),
+        ("invalid_email", "entitlement_not_in_force"),
+        ("invalid_clerk", "entitlement_not_in_force"),
+        ("deleted", "provider_unavailable"),
+        ("revoked", "pilot_grant_revoked"),
+        ("future_revoked_only", "pilot_grant_revoked"),
+        ("replacement", "eligible"),
+        ("incomplete", "onboarding_incomplete"),
+        ("inactive", "practice_membership_inactive"),
+        ("unauthorized", "practice_access_not_authorized"),
+        ("no_baa", "baa_not_in_force"),
+    ],
+)
+def test_aggregate_pilot_entitlement_matches_current_runtime_and_prior_gates(
+    state: str,
+    expected_classification: str,
+) -> None:
+    observed_at = datetime.now(UTC)
+    other = _doctor("pilot-other")
+    other_practice = provision_practice_in_force(other)
+    before = _classification_counts(
+        _collect_from_test_database(observed_at=observed_at)
+    )
+    doctor = _doctor(f"pilot-{state}", onboarded=state != "incomplete")
+    if state == "normalized_email":
+        assert doctor.email is not None
+        doctor.email = f"  {doctor.email.upper()}  "
+    elif state == "invalid_email":
+        doctor.email = f"invalid-{secrets.token_hex(4)}@nodot"
+    elif state == "invalid_clerk":
+        doctor.clerk_id = f"user_invalid {secrets.token_hex(4)}"
+    elif state == "deleted":
+        doctor.deleted_at = observed_at - timedelta(seconds=1)
+    doctor.save()
+    practice = provision_practice_in_force(doctor)
+    practice.billing_exempt = False
+    practice.billing_exempt_until = None
+    practice.trial_ends_at = None
+    practice.subscription_status = None
+    if state == "no_baa":
+        practice.baa_version = None
+        practice.baa_accepted_at = None
+        practice.baa_accepted_by_doctor_id = None
+        practice.baa_signature_name = None
+        practice.baa_signature_title = None
+    practice.save()
+    if state in {"inactive", "unauthorized"}:
+        member = PracticeMember.one(doctor_id=doctor.id)
+        if state == "inactive":
+            member.seat_state = "inactive"
+            member.access_ends_at = None
+        else:
+            member.attested_at = None
+            member.attestation_name = None
+        save_practice_member(member)
+    if state == "replacement":
+        _pilot_grant(
+            doctor, practice, observed_at=observed_at, revoked=True, label="predecessor"
+        )
+    if state != "missing":
+        _pilot_grant(
+            doctor,
+            None
+            if state == "unbound_practice"
+            else (other_practice if state == "other_practice" else practice),
+            observed_at=observed_at,
+            revoked=state == "revoked",
+            label=state,
+            snapshot_doctor=other if state == "doctor" else None,
+            omit_doctor_snapshot=state == "no_doctor_snapshot",
+            email_snapshot="different@example.com" if state == "email" else None,
+            email_sha256="0" * 64 if state == "hash" else None,
+            granted_at=(
+                observed_at + timedelta(seconds=1) if state == "future" else None
+            ),
+            revoked_at=(
+                observed_at + timedelta(seconds=1)
+                if state == "future_revoked_only"
+                else None
+            ),
+        )
+    decision = resolve_session_prep_provider_access(doctor, at=observed_at)
+    classification = "eligible" if decision.allowed else decision.denial_reason
+    assert classification == expected_classification
+    report = _collect_from_test_database(observed_at=observed_at)
+    assert _classification_counts(report) - before == Counter({classification: 1})
+    assert report["total"] - sum(before.values()) == 1
+
+
+def test_aggregate_refuses_ambiguous_time_valid_pilot_candidates() -> None:
+    observed_at = datetime.now(UTC)
+    doctor = _doctor("pilot-ambiguous")
+    practice = provision_practice_in_force(doctor)
+    practice.billing_exempt = False
+    practice.trial_ends_at = None
+    practice.subscription_status = None
+    practice.save()
+    _pilot_grant(
+        doctor,
+        practice,
+        observed_at=observed_at,
+        revoked=False,
+        label="future-revocation",
+        revoked_at=observed_at + timedelta(seconds=1),
+    )
+    _pilot_grant(
+        doctor, practice, observed_at=observed_at, revoked=False, label="active"
+    )
+    with pytest.raises(MultipleResultsFound):
+        resolve_session_prep_provider_access(doctor, at=observed_at)
+    with pytest.raises(preflight.InventoryFailure, match="ambiguous"):
+        _collect_from_test_database(observed_at=observed_at)

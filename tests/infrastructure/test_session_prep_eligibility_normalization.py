@@ -302,9 +302,22 @@ def test_normalization_body_change_requires_new_review(
     contract: tuple[str, str | None, str, str],
 ) -> None:
     _copy_contract_sources(tmp_path)
-    path, _, _, _ = contract
-    source = (tmp_path / path).read_text()
-    (tmp_path / path).write_text(source.replace(".strip()", '.strip(" ")'))
+    path, scope, name, _ = contract
+    tree = ast.parse((tmp_path / path).read_text())
+    body = (
+        tree.body
+        if scope is None
+        else next(
+            node.body
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == scope
+        )
+    )
+    function = next(
+        node for node in body if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    function.body.insert(0, ast.Expr(value=ast.Constant(value="changed contract body")))
+    (tmp_path / path).write_text(ast.unparse(ast.fix_missing_locations(tree)))
     with pytest.raises(preflight.InventoryFailure):
         preflight.validate_runtime_normalization_contract(tmp_path)
 

@@ -143,7 +143,6 @@ class PreservationTests(unittest.TestCase):
                                 "acquisition": acquisition,
                                 "info": f.info,
                                 "revision": f.revision,
-                                "secrets": f.secrets,
                             }
                         )
                     )
@@ -171,7 +170,9 @@ class PreservationTests(unittest.TestCase):
                         "  assert not any(k in os.environ for k in ('OP_SERVICE_ACCOUNT_TOKEN','DATABASE_URL','RECALL_API_KEY_INPUT'))\n"
                         "  if f['acquisition']=='read-failure': sys.exit(7)\n"
                         "  print(f['acquisition'])\n"
-                        " elif a[:3]==['containerapp','secret','list']: print(json.dumps(f['secrets'][name]))\n"
+                        # Construct the fixed fictional response inside the mock
+                        # CLI instead of persisting any fixture secret mapping.
+                        " elif a[:3]==['containerapp','secret','list']: print(json.dumps([{'name':'recall-api-key','value':'fictional-test-credential-do-not-use'}]))\n"
                         " elif a[:3]==['containerapp','revision','show']: print(json.dumps(f['revision'][name]))\n"
                         " else: print(json.dumps(f['info'][name]))\n"
                     )
