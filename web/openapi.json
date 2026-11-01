@@ -4587,12 +4587,7 @@
             "default": "unknown"
           },
           "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "stopped"
-            ],
-            "title": "Status",
+            "$ref": "#/components/schemas/MedicationStatus",
             "default": "active"
           },
           "dosage": {
@@ -8026,17 +8021,12 @@
           "status": {
             "anyOf": [
               {
-                "type": "string",
-                "enum": [
-                  "active",
-                  "stopped"
-                ]
+                "$ref": "#/components/schemas/MedicationStatus"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Status"
+            ]
           },
           "dosage": {
             "anyOf": [

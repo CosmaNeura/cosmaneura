@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import cast
 
 import pytest
@@ -150,19 +150,27 @@ def test_extract_endpoint_queues_job(
     assert "ibuprofen" in names
 
 
-def test_reader_round_trips_held_without_enabling_held_inputs(
+def test_owner_hold_resume_preserves_source_and_other_confirmed_states(
     authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
     patient = _patient_for(doctor)
+    source = AppointmentFactory.build(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_date=datetime(2026, 10, 31, 12, 0),
+    ).save()
+    confirmation = datetime(2026, 10, 31, 13, 0, tzinfo=timezone.utc)
     rows = [
         PatientMedication(
             doctor_id=doctor.id,
             patient_id=patient.id,
+            appointment_id=source.id,
             name="Synthetic medication",
             status=value,
-            source=MedicationSource.manual,
+            source=MedicationSource.transcript,
             confirmed=True,
+            confirmed_at=confirmation,
         ).save()
         for value in (
             MedicationStatus.active,
@@ -170,33 +178,95 @@ def test_reader_round_trips_held_without_enabling_held_inputs(
             MedicationStatus.held,
         )
     ]
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(rows[0].id))
+    for target in ("held", "active"):
+        response = authenticated_client.patch(
+            endpoint, json={"status": target}, headers=READER_HEADERS
+        )
+        assert response.status_code == status.HTTP_200_OK
+        body = response.json()
+        assert body["status"] == target and body["confirmed"] is True
+        assert body["appointment_id"] == str(source.id)
+        assert (
+            datetime.fromisoformat(body["source_appointment_date"])
+            == source.appointment_date
+        )
+        assert datetime.fromisoformat(body["confirmed_at"]) == confirmation
+        assert body["list_updated_at"] is not None
+        row = PatientMedication.one(id=rows[0].id)
+        assert row.status.value == target and row.confirmed
+        assert row.confirmed_at == confirmation
+    assert PatientMedication.one(id=rows[1].id).status == MedicationStatus.stopped
+    assert PatientMedication.one(id=rows[2].id).status == MedicationStatus.held
     response = authenticated_client.get(
         api_app.url_path_for("medication_list", patient_id=str(patient.id)),
-        headers={"X-Cosmaneura-Medication-Reader": "held-v1"},
+        headers=READER_HEADERS,
     )
     assert response.status_code == status.HTTP_200_OK
-    assert {m["status"] for m in response.json()} == {"active", "stopped", "held"}
     assert {m["id"] for m in response.json()} == {str(row.id) for row in rows}
-    for route, body in (
-        (
-            api_app.url_path_for("medication_create", patient_id=str(patient.id)),
-            {"name": "Synthetic", "status": "held"},
-        ),
-        (
-            api_app.url_path_for("medication_update", medication_id=str(rows[0].id)),
-            {"status": "held"},
-        ),
-    ):
-        response = authenticated_client.request(
-            "POST" if "patients" in route else "PATCH",
-            route,
-            json=body,
-            headers={"X-Cosmaneura-Medication-Reader": "held-v1"},
+    assert {m["status"] for m in response.json()} == {"active", "stopped", "held"}
+
+
+def test_owner_confirms_held_suggestion_and_manual_held_entry(
+    authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    row = PatientMedication(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        name="Synthetic metformin",
+        source=MedicationSource.transcript,
+        status=MedicationStatus.stopped,
+    ).save()
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(row.id))
+    response = authenticated_client.patch(
+        endpoint, json={"status": "held"}, headers=READER_HEADERS
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["status"] == "held" and not response.json()["confirmed"]
+    response = authenticated_client.patch(
+        endpoint, json={"confirmed": True}, headers=READER_HEADERS
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["status"] == "held" and response.json()["confirmed"]
+    assert response.json()["confirmed_at"] is not None
+    response = authenticated_client.post(
+        api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+        json={"name": "Synthetic held entry", "status": "held"},
+        headers=READER_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["status"] == "held" and response.json()["confirmed"]
+    assert response.json()["source"] == "manual"
+
+
+def test_foreign_hold_resume_and_create_are_denied(authenticated_client: TestClient):
+    _authed_doctor()
+    other = DoctorFactory.build().save()
+    patient = _patient_for(other)
+    row = PatientMedication(
+        doctor_id=other.id,
+        patient_id=patient.id,
+        name="Synthetic",
+        status=MedicationStatus.held,
+        confirmed=True,
+    ).save()
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(row.id))
+    for target in ("active", "held"):
+        response = authenticated_client.patch(
+            endpoint, json={"status": target, "confirmed": True}, headers=READER_HEADERS
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert PatientMedication.one(id=rows[0].id).status == MedicationStatus.active
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    response = authenticated_client.post(
+        api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+        json={"name": "Synthetic", "status": "held"},
+        headers=READER_HEADERS,
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert PatientMedication.one(id=row.id).status == MedicationStatus.held
     assert (
-        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 3
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 1
     )
 
 
@@ -462,3 +532,105 @@ def test_locked_representation_check_refreshes_cached_active_target(
     # The refused request rolls its transaction back, including the synthetic
     # direct-SQL fixture change; the attempted user mutation is never persisted.
     assert PatientMedication.one(id=row.id).name == "Synthetic"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"status": "active"},
+        {"confirmed": True},
+        {"confirmed": False},
+        {"name": "Old name"},
+        {"dosage": "Old dose"},
+        None,
+    ],
+    ids=["resume", "confirm", "dismiss", "name", "dosage", "delete"],
+)
+def test_old_active_snapshot_cannot_overwrite_new_owner_hold(
+    authenticated_client: TestClient,
+    body: dict | None,
+):
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    source = AppointmentFactory.build(doctor_id=doctor.id, patient_id=patient.id).save()
+    row = PatientMedication(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_id=source.id,
+        name="Synthetic recorded",
+        status=MedicationStatus.active,
+        source=MedicationSource.transcript,
+        dosage="Recorded dose",
+        confirmed=False,
+    ).save()
+    old_read = authenticated_client.get(
+        api_app.url_path_for("medication_list", patient_id=str(patient.id))
+    )
+    assert old_read.status_code == status.HTTP_200_OK
+    assert old_read.json()[0]["status"] == "active"
+    held = authenticated_client.patch(
+        api_app.url_path_for("medication_update", medication_id=str(row.id)),
+        json={"status": "held"},
+        headers=READER_HEADERS,
+    )
+    assert held.status_code == status.HTTP_200_OK
+    assert held.json()["status"] == "held" and not held.json()["confirmed"]
+    before = PatientMedication.one(id=row.id).model_dump()
+    response = authenticated_client.request(
+        "DELETE" if body is None else "PATCH",
+        api_app.url_path_for(
+            "medication_delete" if body is None else "medication_update",
+            medication_id=str(row.id),
+        ),
+        json=body,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "MEDICATION_READER_UPGRADE_REQUIRED"
+    assert PatientMedication.one(id=row.id).model_dump() == before
+    old_read = authenticated_client.get(
+        api_app.url_path_for("medication_list", patient_id=str(patient.id))
+    )
+    assert old_read.status_code == status.HTTP_409_CONFLICT
+    fresh_read = authenticated_client.get(
+        api_app.url_path_for("medication_list", patient_id=str(patient.id)),
+        headers=READER_HEADERS,
+    )
+    assert fresh_read.status_code == status.HTTP_200_OK
+    assert fresh_read.json()[0]["status"] == "held"
+
+
+@pytest.mark.parametrize("capability", [None, "held-v2"], ids=["missing", "unknown"])
+def test_held_producers_require_representation_capability_after_ownership(
+    authenticated_client: TestClient,
+    capability: str | None,
+):
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    row = PatientMedication(
+        doctor_id=doctor.id, patient_id=patient.id, name="Synthetic"
+    ).save()
+    before = row.model_dump()
+    headers = (
+        {} if capability is None else {"X-Cosmaneura-Medication-Reader": capability}
+    )
+    for method, route, body in (
+        (
+            "POST",
+            api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+            {"name": "Synthetic hold", "status": "held"},
+        ),
+        (
+            "PATCH",
+            api_app.url_path_for("medication_update", medication_id=str(row.id)),
+            {"status": "held"},
+        ),
+    ):
+        response = authenticated_client.request(
+            method, route, json=body, headers=headers
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.json()["detail"]["code"] == "MEDICATION_READER_UPGRADE_REQUIRED"
+    assert PatientMedication.one(id=row.id).model_dump() == before
+    assert (
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 1
+    )

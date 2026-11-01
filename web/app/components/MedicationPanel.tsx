@@ -189,6 +189,25 @@ export function MedicationPanel({
     )
   }
 
+  async function changeStatus(id: string, status: MedicationData["status"]) {
+    const medication = medications.find((row) => row.id === id)
+    if (
+      !medication ||
+      (!medication.confirmed &&
+        (!appointmentId || medication.appointment_id !== appointmentId))
+    )
+      return
+    await mutate(
+      () =>
+        medicationUpdate({
+          path: { medication_id: id },
+          headers: MEDICATION_READER_HEADERS,
+          body: { status },
+        }),
+      "Could not update medication status",
+    )
+  }
+
   async function remove(id: string) {
     await mutate(
       () =>
@@ -278,14 +297,30 @@ export function MedicationPanel({
               <span className="text-muted-foreground"> (held temporarily)</span>
             )}
             {medication.status === "stopped" && (
-              <span className="text-muted-foreground">
-                {" "}
-                (stopped in source)
-              </span>
+              <span className="text-muted-foreground"> (stopped)</span>
             )}
           </span>
           {actionable && (
             <>
+              <select
+                aria-label={`Status for ${medication.display_name ?? medication.name}`}
+                value={medication.status}
+                disabled={busy}
+                onChange={(event) => {
+                  const status = event.target.value
+                  if (
+                    status === "active" ||
+                    status === "stopped" ||
+                    status === "held"
+                  )
+                    void changeStatus(medication.id, status)
+                }}
+                className="rounded border p-1 text-xs"
+              >
+                <option value="active">Active</option>
+                <option value="held">Held temporarily</option>
+                <option value="stopped">Stopped</option>
+              </select>
               <Button
                 size="sm"
                 variant="ghost"
@@ -467,6 +502,26 @@ export function MedicationPanel({
                     <span className="text-muted-foreground"> (stopped)</span>
                   )}
                 </span>
+                {m.status === "active" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => changeStatus(m.id, "held")}
+                  >
+                    Hold
+                  </Button>
+                )}
+                {m.status === "held" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => changeStatus(m.id, "active")}
+                  >
+                    Resume
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -485,6 +540,11 @@ export function MedicationPanel({
                   sourceLink(m)
                 )}
               </div>
+              {m.list_updated_at && (
+                <p className="text-muted-foreground mt-1 ml-16 text-xs">
+                  List updated · {appointmentDateFormat(m.list_updated_at)}
+                </p>
+              )}
               {links.length > 0 && (
                 <div className="mt-1 ml-16 flex flex-wrap gap-x-3 gap-y-1">
                   {links.map((link) => (
