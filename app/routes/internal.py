@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
@@ -3338,6 +3338,8 @@ class MedicationData(BaseModel, extra="forbid"):
     confirmed: bool
     appointment_id: str | None = None
     source_appointment_date: datetime | None = None
+    confirmed_at: datetime | None = None
+    list_updated_at: datetime | None = None
 
 
 def _medication_data(row: PatientMedication) -> MedicationData:
@@ -3364,6 +3366,8 @@ def _medication_data(row: PatientMedication) -> MedicationData:
         source=row.source,
         dosage=row.dosage,
         confirmed=row.confirmed,
+        confirmed_at=row.confirmed_at,
+        list_updated_at=row.updated_at,
         appointment_id=str(source.id) if source is not None else None,
         source_appointment_date=source.appointment_date if source is not None else None,
     )
@@ -3386,11 +3390,45 @@ def _owned_medication_or_404(doctor: Doctor, medication_id: str) -> PatientMedic
     if not reference_toolkit_enabled_for(doctor.email):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    row = PatientMedication.get(id=medication_id, doctor_id=doctor.id)
-    if row is None or row.deleted_at is not None:
+    # The request-wide session holds this owner-scoped lock through save/delete.
+    # Refresh a cached identity before checking representation compatibility so
+    # an old active snapshot cannot overwrite a concurrently committed hold.
+    with get_session() as session:
+        row = session.exec(
+            select(PatientMedication)
+            .where(
+                PatientMedication.id == medication_id,
+                PatientMedication.doctor_id == doctor.id,
+                col(PatientMedication.deleted_at).is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     return row
+
+
+MEDICATION_READER_HEADER = "X-Cosmaneura-Medication-Reader"
+MEDICATION_READER_CAPABILITY = "held-v1"
+
+
+def _require_medication_reader(
+    request: Request, statuses: Iterable[MedicationStatus | None]
+) -> None:
+    """A representation declaration, never a substitute for owner/access checks."""
+    if (
+        request.headers.get(MEDICATION_READER_HEADER) != MEDICATION_READER_CAPABILITY
+        and MedicationStatus.held in statuses
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "MEDICATION_READER_UPGRADE_REQUIRED",
+                "message": "This medication list requires an updated reader.",
+            },
+        )
 
 
 @internal_api_app.get("/patients/{patient_id}/medications", name="medication_list")
@@ -3410,7 +3448,9 @@ def medication_list(
         .all()
     )
 
-    return [_medication_data(r) for r in cast(list[PatientMedication], rows)]
+    owned_rows = cast(list[PatientMedication], list(rows))
+    _require_medication_reader(request, (row.status for row in owned_rows))
+    return [_medication_data(r) for r in owned_rows]
 
 
 class CreateMedication(BaseModel, extra="forbid"):
@@ -3426,6 +3466,7 @@ def medication_create(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     patient = _reference_patient_or_404(doctor, patient_id)
+    _require_medication_reader(request, (data.status,))
 
     row = PatientMedication(
         doctor_id=doctor.id,
@@ -3463,6 +3504,7 @@ def medication_update(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
+    _require_medication_reader(request, (row.status, data.status))
 
     if data.name is not None:
         row.name = data.name.strip()
@@ -3495,6 +3537,7 @@ def medication_update(
 def medication_delete(request: Request, medication_id: Annotated[str, Path()]) -> None:
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
+    _require_medication_reader(request, (row.status,))
     row.delete()
 
 
@@ -3560,6 +3603,7 @@ def patient_reference_resources(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed))
     medications = [
         MedicationResources(
             medication=_medication_data(row),
@@ -3628,6 +3672,7 @@ def medication_drug_reference(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed_drugs))
     entries: list[MedicationDrugReference] = []
     for med in confirmed_drugs:
         key = (med.normalized_name or med.name).strip().lower()
@@ -3708,6 +3753,7 @@ def medication_nutrient_depletions(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed_drugs))
     medications: list[MedicationDepletions] = []
     for med in confirmed_drugs:
         found = depletions_for(med.normalized_name or med.name)

@@ -6090,6 +6090,30 @@
               }
             ],
             "title": "Source Appointment Date"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "list_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List Updated At"
           }
         },
         "additionalProperties": false,
@@ -6211,7 +6235,8 @@
         "type": "string",
         "enum": [
           "active",
-          "stopped"
+          "stopped",
+          "held"
         ],
         "title": "MedicationStatus"
       },
