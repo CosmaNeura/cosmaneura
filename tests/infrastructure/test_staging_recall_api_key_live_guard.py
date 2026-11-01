@@ -4,13 +4,17 @@ import copy
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location(
@@ -103,6 +107,164 @@ class Fixture:
 
 
 class PreservationTests(unittest.TestCase):
+    def test_hosted_step_preserves_installed_key_and_clears_scoped_input(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/deploy_staging_candidate.yml").read_text()
+        )
+        steps = workflow["jobs"]["deploy"]["steps"]
+        step = next(item for item in steps if item.get("id") == "deploy")
+        body = step["run"]
+        self.assertNotIn(m.INPUT, step["env"])
+        self.assertNotIn("GITHUB_ENV", body)
+        self.assertNotIn(m.INPUT, json.dumps(workflow["jobs"]["config"]))
+        self.assertIn("unset RECALL_API_KEY_INPUT", body)
+        self.assertIn("head -c 4097", body)
+        self.assertIn("timeout 20s env -i", body)
+        # Exercise the actual hosted step and backend template. The only CLI is
+        # a synthetic read-only fixture; the unchanged guard still reads and
+        # compares all three actual fixture ready snapshots twice.
+        for acquisition, vault, expected_status in (
+            (KEY, "different-fictional-vault-key", 0),
+            (KEY, "", 0),
+            ("", "different-fictional-vault-key", 1),
+            ("wrong-fictional-live-key", KEY, 1),
+            ("x" * 4097, KEY, 1),
+            ("a\nb", KEY, 1),
+            ("read-failure", KEY, 1),
+        ):
+            with self.subTest(acquisition=acquisition[:30], vault=bool(vault)):
+                with tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary)
+                    fixture = directory / "fixture.json"
+                    f = Fixture()
+                    fixture.write_text(
+                        json.dumps(
+                            {
+                                "acquisition": acquisition,
+                                "info": f.info,
+                                "revision": f.revision,
+                            }
+                        )
+                    )
+                    calls = directory / "calls.jsonl"
+                    az = directory / "az"
+                    az.write_text(
+                        f"#!{sys.executable}\n"
+                        "import json, os, pathlib, sys\n"
+                        f"f=json.loads(pathlib.Path({str(fixture)!r}).read_text())\n"
+                        f"log=pathlib.Path({str(calls)!r})\n"
+                        "a=sys.argv[1:]\n"
+                        "assert a[a.index('--subscription')+1]=='"
+                        + m.SUBSCRIPTION
+                        + "'\n"
+                        "assert '--only-show-errors' in a\n"
+                        "with log.open('a') as stream: stream.write(json.dumps(a)+'\\n')\n"
+                        "if a[:2]==['account','show']:\n"
+                        f" print(json.dumps({f.account!r}))\n"
+                        "else:\n"
+                        " name=a[a.index('--name')+1]\n"
+                        " assert name in f['info'] and a[a.index('--resource-group')+1]=='cosmaneura-staging'\n"
+                        " if a[a.index('--output')+1]=='tsv':\n"
+                        "  assert name=='cosmaneura-staging-app' and a[:3]==['containerapp','secret','list']\n"
+                        "  assert a[a.index('--query')+1]==\"[?name=='recall-api-key'].value\"\n"
+                        "  assert not any(k in os.environ for k in ('OP_SERVICE_ACCOUNT_TOKEN','DATABASE_URL','RECALL_API_KEY_INPUT'))\n"
+                        "  if f['acquisition']=='read-failure': sys.exit(7)\n"
+                        "  print(f['acquisition'])\n"
+                        # Construct the fixed fictional response inside the mock
+                        # CLI instead of persisting any fixture secret mapping.
+                        " elif a[:3]==['containerapp','secret','list']: print(json.dumps([{'name':'recall-api-key','value':'fictional-test-credential-do-not-use'}]))\n"
+                        " elif a[:3]==['containerapp','revision','show']: print(json.dumps(f['revision'][name]))\n"
+                        " else: print(json.dumps(f['info'][name]))\n"
+                    )
+                    az.chmod(0o700)
+                    trace = directory / "trace.txt"
+                    script = (
+                        r"""
+unset() {
+ builtin unset "$@"
+ for variable in "$@"; do
+  [[ "$variable" != RECALL_API_KEY_INPUT ]] || printf '%s\n' input-cleared >> "$TRACE"
+ done
+}
+op_inject_source() {
+ while IFS= read -r line; do
+  if [[ "$line" =~ ^export\ ([A-Z][A-Z0-9_]*)= ]]; then
+   variable=${BASH_REMATCH[1]}
+   export "$variable=fixture-$variable"
+  fi
+ done
+ export RECALL_API_KEY="$VAULT_KEY"
+}
+python() {
+ case "$1" in
+  scripts/staging_deployment_database_tls.py) printf '%s' 'fictional-db';;
+  scripts/superadmin_capability_config_preflight.py) printf '%s' 'https://fictional.clerk.invalid';;
+  scripts/core_cab_runtime_config.py) return 0;;
+  infra/staging_recall_api_key_live_guard.py) "$TEST_PYTHON" "$1";;
+  *) return 1;;
+ esac
+}
+bash() {
+ [[ "$*" == "infra-staging/deploy.sh $CANDIDATE_SHA $IMAGE_DIGEST" ]] || return 17
+ printf '%s\n' deploy-entered >> "$TRACE"
+ source .env.staging.backend || return 1
+ [[ "$RECALL_API_KEY" == "$INSTALLED_KEY" && ! ${RECALL_API_KEY_INPUT+present} ]] || return 18
+ printf '%s\n' guarded-installed-key-selected >> "$TRACE"
+}
+"""
+                        + body
+                        + r"""
+[[ ! ${RECALL_API_KEY_INPUT+present} ]] || exit 20
+printf '%s\n' step-input-absent >> "$TRACE"
+"""
+                    )
+                    result = subprocess.run(
+                        ["/bin/bash", "-c", script],
+                        cwd=ROOT,
+                        env={
+                            "PATH": str(directory) + os.pathsep + os.environ["PATH"],
+                            "HOME": str(directory),
+                            "TRACE": str(trace),
+                            "TEST_PYTHON": sys.executable,
+                            "INSTALLED_KEY": KEY,
+                            "VAULT_KEY": vault,
+                            "CANDIDATE_SHA": "a" * 40,
+                            "IMAGE_DIGEST": "sha256:" + "b" * 64,
+                            "OP_SERVICE_ACCOUNT_TOKEN": "fictional-token-not-for-cli",
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=20,
+                    )
+                    self.assertEqual(result.returncode, expected_status, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertNotIn(KEY, result.stderr)
+                    records = [
+                        json.loads(line) for line in calls.read_text().splitlines()
+                    ]
+                    self.assertNotIn(KEY, json.dumps(records))
+                    observed = trace.read_text().splitlines()
+                    self.assertIn("input-cleared", observed)
+                    if expected_status == 0:
+                        self.assertIn("guarded-installed-key-selected", observed)
+                        self.assertEqual(observed[-1], "input-cleared")
+                        self.assertIn("step-input-absent", observed)
+                        self.assertEqual(
+                            sum(a[:2] == ["account", "show"] for a in records), 2
+                        )
+                        self.assertEqual(
+                            sum(
+                                a[:3] == ["containerapp", "secret", "list"]
+                                for a in records
+                            ),
+                            7,
+                        )
+                    else:
+                        self.assertNotIn("guarded-installed-key-selected", observed)
+                        if acquisition in ("", "read-failure"):
+                            self.assertNotIn("deploy-entered", observed)
+
     def test_success_verifies_three_actual_owned_snapshots_without_key_output(self):
         f = Fixture()
         result = m.verify_preservation(ENV, runner=f.run)
