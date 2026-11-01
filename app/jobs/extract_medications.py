@@ -171,7 +171,7 @@ def perform(transcript_id: str | TypeID | TypeIDType):
             kind=MedicationKind(kind),
             status=MedicationStatus(
                 item.get("status")
-                if item.get("status") in {s.value for s in MedicationStatus}
+                if item.get("status") in {"active", "stopped"}
                 else "active"
             ),
             source=MedicationSource.transcript,

@@ -19,6 +19,10 @@ import type {
 import { toast } from "~/hooks/use-toast"
 import { appointmentDateFormat } from "~/lib/date"
 
+const MEDICATION_READER_HEADERS = {
+  "X-Cosmaneura-Medication-Reader": "held-v1",
+}
+
 const EVIDENCE_LABELS: Record<string, string> = {
   well_established: "well established",
   moderate: "moderate evidence",
@@ -72,18 +76,22 @@ export function MedicationPanel({
     const results = await Promise.allSettled([
       medicationList({
         path: { patient_id: patientId },
+        headers: MEDICATION_READER_HEADERS,
         signal: request.signal,
       }),
       patientReferenceResources({
         path: { patient_id: patientId },
+        headers: MEDICATION_READER_HEADERS,
         signal: request.signal,
       }),
       medicationDrugReference({
         path: { patient_id: patientId },
+        headers: MEDICATION_READER_HEADERS,
         signal: request.signal,
       }),
       medicationNutrientDepletions({
         path: { patient_id: patientId },
+        headers: MEDICATION_READER_HEADERS,
         signal: request.signal,
       }),
     ])
@@ -174,6 +182,7 @@ export function MedicationPanel({
       () =>
         medicationUpdate({
           path: { medication_id: id },
+          headers: MEDICATION_READER_HEADERS,
           body: { confirmed: true },
         }),
       "Could not confirm",
@@ -182,7 +191,11 @@ export function MedicationPanel({
 
   async function remove(id: string) {
     await mutate(
-      () => medicationDelete({ path: { medication_id: id } }),
+      () =>
+        medicationDelete({
+          path: { medication_id: id },
+          headers: MEDICATION_READER_HEADERS,
+        }),
       "Could not remove",
     )
   }
@@ -192,7 +205,11 @@ export function MedicationPanel({
     if (!name) return
     await mutate(
       () =>
-        medicationCreate({ path: { patient_id: patientId }, body: { name } }),
+        medicationCreate({
+          path: { patient_id: patientId },
+          headers: MEDICATION_READER_HEADERS,
+          body: { name },
+        }),
       "Could not add",
       () => setNewName(""),
     )
@@ -257,6 +274,9 @@ export function MedicationPanel({
           <span className="flex-1">
             {medication.display_name ?? medication.name}
             {medication.dosage ? ` · ${medication.dosage}` : ""}
+            {medication.status === "held" && (
+              <span className="text-muted-foreground"> (held temporarily)</span>
+            )}
             {medication.status === "stopped" && (
               <span className="text-muted-foreground">
                 {" "}
@@ -437,6 +457,12 @@ export function MedicationPanel({
                 <span className="flex-1">
                   {m.name}
                   {m.dosage ? ` · ${m.dosage}` : ""}
+                  {m.status === "held" && (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      (held temporarily)
+                    </span>
+                  )}
                   {m.status === "stopped" && (
                     <span className="text-muted-foreground"> (stopped)</span>
                   )}
