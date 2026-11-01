@@ -31,6 +31,13 @@ controls require a new reviewed canonical dispatch; an old in-progress dispatch
 cannot continue across this control change. This source preparation runs no
 deployment, migration, Azure mutation or Scribe update.
 
-Validation evidence will bind the final private commit and focused normal pytest,
-locked formatter/linter, shell syntax and canonical fixed-inventory results.
+Validation: 274 focused pure-infrastructure cases passed with existing Bash
+5.3.15, matching the hosted workflow's Bash major version. The normal output-only
+adapter, source fixtures and pytest plugins remained enabled. The first run's
+258 passes/16 failures are retained: the audit needed its canonical no-newline
+encoding, and the clean PATH initially selected macOS Bash 3 for empty-array
+startup checks. Only the audit encoding/pin and test runtime PATH changed for the
+successful run. Locked Ruff 0.11.6 check/format and shell syntax passed.
+
+Evidence binds the final private commit and canonical fixed-inventory results.
 Independent final-source review remains required; no runtime success is claimed.
