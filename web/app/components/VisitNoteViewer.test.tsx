@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest"
 
-import type { AiVisitNote } from "~/configuration/client"
+import {
+  type AiVisitNote,
+  reviewNoteForSessionPrep,
+} from "~/configuration/client"
 
 import VisitNoteViewer from "./VisitNoteViewer"
-import { fireEvent, render, screen } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 
 vi.mock("~/configuration/client", () => ({
   prepareBillingHeaderOperation: vi.fn(),
@@ -114,5 +123,162 @@ describe("VisitNoteViewer", () => {
     expect(plainText).not.toContain("Reported concern")
     const html = await (await clipboardItem.getType("text/html")).text()
     expect(html).toMatch(/^<h3>Plan<\/h3><p>Follow-up plan<\/p>/)
+  })
+})
+
+describe("per-note Session Prep review state", () => {
+  const digest = "a".repeat(64)
+  const note = (id: string): AiVisitNote => ({
+    id,
+    doctor_id: "doctor_test",
+    appointment_id: "appointment_test",
+    ai_transcript_id: "ai_visit_transcript_test",
+    doctor_note_schema_id: "doctor_note_schema_test",
+    note_type: id,
+    note: { Plan: "Synthetic recorded plan" },
+  })
+
+  it("keeps mixed review states visible at collapsed note headings without inventing missing metadata", () => {
+    render(
+      <>
+        <VisitNoteViewer
+          note={note("reviewed")}
+          defaultOpen={false}
+          review={{
+            content_sha256: digest,
+            reviewed_at: "2026-10-31T12:00:00Z",
+          }}
+        />
+        <VisitNoteViewer
+          note={note("not_reviewed")}
+          defaultOpen={false}
+          review={{ content_sha256: digest, reviewed_at: null }}
+        />
+        <VisitNoteViewer note={note("unknown")} defaultOpen={false} />
+      </>,
+    )
+    const reviewed = document.getElementById("note-reviewed")!
+    const notReviewed = document.getElementById("note-not_reviewed")!
+    const unknown = document.getElementById("note-unknown")!
+    for (const element of [reviewed, notReviewed, unknown]) {
+      expect(element).toHaveAttribute("data-state", "closed")
+      expect(
+        within(element).queryByText("Synthetic recorded plan"),
+      ).not.toBeInTheDocument()
+    }
+    expect(
+      within(reviewed).getByText("Reviewed for Session Prep"),
+    ).toBeVisible()
+    expect(
+      within(notReviewed).getByText("Not reviewed for Session Prep"),
+    ).toBeVisible()
+    expect(
+      within(unknown).queryByText(/reviewed for Session Prep/i),
+    ).not.toBeInTheDocument()
+    expect(
+      within(unknown).queryByRole("button", {
+        name: "Mark reviewed for Session Prep",
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("updates the heading only after the existing exact-digest review succeeds", async () => {
+    vi.mocked(reviewNoteForSessionPrep).mockClear()
+    vi.mocked(reviewNoteForSessionPrep).mockResolvedValue({
+      data: { content_sha256: digest, reviewed_at: "2026-10-31T12:00:00Z" },
+      response: new Response(null, { status: 200 }),
+    } as never)
+    render(
+      <VisitNoteViewer
+        note={note("current")}
+        defaultOpen={false}
+        review={{ content_sha256: digest, reviewed_at: null }}
+      />,
+    )
+    expect(reviewNoteForSessionPrep).not.toHaveBeenCalled()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Mark reviewed for Session Prep" }),
+    )
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Reviewed for Session Prep",
+    )
+    expect(reviewNoteForSessionPrep).toHaveBeenCalledExactlyOnceWith({
+      path: { note_id: "current" },
+      body: { expected_content_sha256: digest },
+      throwOnError: false,
+    })
+    expect(document.getElementById("note-current")).toHaveAttribute(
+      "data-state",
+      "closed",
+    )
+  })
+
+  it("does not claim a review when the saved response has another digest", async () => {
+    vi.mocked(reviewNoteForSessionPrep).mockResolvedValue({
+      data: {
+        content_sha256: "b".repeat(64),
+        reviewed_at: "2026-10-31T12:00:00Z",
+      },
+      response: new Response(null, { status: 200 }),
+    } as never)
+    render(
+      <VisitNoteViewer
+        note={note("current")}
+        defaultOpen={false}
+        review={{ content_sha256: digest, reviewed_at: null }}
+      />,
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Mark reviewed for Session Prep" }),
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not be saved",
+    )
+    expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
+    expect(
+      screen.queryByText("Reviewed for Session Prep"),
+    ).not.toBeInTheDocument()
+  })
+
+  it("cannot transfer a late review response to a corrected note version", async () => {
+    let finish: (value: never) => void = () => {}
+    vi.mocked(reviewNoteForSessionPrep).mockReturnValue(
+      new Promise<never>((resolve) => {
+        finish = resolve
+      }),
+    )
+    const view = render(
+      <VisitNoteViewer
+        note={note("current")}
+        defaultOpen={false}
+        review={{ content_sha256: digest, reviewed_at: null }}
+      />,
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Mark reviewed for Session Prep" }),
+    )
+    view.rerender(
+      <VisitNoteViewer
+        note={{
+          ...note("current"),
+          note: { Plan: "Synthetic corrected plan" },
+        }}
+        defaultOpen={false}
+        review={{ content_sha256: "b".repeat(64), reviewed_at: null }}
+      />,
+    )
+    finish({
+      data: { content_sha256: digest, reviewed_at: "2026-10-31T12:00:00Z" },
+      response: new Response(null, { status: 200 }),
+    } as never)
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Mark reviewed for Session Prep" }),
+      ).toBeEnabled(),
+    )
+    expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
+    expect(
+      screen.queryByText("Reviewed for Session Prep"),
+    ).not.toBeInTheDocument()
   })
 })
