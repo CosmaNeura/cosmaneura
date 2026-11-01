@@ -317,7 +317,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
     // markReady reports whether this visit was being tracked, so the toast
     // fires once even if the effect re-runs.
     if (hasNotes && markReady(appointmentId)) {
-      toast({ title: "Your note is ready" })
+      toast({ title: "Your AI note is ready" })
     }
   }, [hasNotes, appointmentId])
   const distinctNoteSources =
@@ -357,7 +357,11 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
                 : "not-started"
           }
           statusLabel={
-            noteProgress === "taking-longer" ? "Taking longer" : undefined
+            hasNotes
+              ? "AI note ready"
+              : noteProgress === "taking-longer"
+                ? "Taking longer"
+                : undefined
           }
           engagementRole={engagementEnabled ? loaderData.engagement_role : null}
           dataFields={{
