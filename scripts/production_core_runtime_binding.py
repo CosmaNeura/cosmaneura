@@ -312,9 +312,22 @@ def az(name: str, arguments: list[str]) -> Any:
     return candidate.decode(raw, maximum=candidate.MAX_METADATA)
 
 
-def public_resource(value: Any, prefix: str) -> str:
+def arm_id_key(value: Any) -> str:
+    """Compare ARM identities by ASCII case only, never path normalization."""
     value = token(value, r"/[A-Za-z0-9_./-]{1,512}")
-    require(value.startswith(prefix + "/") and ".." not in value)
+    require(
+        ".." not in value
+        and all(part not in ("", ".") for part in value.split("/")[1:])
+    )
+    return value.lower()
+
+
+def same_arm_id(value: Any, expected: str) -> bool:
+    return arm_id_key(value) == arm_id_key(expected)
+
+
+def public_resource(value: Any, prefix: str) -> str:
+    require(arm_id_key(value).startswith(arm_id_key(prefix) + "/"))
     return value
 
 
@@ -402,7 +415,8 @@ def observe_app(role: str, context: dict[str, Any], image: str) -> dict[str, Any
     require(len(revision) <= 54)
     app = object_value(az(name, ["show"]))
     require(
-        app.get("id") == PREFIX + "/containerApps/" + name and app.get("name") == name
+        same_arm_id(app.get("id"), PREFIX + "/containerApps/" + name)
+        and app.get("name") == name
     )
     properties = object_value(app["properties"])
     environments = [
@@ -410,7 +424,9 @@ def observe_app(role: str, context: dict[str, Any], image: str) -> dict[str, Any
         for key in ("environmentId", "managedEnvironmentId")
         if properties.get(key) is not None
     ]
-    require(environments and all(value == ENVIRONMENT for value in environments))
+    require(
+        environments and all(same_arm_id(value, ENVIRONMENT) for value in environments)
+    )
     require(properties.get("provisioningState") == "Succeeded")
     require(
         properties.get("latestRevisionName")
@@ -447,8 +463,10 @@ def observe_app(role: str, context: dict[str, Any], image: str) -> dict[str, Any
         az(name, ["revision", "show", "--revision", revision])
     )
     require(
-        selected_revision.get("id")
-        == PREFIX + "/containerApps/" + name + "/revisions/" + revision
+        same_arm_id(
+            selected_revision.get("id"),
+            PREFIX + "/containerApps/" + name + "/revisions/" + revision,
+        )
         and selected_revision.get("name") == revision
     )
     active = object_value(selected_revision["properties"])
@@ -466,8 +484,10 @@ def observe_app(role: str, context: dict[str, Any], image: str) -> dict[str, Any
     for item in revisions:
         revision_name = token(item.get("name"), re.escape(name) + r"--[a-z0-9-]{1,45}")
         require(
-            item.get("id")
-            == PREFIX + "/containerApps/" + name + "/revisions/" + revision_name
+            same_arm_id(
+                item.get("id"),
+                PREFIX + "/containerApps/" + name + "/revisions/" + revision_name,
+            )
         )
         found = rows(
             az(
@@ -593,7 +613,7 @@ def validate_observation(
     require(
         value["subscription"] == SUBSCRIPTION
         and value["tenant"] == TENANT
-        and value["environment"] == ENVIRONMENT
+        and same_arm_id(value["environment"], ENVIRONMENT)
     )
     workloads = candidate.object_fields(value["workloads"], set(ROLES))
     for role, (name, _) in ROLES.items():

@@ -301,6 +301,120 @@ def test_exact_active_traffic_and_all_three_ready_roles(monkeypatch):
 
 
 @pytest.mark.parametrize("role", list(binding.ROLES))
+@pytest.mark.parametrize("case", ["lower", "upper", "mixed"])
+def test_arm_id_case_variants_preserve_the_exact_workload_and_identity(
+    monkeypatch, role, case
+):
+    def variant(value: str) -> str:
+        if case == "lower":
+            return value.lower()
+        if case == "upper":
+            return value.upper()
+        return value.replace("resourceGroups", "resourcegroups").replace(
+            "containerApps", "containerapps"
+        )
+
+    states = install_azure(monkeypatch)
+    state = states[role]
+    state["app"]["id"] = variant(state["app"]["id"])
+    state["active"]["id"] = variant(state["active"]["id"])
+    for item in state["revisions"]:
+        item["id"] = variant(item["id"])
+    properties = state["app"]["properties"]
+    properties["environmentId"] = variant(binding.ENVIRONMENT)
+    properties["managedEnvironmentId"] = binding.ENVIRONMENT.upper()
+    identities = state["app"]["identity"]["userAssignedIdentities"]
+    original_id, metadata = next(iter(identities.items()))
+    identity_id = variant(original_id)
+    state["app"]["identity"]["userAssignedIdentities"] = {identity_id: metadata}
+    registry = properties["configuration"]["registries"][0]
+    del registry["passwordSecretRef"]
+    registry["identity"] = identity_id
+
+    value = binding.observe_app(role, context(), IMAGE)
+    assert value["name"] == binding.ROLES[role][0]
+    assert value["revision"] == revision_name(role)
+    assert value["image"] == IMAGE
+    projection = binding.config_projection(state["app"], role, revision_name(role))
+    assert projection["identity_ids"] == [identity_id]
+    assert projection["registry"]["identity"] == identity_id
+    assert state["app"]["identity"]["userAssignedIdentities"][identity_id] == metadata
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "subscription",
+        "sibling-group",
+        "sibling-app",
+        "wrong-kind",
+        "unicode",
+        "encoded",
+        "double-slash",
+        "dot-segment",
+        "trailing-slash",
+    ],
+)
+def test_arm_case_handling_refuses_other_targets_and_path_aliases(monkeypatch, change):
+    states = install_azure(monkeypatch)
+    original = states["api"]["app"]["id"].lower()
+    altered = original
+    if change == "subscription":
+        altered = original.replace(
+            binding.SUBSCRIPTION, "0" * 8 + "-0000-0000-0000-000000000000"
+        )
+    elif change == "sibling-group":
+        altered = original.replace(
+            "/" + binding.GROUP + "/", "/" + binding.GROUP + "-sibling/"
+        )
+    elif change == "sibling-app":
+        altered = original + "-sibling"
+    elif change == "wrong-kind":
+        altered = original.replace("/containerapps/", "/containerappjobs/")
+    elif change == "unicode":
+        altered = original.replace("microsoft", "m\u0131crosoft")
+    elif change == "encoded":
+        altered = original.replace("/resourcegroups/", "/%72esourcegroups/")
+    elif change == "double-slash":
+        altered = original.replace("/providers/", "//providers/")
+    elif change == "dot-segment":
+        altered = original.replace("/providers/", "/./providers/")
+    else:
+        altered = original + "/"
+    states["api"]["app"]["id"] = altered
+    with pytest.raises(c.CandidateRefused):
+        binding.observe_app("api", context(), IMAGE)
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "../synthetic-runtime",
+        "./synthetic-runtime",
+        "/synthetic-runtime",
+        "synthetic-runtime/",
+        "synthetic\u200bruntime",
+        "synthetic%2fruntime",
+    ],
+)
+def test_owned_identity_prefix_refuses_malformed_or_non_ascii_ids(suffix):
+    prefix = (
+        f"/subscriptions/{binding.SUBSCRIPTION}/resourceGroups/{binding.GROUP}"
+        "/providers/Microsoft.ManagedIdentity/userAssignedIdentities"
+    )
+    with pytest.raises(c.CandidateRefused):
+        binding.public_resource(prefix.lower() + "/" + suffix, prefix)
+
+
+def test_observation_environment_accepts_ascii_case_without_changing_other_fields(
+    monkeypatch,
+):
+    value = observation(monkeypatch)
+    value["environment"] = binding.ENVIRONMENT.lower()
+    assert binding.validate_observation(value, context(), prepared_record()) == value
+
+
+@pytest.mark.parametrize("role", list(binding.ROLES))
 @pytest.mark.parametrize(
     "path,value",
     [
