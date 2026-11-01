@@ -1,4 +1,6 @@
+import json
 from datetime import datetime
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -87,3 +89,107 @@ def test_extraction_is_idempotent_per_appointment():
 def test_missing_transcript_is_noop():
     # should not raise
     perform("ai_visit_transcript_00000000000000000000000000")
+
+
+def test_literal_held_sdk_result_persists_source_and_repeat_does_not_overwrite(
+    monkeypatch,
+):
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    transcript = _transcript(
+        doctor, patient, [("Patient", "Metformin 500mg is temporarily on hold.")]
+    )
+    calls = []
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps(
+                            {
+                                "medications": [
+                                    {
+                                        "name": "metformin",
+                                        "kind": "prescription",
+                                        "dosage": "500mg",
+                                        "status": "held",
+                                    }
+                                ]
+                            }
+                        )
+                    )
+                )
+            ]
+        )
+
+    monkeypatch.setattr(job, "should_use_test_openai_fallback", lambda: False)
+    monkeypatch.setattr(job.openai.chat.completions, "create", complete)
+    monkeypatch.setattr(job, "normalize_drug_name", lambda _name: (None, None))
+    perform(transcript.id)
+    row = PatientMedication.one(patient_id=patient.id)
+    assert row.status.value == "held" and not row.confirmed
+    assert (
+        row.appointment_id == transcript.appointment_id and row.doctor_id == doctor.id
+    )
+    assert row.source == MedicationSource.transcript and row.dosage == "500mg"
+    prompt = calls[0]["messages"][0]["content"]
+    assert "Metformin 500mg is temporarily on hold." in prompt
+    assert 'Do not label a temporary hold "active" or "stopped"' in prompt
+    assert '"status": "active" | "stopped" | "held"' in prompt
+    row.confirmed = True
+    row.save()
+    perform(transcript.id)
+    assert len(calls) == 1
+    assert (
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 1
+    )
+    assert PatientMedication.one(id=row.id).confirmed
+    assert PatientMedication.one(id=row.id).status.value == "held"
+
+
+@pytest.mark.parametrize("status_value", ["active", "stopped"])
+def test_existing_explicit_extraction_statuses_are_preserved(monkeypatch, status_value):
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    transcript = _transcript(
+        doctor, patient, [("Patient", "Synthetic medication source.")]
+    )
+    monkeypatch.setattr(
+        job,
+        "extract_from_text",
+        lambda _text: [{"name": "metformin", "status": status_value}],
+    )
+    monkeypatch.setattr(job, "normalize_drug_name", lambda _name: (None, None))
+    perform(transcript.id)
+    assert PatientMedication.one(patient_id=patient.id).status.value == status_value
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"name": "metformin"},
+        {"name": "metformin", "status": "unknown"},
+        {"name": "metformin", "status": None},
+        {"name": "metformin", "status": []},
+        {"name": "metformin", "status": {}},
+    ],
+    ids=["missing", "unknown", "null", "list", "object"],
+)
+def test_missing_or_unknown_status_does_not_invent_active(monkeypatch, item):
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    transcript = _transcript(
+        doctor, patient, [("Patient", "Metformin mentioned without current status.")]
+    )
+    monkeypatch.setattr(job, "extract_from_text", lambda _text: [item])
+
+    def no_lookup(_name):
+        raise AssertionError("unsupported status must not trigger drug lookup")
+
+    monkeypatch.setattr(job, "normalize_drug_name", no_lookup)
+    perform(transcript.id)
+    assert (
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 0
+    )
