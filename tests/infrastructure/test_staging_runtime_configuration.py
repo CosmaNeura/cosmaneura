@@ -715,7 +715,7 @@ def _shell_harness(
 az() {{
     "$PYTHON_BIN" -I -S -B {shlex.quote(str(fake_path))} {shlex.quote(str(fixture_path))} {shlex.quote(str(log_path))} "$@"
 }}
-verify_founder_release_source() {{ return 0; }}
+verify_staging_release_source() {{ return 0; }}
 verify_azure_deployment_identity() {{ return 0; }}
 run_migrations() {{ az containerapp job create --name synthetic-migration; }}
 """
