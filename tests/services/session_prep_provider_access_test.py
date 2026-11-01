@@ -301,6 +301,7 @@ def test_current_pilot_grant_covers_only_its_authorized_practice_entitlement() -
 
     assert decision.allowed is True
     assert decision.denial_reason is None
+    assert decision.practice is not None
     assert decision.practice.id == practice.id
 
 

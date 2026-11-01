@@ -573,7 +573,7 @@ def _reconcile_ordinary_session_prep_scope(
     ).all()
     fixture = (
         session.exec(
-            select(SyntheticPreviewAppointmentFixture.id).where(
+            select(col(SyntheticPreviewAppointmentFixture.id)).where(
                 SyntheticPreviewAppointmentFixture.appointment_id == appointment.id
             )
         ).first()
@@ -581,7 +581,7 @@ def _reconcile_ordinary_session_prep_scope(
         else None
     )
     fixture_audit = session.exec(
-        select(AuthorityAuditEvent.id).where(
+        select(col(AuthorityAuditEvent.id)).where(
             AuthorityAuditEvent.event_type == "authority.provider_fixture.provisioned",
             or_(
                 AuthorityAuditEvent.resource_ref == binding.binding_ref,

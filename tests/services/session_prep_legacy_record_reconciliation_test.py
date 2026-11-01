@@ -173,7 +173,11 @@ def test_ordinary_legacy_exchange_retires_stale_mapped_membership_and_reuses_sco
         AuthorityTenantMembership.actor_id == rows[0].id,
         AuthorityTenantMembership.status == "active",
     ).all()
-    assert [row.id for row in active_members] == [current_member.id]
+    active_member_ids = []
+    for row in active_members:
+        assert isinstance(row, AuthorityTenantMembership)
+        active_member_ids.append(row.id)
+    assert active_member_ids == [current_member.id]
     assert (
         ProviderRecordAuthority.one(appointment_id=appointment.id).binding_id
         == rows[-1].id
@@ -223,12 +227,11 @@ def test_invalid_legacy_exchange_rolls_back_stale_membership_cleanup_in_savepoin
                     settings=AUTHORITY_SETTINGS,
                 )
             assert session.is_active
-            assert (
-                session.get(
-                    AuthorityTenantMembership, stale_member.id, populate_existing=True
-                ).status
-                == "active"
+            restored_member = session.get(
+                AuthorityTenantMembership, stale_member.id, populate_existing=True
             )
+            assert restored_member is not None
+            assert restored_member.status == "active"
             assert _unchanged((*rows, stale_member)) == before
             assert ProviderRecordAuthority.count() == 0
             for event_type in (
