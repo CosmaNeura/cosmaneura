@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 
 from app.services.organization_access import member_authorization_basis
+from app.services.pilot_access_grandfather import active_pilot_access_grant
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -58,7 +59,7 @@ def resolve_session_prep_provider_access(
     session: Session | None = None,
     at: datetime | None = None,
 ) -> SessionPrepProviderAccessDecision:
-    """Resolve current account authority without accepting pilot-only access."""
+    """Require current practice authority, then accept its ordinary entitlement."""
 
     current_at = at or datetime.now(UTC)
     if session is None:
@@ -122,10 +123,12 @@ def resolve_session_prep_provider_access(
         return _denied("practice_access_not_authorized")
     if not practice.baa_in_force(at=current_at):
         return _denied("baa_not_in_force")
-    # A legacy pilot grant can count as broad product entitlement. Session Prep
-    # deliberately requires the practice's ordinary, current entitlement.
+    # A current pilot grant can cover only its exact snapshotted practice. It
+    # never replaces the onboarding, membership, authorization or BAA checks.
     if not practice.entitled(at=current_at):
-        return _denied("entitlement_not_in_force")
+        grant = active_pilot_access_grant(current_doctor, at=current_at)
+        if grant is None or grant.practice_id_snapshot != practice.id:
+            return _denied("entitlement_not_in_force")
     return SessionPrepProviderAccessDecision(
         allowed=True,
         denial_reason=None,

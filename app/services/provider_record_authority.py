@@ -53,6 +53,7 @@ from app.models.synthetic_preview_appointment_fixture import (
     SYNTHETIC_PREVIEW_FIXTURE_VERSION,
     SyntheticPreviewAppointmentFixture,
 )
+from sqlalchemy import or_
 from sqlalchemy import select as sql_select
 from sqlalchemy.exc import MultipleResultsFound
 from sqlmodel import Session, col, select
@@ -480,6 +481,184 @@ def ensure_session_prep_record_scope(
     )
 
 
+def _reconcile_ordinary_session_prep_scope(
+    *,
+    session,
+    binding,
+    doctor,
+    practice,
+    actor,
+    appointment_id,
+    clerk_issuer,
+    clerk_subject,
+) -> ProviderRecordAuthority:
+    """Add only a missing scope during a verified, current owned exchange.
+
+    Missing scope is not validation evidence. Recheck ordinary provenance under
+    the existing Practice/Doctor/Patient fences and serialize the binding;
+    fixture/import/partial authority must never become ordinary patient access.
+    """
+    binding = session.exec(
+        select(AuthorityPersonBinding)
+        .where(AuthorityPersonBinding.id == binding.id)
+        .with_for_update(of=AuthorityPersonBinding)
+        .execution_options(populate_existing=True)
+    ).one()
+    existing = session.exec(
+        select(ProviderRecordAuthority)
+        .where(ProviderRecordAuthority.binding_id == binding.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if existing is not None:
+        validated = validate_provider_record_scope(
+            session=session,
+            binding=binding,
+            actor_id=actor.id,
+            clerk_subject=clerk_subject,
+        )
+        if validated is None:
+            raise SessionPrepProviderScopeUnavailable
+        return validated
+    appointment = session.exec(
+        select(Appointment)
+        .where(Appointment.id == appointment_id)
+        .with_for_update(of=Appointment)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    patient = (
+        session.exec(
+            select(Patient)
+            .where(Patient.id == appointment.patient_id)
+            .with_for_update(of=Patient)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if appointment is not None
+        else None
+    )
+    mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    tenant = (
+        session.get(AuthorityTenant, binding.tenant_id, populate_existing=True)
+        if binding.tenant_id is not None
+        else None
+    )
+    person = session.get(AuthorityPerson, binding.person_id, populate_existing=True)
+    identity = session.exec(
+        select(AuthorityActorExternalIdentity)
+        .where(
+            AuthorityActorExternalIdentity.issuer == clerk_issuer,
+            AuthorityActorExternalIdentity.subject == clerk_subject,
+        )
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    current_actor = session.get(AuthorityActor, actor.id, populate_existing=True)
+    members = session.exec(
+        select(AuthorityTenantMembership)
+        .where(
+            AuthorityTenantMembership.actor_id == actor.id,
+            AuthorityTenantMembership.status == "active",
+        )
+        .with_for_update()
+        .limit(2)
+        .execution_options(populate_existing=True)
+    ).all()
+    origins = session.exec(
+        select(AuthorityPersonOrigin)
+        .where(AuthorityPersonOrigin.person_id == binding.person_id)
+        .limit(2)
+    ).all()
+    fixture = (
+        session.exec(
+            select(col(SyntheticPreviewAppointmentFixture.id)).where(
+                SyntheticPreviewAppointmentFixture.appointment_id == appointment.id
+            )
+        ).first()
+        if appointment is not None
+        else None
+    )
+    fixture_audit = session.exec(
+        select(col(AuthorityAuditEvent.id)).where(
+            AuthorityAuditEvent.event_type == "authority.provider_fixture.provisioned",
+            or_(
+                AuthorityAuditEvent.resource_ref == binding.binding_ref,
+                AuthorityAuditEvent.person_id == binding.person_id,
+            ),
+        )
+    ).first()
+    if (
+        _current_session_prep_practice(session, doctor).id != practice.id
+        or doctor.clerk_id != clerk_subject
+        or appointment is None
+        or patient is None
+        or appointment.doctor_id != doctor.id
+        or patient.doctor_id != doctor.id
+        or mapping is None
+        or mapping.tenant_id != binding.tenant_id
+        or tenant is None
+        or tenant.status != "active"
+        or current_actor is None
+        or current_actor.actor_kind != "human"
+        or current_actor.status != "active"
+        or identity is None
+        or identity.actor_id != actor.id
+        or identity.verified_at is None
+        or identity.revoked_at is not None
+        or binding.actor_id != actor.id
+        or binding.binding_kind != "provider_record"
+        or binding.binding_ref != str(appointment.id)
+        or binding.status != "active"
+        or binding.verified_at is None
+        or binding.revoked_at is not None
+        or person is None
+        or person.lifecycle_state != "patient"
+        or person.status != "active"
+        or len(members) != 1
+        or members[0].tenant_id != binding.tenant_id
+        or members[0].membership_kind != "provider"
+        or len(origins) != 1
+        or origins[0].origin != "provider_entry"
+        or origins[0].source_ref != str(patient.id)
+        or fixture is not None
+        or fixture_audit is not None
+    ):
+        raise SessionPrepProviderScopeUnavailable
+    scope = ProviderRecordAuthority(
+        binding_id=binding.id,
+        practice_authority_id=mapping.id,
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        patient_id=patient.id,
+        context_snapshot_ref=f"context_prep_{uuid4().hex}",
+    )
+    session.add(scope)
+    session.add(
+        AuthorityAuditEvent(
+            event_type="authority.provider_record.bound",
+            outcome="accepted",
+            occurred_at=datetime.now(UTC),
+            tenant_id=binding.tenant_id,
+            actor_id=actor.id,
+            person_id=binding.person_id,
+            resource_type="provider_record",
+            resource_ref=str(binding.id),
+            request_digest=hashlib.sha256(
+                f"{doctor.id}:{appointment.id}".encode()
+            ).hexdigest(),
+        )
+    )
+    session.flush()
+    validated = validate_provider_record_scope(
+        session=session, binding=binding, actor_id=actor.id, clerk_subject=clerk_subject
+    )
+    if validated is None:
+        raise SessionPrepProviderScopeUnavailable
+    return validated
+
+
 def _ensure_provider_record_scope(
     *,
     session: Session,
@@ -612,6 +791,29 @@ def _ensure_provider_record_scope(
                         f"{doctor.id}:{practice.id}:{tenant.id}".encode()
                     ).hexdigest(),
                 )
+            )
+    if session_prep:
+        legacy_binding = session.exec(
+            select(AuthorityPersonBinding)
+            .outerjoin(
+                ProviderRecordAuthority,
+                col(ProviderRecordAuthority.binding_id) == AuthorityPersonBinding.id,
+            )
+            .where(
+                AuthorityPersonBinding.binding_ref == record_ref,
+                col(ProviderRecordAuthority.id).is_(None),
+            )
+        ).one_or_none()
+        if legacy_binding is not None:
+            return _reconcile_ordinary_session_prep_scope(
+                session=session,
+                binding=legacy_binding,
+                doctor=doctor,
+                practice=practice,
+                actor=actor,
+                appointment_id=appointment.id,
+                clerk_issuer=clerk_issuer,
+                clerk_subject=clerk_subject,
             )
     if membership is None:
         session.add(
