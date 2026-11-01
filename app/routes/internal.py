@@ -43,6 +43,7 @@ from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration import session_prep as session_prep_configuration
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+from app.configuration.medication import held_medication_writes_enabled
 from app.configuration.redis import get_redis
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
 from app.configuration.stripe import (
@@ -3414,6 +3415,17 @@ MEDICATION_READER_HEADER = "X-Cosmaneura-Medication-Reader"
 MEDICATION_READER_CAPABILITY = "held-v1"
 
 
+def _require_new_medication_hold(new_status: MedicationStatus | None) -> None:
+    if new_status == MedicationStatus.held and not held_medication_writes_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "HELD_MEDICATION_WRITES_DISABLED",
+                "message": "New medication holds are not available.",
+            },
+        )
+
+
 def _require_medication_reader(
     request: Request, statuses: Iterable[MedicationStatus | None]
 ) -> None:
@@ -3467,6 +3479,7 @@ def medication_create(
     doctor: Doctor = request.state.doctor
     patient = _reference_patient_or_404(doctor, patient_id)
     _require_medication_reader(request, (data.status,))
+    _require_new_medication_hold(data.status)
 
     row = PatientMedication(
         doctor_id=doctor.id,
@@ -3505,6 +3518,8 @@ def medication_update(
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
     _require_medication_reader(request, (row.status, data.status))
+    if row.status != MedicationStatus.held:
+        _require_new_medication_hold(data.status)
 
     if data.name is not None:
         row.name = data.name.strip()
@@ -3575,6 +3590,7 @@ class MedicationResources(BaseModel, extra="forbid"):
 
 class PatientResourcePanel(BaseModel, extra="forbid"):
     has_natmed_subscription: bool
+    held_medication_writes_enabled: bool
     directory: list[ResourceLink]
     medications: list[MedicationResources]
 
@@ -3618,6 +3634,7 @@ def patient_reference_resources(
 
     return PatientResourcePanel(
         has_natmed_subscription=doctor.has_natmed_subscription,
+        held_medication_writes_enabled=held_medication_writes_enabled(),
         directory=PROVIDER_RESOURCE_DIRECTORY,
         medications=medications,
     )
