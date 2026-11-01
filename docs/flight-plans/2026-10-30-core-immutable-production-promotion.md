@@ -19,3 +19,10 @@ Secretless checks cover tampering, wrong actors/refs/source/run/attempt, incompl
 On refusal retain evidence/workloads, repair source and prepare a new exact-master candidate. Never substitute tags, rebuild during promotion, widen provenance, rerun historical snapshots or delete additive data as recovery.
 
 This isolated composition is based on reviewed PR90247e (including PR901d833) and PR89653c, not merged/current-master production authority. Final source integration/review/CI and actual production inputs remain required. Any amendment of CorePR902 requires reviewed alignment of providerPR98's exact Core-head pin; no provider consumer, workflow or live activation is changed here. No database migration rung applies to this source-only contract composition.
+
+
+## Current M2 private source integration (2026-11-01)
+
+The existing production candidate, saved-image, runtime-binding and frontend-admission outcomes are composed onto approved protected M2 `a9bf0d70bfd4f346de3b43419074c5f032d28958`; the agent-role outcome has the same M2 base. The eleven M2 rollout-repair paths and all current Session Prep, Scribe, application and migration source are retained. The retry-safety test keeps both the production immutable-image expectation and the M2 canonical-input refusal fixture with its original assertions.
+
+The canonical audit retains the exact 107 paths and self-exclusions. Its inventory, source-base annotation and verifier manifest anchor are rederived from the actual private combined Git tree. Verification covers the shared retry-safety fixture and fixed-control integration; prior unchanged production checks retain their original source scope. This is local source preparation. Public source admission and checks, founder-selected image/configuration/schema contracts and a separate production activation approval remain required.
