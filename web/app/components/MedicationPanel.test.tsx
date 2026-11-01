@@ -96,7 +96,7 @@ beforeEach(() => {
 })
 
 describe("MedicationPanel", () => {
-  it("distinguishes held status in current, prior and confirmed rows without writer controls", async () => {
+  it("distinguishes held status without inferring confirmation or changing prior visits", async () => {
     stubList([
       { ...CONFIRMED, status: "held" },
       { ...UNCONFIRMED, status: "held" },
@@ -116,13 +116,131 @@ describe("MedicationPanel", () => {
     expect(
       screen.queryByRole("button", { name: "Hold" }),
     ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Resume" }),
-    ).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument()
     expect(medicationUpdate).not.toHaveBeenCalled()
     expect(
       within(screen.getByTestId("historical-medication")).queryByRole("button"),
     ).not.toBeInTheDocument()
+  })
+
+  it("holds and resumes only the explicit confirmed patient row, preserving dated provenance", async () => {
+    let row = { ...CONFIRMED, list_updated_at: "2026-10-31T12:00:00Z" }
+    stubList([row])
+    medicationList.mockImplementation(() => Promise.resolve({ data: [row] }))
+    medicationUpdate.mockImplementation(({ body }) => {
+      row = { ...row, status: body.status }
+      return Promise.resolve({ data: row })
+    })
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_other" />,
+    )
+    await screen.findByRole("button", { name: "Hold" })
+    fireEvent.click(screen.getByRole("button", { name: "Hold" }))
+    await screen.findByRole("button", { name: "Resume" })
+    expect(medicationUpdate).toHaveBeenLastCalledWith({
+      path: { medication_id: CONFIRMED.id },
+      body: { status: "held" },
+    })
+    expect(screen.getByTestId("confirmed-medication")).toHaveTextContent(
+      "Source visit · 10/20/26",
+    )
+    expect(screen.getByTestId("confirmed-medication")).toHaveTextContent(
+      "List updated · 10/31/26",
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
+    await screen.findByRole("button", { name: "Hold" })
+    expect(medicationUpdate).toHaveBeenLastCalledWith({
+      path: { medication_id: CONFIRMED.id },
+      body: { status: "active" },
+    })
+    expect(screen.queryByText(/held temporarily/)).not.toBeInTheDocument()
+  })
+
+  it("requires an explicit current-visit status correction before separate confirmation", async () => {
+    let row = { ...UNCONFIRMED, status: "stopped" }
+    stubList([row, { ...row, id: "history", appointment_id: "visit_older" }])
+    medicationList.mockImplementation(() =>
+      Promise.resolve({
+        data: [
+          row,
+          {
+            ...UNCONFIRMED,
+            id: "history",
+            status: "stopped",
+            appointment_id: "visit_older",
+          },
+        ],
+      }),
+    )
+    medicationUpdate.mockImplementation(({ body }) => {
+      row = { ...row, ...body }
+      return Promise.resolve({ data: row })
+    })
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+    )
+    const select = await screen.findByRole("combobox", {
+      name: "Status for fish oil",
+    })
+    fireEvent.change(select, { target: { value: "held" } })
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: "Status for fish oil" }),
+      ).toHaveValue("held"),
+    )
+    expect(medicationUpdate).toHaveBeenLastCalledWith({
+      path: { medication_id: UNCONFIRMED.id },
+      body: { status: "held" },
+    })
+    expect(screen.getByTestId("unconfirmed-medication")).toHaveTextContent(
+      "held temporarily",
+    )
+    expect(
+      within(screen.getByTestId("historical-medication")).queryByRole(
+        "combobox",
+      ),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId("confirmed-medication")).not.toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm for patient list" }),
+    )
+    await screen.findByTestId("confirmed-medication")
+    expect(medicationUpdate).toHaveBeenLastCalledWith({
+      path: { medication_id: UNCONFIRMED.id },
+      body: { confirmed: true },
+    })
+    expect(screen.getByTestId("confirmed-medication")).toHaveTextContent(
+      "held temporarily",
+    )
+  })
+
+  it("does not apply a late hold response to a different patient", async () => {
+    let resolveOld: (value: unknown) => void = () => {}
+    stubList([CONFIRMED])
+    medicationList.mockImplementation(({ path }) =>
+      Promise.resolve({ data: [{ ...CONFIRMED, name: path.patient_id }] }),
+    )
+    medicationUpdate.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve
+        }),
+    )
+    const view = render(
+      <MedicationPanel patientId="patient_old" appointmentId="visit_current" />,
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Hold" }))
+    await waitFor(() => expect(medicationUpdate).toHaveBeenCalledTimes(1))
+    view.rerender(
+      <MedicationPanel patientId="patient_new" appointmentId="visit_current" />,
+    )
+    await screen.findByText("patient_new · 500mg")
+    await act(async () =>
+      resolveOld({ data: { ...CONFIRMED, status: "held" } }),
+    )
+    expect(screen.queryByText(/held temporarily/)).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Hold" })).toBeEnabled()
+    expect(medicationList).toHaveBeenCalledTimes(2)
   })
 
   it("separates unconfirmed extracted rows from confirmed ones and shows links", async () => {
