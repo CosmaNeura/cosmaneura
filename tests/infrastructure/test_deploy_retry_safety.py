@@ -164,13 +164,14 @@ def _run_deployment_check(
     expected_image = (
         f"registry.example/cosmaneura@{DIGEST}"
         if deploy_path == "infra-staging/deploy.sh"
-        else f"registry.example/cosmaneura:{SHA}"
+        else f"registry.example/cosmaneura@{DIGEST}"
     )
     script = f"""
 RESOURCE_GROUP=test-resource-group
 REVISION_STRING={suffix}
 {image_variable}=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+PRODUCTION_IMAGE_REF=registry.example/cosmaneura@{DIGEST}
 SCHEDULER_CONTAINER=test-scheduler
 sleep() {{ :; }}
 az() {{
@@ -522,6 +523,7 @@ WORKER_WORKLOAD_CONTAINER_NAME=app-worker
 SCHEDULER_WORKLOAD_CONTAINER_NAME=app-scheduler
 STAGING_IMAGE=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+PRODUCTION_IMAGE_REF=registry.example/cosmaneura@{DIGEST}
 STAGING_API_COMMAND='python main.py'
 STAGING_WORKER_COMMAND='worker command'
 SCHEDULER_COMMAND='scheduler command'
