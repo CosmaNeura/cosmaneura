@@ -147,7 +147,9 @@ def test_existing_human_note_is_preserved(unused_mount, monkeypatch):
     )
     summarize.perform(transcript.id, schema.id, note_policy=policy.POLICY)
     session.expire_all()
-    assert AIVisitNote.get(id=note.id).note == {"Plan": "Retained clinician edits."}
+    retained = AIVisitNote.get(id=note.id)
+    assert retained is not None
+    assert retained.note == {"Plan": "Retained clinician edits."}
 
 
 def test_published_scribe_delivery_blocks_zoom_source(unused_mount, monkeypatch):

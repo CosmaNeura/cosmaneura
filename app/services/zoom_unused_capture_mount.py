@@ -69,7 +69,7 @@ def allows_grounded_zoom_source(
     ):
         if (
             session.exec(
-                select(model.id)
+                select(cast(Any, model.id))
                 .where(cast(Any, model.binding_id).in_(binding_ids))
                 .limit(1)
             ).first()
@@ -80,13 +80,13 @@ def allows_grounded_zoom_source(
             return False
     if (
         session.exec(
-            select(ScribeTranscriptDelivery.id).where(
+            select(cast(Any, ScribeTranscriptDelivery.id)).where(
                 ScribeTranscriptDelivery.appointment_id == transcript.appointment_id
             )
         ).first()
         is not None
         or session.exec(
-            select(AIVisitNote.id).where(
+            select(cast(Any, AIVisitNote.id)).where(
                 AIVisitNote.appointment_id == transcript.appointment_id,
                 cast(Any, AIVisitNote.superseded_at).is_(None),
             )
