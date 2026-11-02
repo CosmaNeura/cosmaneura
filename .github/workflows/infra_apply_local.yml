@@ -91,6 +91,7 @@ jobs:
       # infra_production_plan_local.yml; a protected environment variable cannot
       # pre-arm the cutover.
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+      TF_VAR_scribe_core_bundle: '{"attach_existing_translation_identity":true}'
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
