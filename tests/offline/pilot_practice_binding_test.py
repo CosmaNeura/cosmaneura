@@ -33,7 +33,7 @@ class Field:
     def __init__(self, model, name, transform=lambda x: x):
         self.model, self.name, self.transform = model, name, transform
 
-    def __eq__(self, value):
+    def __eq__(self, value: object) -> Any:
         return Predicate(lambda row: self.transform(getattr(row, self.name)) == value)
 
 
@@ -57,6 +57,9 @@ class Model(metaclass=ModelMeta):
             expires_at=None,
         )
         self.__dict__.update(defaults | values)
+
+    def __getattr__(self, name: str) -> Any:
+        raise AttributeError(name)
 
 
 Doctor = type("Doctor", (Model,), {})
@@ -176,7 +179,7 @@ def source_namespace():
         has_valid_clerk_issuer=lambda: True,
         clerk_issuer="https://synthetic.example.clerk.accounts.dev",
     )
-    namespace = dict(
+    namespace: dict[str, Any] = dict(
         __name__=__name__,
         dataclass=dataclass,
         Any=Any,

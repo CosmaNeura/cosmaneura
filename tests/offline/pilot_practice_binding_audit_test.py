@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture
 def fixture():
-    return synthetic_fixture.__wrapped__()
+    return getattr(synthetic_fixture, "__wrapped__")()
 
 
 def audit_namespace(service, base_source, base_plan):
