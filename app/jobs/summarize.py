@@ -82,7 +82,12 @@ def perform(
         capture_owned = _capture_owns_appointment(
             cast(Session, session), trigger.appointment_id
         )
-    if capture_owned:
+        from app.services.zoom_unused_capture_mount import allows_grounded_zoom_source
+
+        unused_mount_zoom = capture_owned and allows_grounded_zoom_source(
+            cast(Session, session), trigger, note_policy=note_policy
+        )
+    if capture_owned and not unused_mount_zoom:
         # Captures use explicit versioned sources. This background path merges
         # independent recordings and carries no current capture authority;
         # the explicit capture-note receiver owns the appointment's notes.
@@ -191,6 +196,7 @@ def perform(
         generated_through_transcript_id=latest.id,
         note=note,
         appointment_name=appointment_name,
+        unused_mount_zoom_policy=note_policy if unused_mount_zoom else None,
     )
 
 
@@ -204,6 +210,7 @@ def _finalize_generated_note(
     authorize_finalization: Callable[[Session], None] | None = None,
     replace_note_ref: TypeIDType | None = None,
     persist_provenance: Callable[[Session, AIVisitNote], None] | None = None,
+    unused_mount_zoom_policy: str | None = None,
 ) -> bool:
     """Commit a generated note only while its transcript snapshot is current.
 
@@ -232,9 +239,17 @@ def _finalize_generated_note(
         if authorize_finalization is None and _capture_owns_appointment(
             cast(Session, session), appointment.id
         ):
-            # A capture may have been bound while this background model call
-            # was in flight. Recheck under the publication lock before writing.
-            return False
+            # Any admitted or published capture retains precedence. The one
+            # staging exception rechecks the complete unused-mount/Recall scope
+            # under this shared lock; a policy argument cannot grant it.
+            from app.services.zoom_unused_capture_mount import (
+                allows_grounded_zoom_source,
+            )
+
+            if not allows_grounded_zoom_source(
+                cast(Session, session), trigger, note_policy=unused_mount_zoom_policy
+            ):
+                return False
         source_query = select(AIVisitTranscript).where(
             AIVisitTranscript.appointment_id == trigger.appointment_id,
             cast(Any, AIVisitTranscript.deleted_at).is_(None),
