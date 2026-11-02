@@ -777,7 +777,7 @@ def test_aggregate_cancellation_matches_runtime_exact_doctor_and_gate_order(
         PracticeMember(
             practice_id=shared_practice.id,
             doctor_id=unrelated.id,
-            role="clinician",
+            role="workforce",
             attested_at=observed_at,
             attestation_name="Synthetic colleague",
         )
