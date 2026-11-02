@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import runpy
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -233,8 +234,14 @@ def test_actual_model_compiles_with_retained_foreign_keys_and_unique_bindings():
     for table in ("pilot_access_grandfather_grant", "practice_access_audit"):
         if table not in SQLModel.metadata.tables:
             Table(table, SQLModel.metadata, Column("id", String, primary_key=True))
-    ns = runpy.run_path(str(ROOT / "app/models/pilot_access_practice_binding.py"))
-    model = ns["PilotAccessPracticeBinding"]
+    loaded = sys.modules.get("app.models.pilot_access_practice_binding")
+    model = (
+        loaded.PilotAccessPracticeBinding
+        if loaded is not None
+        else runpy.run_path(str(ROOT / "app/models/pilot_access_practice_binding.py"))[
+            "PilotAccessPracticeBinding"
+        ]
+    )
     sql = str(CreateTable(model.__table__).compile(dialect=postgresql.dialect()))
     assert model.__table__.name == "pilot_access_practice_binding"
     for field in (

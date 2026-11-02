@@ -23,7 +23,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table(
         "pilot_access_practice_binding",
-        sa.Column("id", TypeIDType("pilot_practice_binding"), nullable=False),
+        sa.Column("id", TypeIDType("pilot_practice_binding"), nullable=False, comment="TypeID with prefix: pilot_practice_binding"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
         sa.Column("predecessor_grant_id", TypeIDType("pilot_access_grant"), nullable=False),
