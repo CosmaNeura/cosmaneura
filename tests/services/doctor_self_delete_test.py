@@ -195,3 +195,38 @@ def test_self_delete_is_idempotent_after_completion():
     assert first.status == "deleted"
     assert second.status == "already_deleted"
     assert second.changed is False
+
+
+def test_self_delete_resumes_deletion_pending_after_clerk_failure():
+    doctor, practice, _ = _scope()
+    calls: list[str] = []
+
+    def fail_once(clerk_id: str) -> bool:
+        calls.append(clerk_id)
+        if len(calls) == 1:
+            raise DoctorSelfDeleteError("clerk identity could not be deleted")
+        return True
+
+    with pytest.raises(DoctorSelfDeleteError, match="clerk identity"):
+        delete_own_account(
+            doctor_id=doctor.id,
+            confirm="DELETE",
+            clerk_deleter=fail_once,
+        )
+
+    doctor.refresh()
+    assert doctor.account_deletion_status == "deletion_pending"
+    assert doctor.deleted_at is not None
+
+    resumed = delete_own_account(
+        doctor_id=doctor.id,
+        confirm="DELETE",
+        clerk_deleter=fail_once,
+    )
+    assert resumed.status == "deleted"
+    assert resumed.changed is True
+    assert len(calls) == 2
+    doctor.refresh()
+    practice.refresh()
+    assert doctor.account_deletion_status == "deleted"
+    assert practice.owner_reassignment_needed_at is not None

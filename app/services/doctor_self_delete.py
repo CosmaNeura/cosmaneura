@@ -336,184 +336,213 @@ def delete_own_account(
                 changed=False,
             )
 
-        try:
-            protected = get_active_runtime_superadmin_capability_kinds(
-                session,
-                subject=doctor.clerk_id,
-                doctor_id=doctor.id,
-                lock_for_update=True,
-            )
-        except SuperadminCapabilityError as error:
-            raise DoctorSelfDeleteError(
-                "superadmin capability state could not be verified"
-            ) from error
-        if protected:
-            raise DoctorSelfDeleteError(
-                "active superadmin capabilities must be revoked before self-delete"
-            )
-
-        doctor.account_deletion_status = ACCOUNT_DELETION_PENDING
-        session.add(doctor)
-        session.flush()
-        _audit_step(
-            event="doctor_self_delete.deletion_pending",
-            doctor_id=doctor.id,
-            practice_id=None,
-            result="ok",
-        )
-
         member_snapshot = session.exec(
             select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
         ).one_or_none()
-        practice: Practice | None = None
-        member: PracticeMember | None = None
         if member_snapshot is not None:
-            practice = lock_practice_seats(session, member_snapshot.practice_id)
-            if practice is None:
-                raise DoctorSelfDeleteError("provider practice does not exist")
-            practice_id = practice.id
-            member = cast(
-                PracticeMember,
+            practice_id = member_snapshot.practice_id
+            practice_left_ownerless = (
                 session.exec(
-                    select(PracticeMember)
-                    .where(PracticeMember.doctor_id == doctor.id)
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                ).one(),
-            )
-
-        apply_clinical_record_retention_policy(
-            doctor_id=doctor.id,
-            practice_id=practice_id,
-            session=session,
-        )
-        _audit_step(
-            event="doctor_self_delete.retention_hook",
-            doctor_id=doctor.id,
-            practice_id=practice_id,
-            result="held_nothing",
-        )
-
-        _delete_personal_settings(session, doctor)
-        _scrub_personal_profile(doctor)
-        doctor.deleted_at = current
-        session.add(doctor)
-
-        if member is not None and practice is not None:
-            if member.access_revoked_at is None:
-                member.access_revoked_at = current
-                member.access_revoked_by_ref = operator_ref
-                member.access_revocation_reason = SELF_DELETE_REASON
-                member.access_records_retain_until = retain_until
-                member.seat_state = ClinicianSeatState.inactive.value
-                session.add(member)
-
-            if member.role == PracticeRole.owner.value:
-                other_active_owner = session.exec(
-                    select(PracticeMember).where(
-                        PracticeMember.practice_id == practice.id,
-                        PracticeMember.id != member.id,
-                        PracticeMember.role == PracticeRole.owner.value,
-                        col(PracticeMember.access_revoked_at).is_(None),
+                    select(Practice).where(
+                        Practice.id == member_snapshot.practice_id,
+                        col(Practice.owner_reassignment_needed_at).is_not(None),
                     )
                 ).first()
-                if other_active_owner is None:
-                    practice.owner_reassignment_needed_at = current
-                    session.add(practice)
-                    practice_left_ownerless = True
+                is not None
+            )
 
-            if member.organization_roster_approval_id is not None:
-                approval = session.exec(
-                    select(OrganizationRosterApproval).where(
-                        OrganizationRosterApproval.id
-                        == member.organization_roster_approval_id
+        # Mid-flight retry after local commit / Clerk failure: finish identity.
+        if (
+            doctor.account_deletion_status == ACCOUNT_DELETION_PENDING
+            and doctor.deleted_at is not None
+        ):
+            clerk_id_for_delete = doctor.clerk_id
+            session.commit()
+            _audit_step(
+                event="doctor_self_delete.resume_pending",
+                doctor_id=doctor.id,
+                practice_id=practice_id,
+                result="ok",
+            )
+        else:
+            try:
+                protected = get_active_runtime_superadmin_capability_kinds(
+                    session,
+                    subject=doctor.clerk_id,
+                    doctor_id=doctor.id,
+                    lock_for_update=True,
+                )
+            except SuperadminCapabilityError as error:
+                raise DoctorSelfDeleteError(
+                    "superadmin capability state could not be verified"
+                ) from error
+            if protected:
+                raise DoctorSelfDeleteError(
+                    "active superadmin capabilities must be revoked before self-delete"
+                )
+
+            doctor.account_deletion_status = ACCOUNT_DELETION_PENDING
+            session.add(doctor)
+            session.flush()
+            _audit_step(
+                event="doctor_self_delete.deletion_pending",
+                doctor_id=doctor.id,
+                practice_id=None,
+                result="ok",
+            )
+
+            practice: Practice | None = None
+            member: PracticeMember | None = None
+            if member_snapshot is not None:
+                practice = lock_practice_seats(session, member_snapshot.practice_id)
+                if practice is None:
+                    raise DoctorSelfDeleteError("provider practice does not exist")
+                practice_id = practice.id
+                member = cast(
+                    PracticeMember,
+                    session.exec(
+                        select(PracticeMember)
+                        .where(PracticeMember.doctor_id == doctor.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    ).one(),
+                )
+
+            apply_clinical_record_retention_policy(
+                doctor_id=doctor.id,
+                practice_id=practice_id,
+                session=session,
+            )
+            _audit_step(
+                event="doctor_self_delete.retention_hook",
+                doctor_id=doctor.id,
+                practice_id=practice_id,
+                result="held_nothing",
+            )
+
+            _delete_personal_settings(session, doctor)
+            _scrub_personal_profile(doctor)
+            doctor.deleted_at = current
+            session.add(doctor)
+
+            if member is not None and practice is not None:
+                if member.access_revoked_at is None:
+                    member.access_revoked_at = current
+                    member.access_revoked_by_ref = operator_ref
+                    member.access_revocation_reason = SELF_DELETE_REASON
+                    member.access_records_retain_until = retain_until
+                    member.seat_state = ClinicianSeatState.inactive.value
+                    session.add(member)
+
+                if member.role == PracticeRole.owner.value:
+                    other_active_owner = session.exec(
+                        select(PracticeMember).where(
+                            PracticeMember.practice_id == practice.id,
+                            PracticeMember.id != member.id,
+                            PracticeMember.role == PracticeRole.owner.value,
+                            col(PracticeMember.access_revoked_at).is_(None),
+                        )
+                    ).first()
+                    if other_active_owner is None:
+                        practice.owner_reassignment_needed_at = current
+                        session.add(practice)
+                        practice_left_ownerless = True
+
+                if member.organization_roster_approval_id is not None:
+                    approval = session.exec(
+                        select(OrganizationRosterApproval).where(
+                            OrganizationRosterApproval.id
+                            == member.organization_roster_approval_id
+                        )
+                    ).one_or_none()
+                    if approval is not None and approval.revoked_at is None:
+                        approval.revoked_at = current
+                        approval.revoked_by_ref = operator_ref
+                        approval.revocation_reason = SELF_DELETE_REASON
+                        approval.retain_until = retain_until
+                        session.add(approval)
+
+                for grant in session.exec(
+                    select(PilotAccessGrandfatherGrant).where(
+                        col(PilotAccessGrandfatherGrant.revoked_at).is_(None),
+                        or_(
+                            col(PilotAccessGrandfatherGrant.doctor_id_snapshot)
+                            == doctor.id,
+                            col(PilotAccessGrandfatherGrant.clerk_id)
+                            == doctor.clerk_id,
+                        ),
                     )
-                ).one_or_none()
-                if approval is not None and approval.revoked_at is None:
-                    approval.revoked_at = current
-                    approval.revoked_by_ref = operator_ref
-                    approval.revocation_reason = SELF_DELETE_REASON
-                    approval.retain_until = retain_until
-                    session.add(approval)
+                ).all():
+                    grant.revoked_at = current
+                    grant.revoked_by_ref = operator_ref
+                    grant.revocation_reason = SELF_DELETE_REASON
+                    grant.retain_until = retain_until
+                    session.add(grant)
 
-            for grant in session.exec(
-                select(PilotAccessGrandfatherGrant).where(
-                    col(PilotAccessGrandfatherGrant.revoked_at).is_(None),
-                    or_(
-                        col(PilotAccessGrandfatherGrant.doctor_id_snapshot)
-                        == doctor.id,
-                        col(PilotAccessGrandfatherGrant.clerk_id) == doctor.clerk_id,
-                    ),
+            authority = _authority_scope(
+                session, clerk_subject=doctor.clerk_id, lock=True
+            )
+            if authority is not None:
+                authority.identity.revoked_at = current
+                authority.actor.status = "revoked"
+                authority.membership.status = "revoked"
+                session.add(authority.identity)
+                session.add(authority.actor)
+                session.add(authority.membership)
+                for mount_session in authority.sessions:
+                    mount_session.status = "revoked"
+                    mount_session.revoked_at = current
+                    session.add(mount_session)
+                session.add(
+                    AuthorityAuditEvent(
+                        event_source="platform_authoritative",
+                        event_type="authority.provider_account.self_deleted",
+                        outcome="accepted",
+                        occurred_at=current,
+                        recorded_at=current,
+                        tenant_id=authority.tenant.id,
+                        actor_id=authority.actor.id,
+                        resource_type=SELF_DELETE_RESOURCE_TYPE,
+                        resource_ref=f"self-delete:{_sha256(str(doctor.id))}",
+                        request_digest=_sha256(
+                            f"{doctor.id}:{practice_id}:{current.isoformat()}"
+                        ),
+                        platform_refs=[],
+                    )
                 )
-            ).all():
-                grant.revoked_at = current
-                grant.revoked_by_ref = operator_ref
-                grant.revocation_reason = SELF_DELETE_REASON
-                grant.retain_until = retain_until
-                session.add(grant)
 
-        authority = _authority_scope(session, clerk_subject=doctor.clerk_id, lock=True)
-        if authority is not None:
-            authority.identity.revoked_at = current
-            authority.actor.status = "revoked"
-            authority.membership.status = "revoked"
-            session.add(authority.identity)
-            session.add(authority.actor)
-            session.add(authority.membership)
-            for mount_session in authority.sessions:
-                mount_session.status = "revoked"
-                mount_session.revoked_at = current
-                session.add(mount_session)
-            session.add(
-                AuthorityAuditEvent(
-                    event_source="platform_authoritative",
-                    event_type="authority.provider_account.self_deleted",
-                    outcome="accepted",
-                    occurred_at=current,
-                    recorded_at=current,
-                    tenant_id=authority.tenant.id,
-                    actor_id=authority.actor.id,
-                    resource_type=SELF_DELETE_RESOURCE_TYPE,
-                    resource_ref=f"self-delete:{_sha256(str(doctor.id))}",
-                    request_digest=_sha256(
-                        f"{doctor.id}:{practice_id}:{current.isoformat()}"
-                    ),
-                    platform_refs=[],
+            if practice is not None:
+                session.add(
+                    PracticeAccessAudit(
+                        practice_id=practice.id,
+                        action=PracticeAccessAction.doctor_self_deleted.value,
+                        operator_ref=operator_ref,
+                        reason=SELF_DELETE_REASON,
+                        effective_at=current,
+                        expires_at=retain_until,
+                        document_reference=(
+                            f"doctor-self-delete:{doctor.id}:"
+                            f"ownerless={int(practice_left_ownerless)}"
+                        ),
+                        evidence_sha256=_sha256(
+                            f"self-delete:{doctor.id}:{practice.id}:"
+                            f"{int(practice_left_ownerless)}"
+                        ),
+                    )
                 )
+
+            clerk_id_for_delete = doctor.clerk_id
+            session.flush()
+            _audit_step(
+                event="doctor_self_delete.personal_data_removed",
+                doctor_id=doctor.id,
+                practice_id=practice_id,
+                result="ok",
             )
 
-        if practice is not None:
-            session.add(
-                PracticeAccessAudit(
-                    practice_id=practice.id,
-                    action=PracticeAccessAction.doctor_self_deleted.value,
-                    operator_ref=operator_ref,
-                    reason=SELF_DELETE_REASON,
-                    effective_at=current,
-                    expires_at=retain_until,
-                    document_reference=(
-                        f"doctor-self-delete:{doctor.id}:"
-                        f"ownerless={int(practice_left_ownerless)}"
-                    ),
-                    evidence_sha256=_sha256(
-                        f"self-delete:{doctor.id}:{practice.id}:"
-                        f"{int(practice_left_ownerless)}"
-                    ),
-                )
-            )
-
-        clerk_id_for_delete = doctor.clerk_id
-        session.flush()
-        _audit_step(
-            event="doctor_self_delete.personal_data_removed",
-            doctor_id=doctor.id,
-            practice_id=practice_id,
-            result="ok",
-        )
-
-        # Commit local state before the external Clerk call so a network failure
-        # leaves deletion_pending for a safe retry that finishes identity removal.
-        session.commit()
+            # Commit local state before the external Clerk call so a network failure
+            # leaves deletion_pending for a safe retry that finishes identity removal.
+            session.commit()
     except DoctorSelfDeleteError:
         session.rollback()
         raise

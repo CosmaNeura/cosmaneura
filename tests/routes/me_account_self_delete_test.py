@@ -190,3 +190,44 @@ def test_self_delete_sole_owner_ownerless_via_route(monkeypatch, global_session)
     practice.refresh()
     assert practice.owner_reassignment_needed_at is not None
     assert Practice.get(id=practice.id) is not None
+
+
+def test_self_delete_route_allows_deletion_pending_retry(monkeypatch, global_session):
+    del global_session
+    doctor, _, _ = _doctor_with_practice(is_solo=True)
+    calls: list[str] = []
+
+    def fail_once(clerk_id: str) -> bool:
+        from app.services.doctor_self_delete import DoctorSelfDeleteError
+
+        calls.append(clerk_id)
+        if len(calls) == 1:
+            raise DoctorSelfDeleteError("clerk identity could not be deleted")
+        return True
+
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        fail_once,
+    )
+    client = _client_for(doctor)
+    try:
+        first = client.request(
+            "DELETE",
+            "/v1/me/account",
+            json={"confirm": "DELETE"},
+        )
+        assert first.status_code == 400
+        doctor.refresh()
+        assert doctor.account_deletion_status == "deletion_pending"
+        second = client.request(
+            "DELETE",
+            "/v1/me/account",
+            json={"confirm": "DELETE"},
+        )
+    finally:
+        api_app.dependency_overrides = {}
+    assert second.status_code == 200
+    assert second.json()["status"] == "deleted"
+    assert len(calls) == 2
+    doctor.refresh()
+    assert doctor.account_deletion_status == "deleted"

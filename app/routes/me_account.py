@@ -46,7 +46,9 @@ def inject_doctor_for_self_delete(request: Request) -> None:
     doctor = Doctor.get(clerk_id=clerk_id)
     if doctor is None:
         doctor = Doctor.upsert(data={"clerk_id": clerk_id}, unique_by="clerk_id")
-    elif doctor.account_deletion_status == "deleted":
+    elif doctor.account_deletion_status in {"deleted", "deletion_pending"}:
+        # Admit completed deletes (already_deleted) and mid-flight retries so
+        # Clerk identity removal can finish after a transient provider failure.
         request.state.doctor = doctor
         doctor_ref = provider_log_ref(f"doctor:{doctor.id}")
         context["doctor_ref"] = doctor_ref
