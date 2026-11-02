@@ -268,7 +268,7 @@ def test_preparation_group_refuses_noncanonical_boolean_values(key, value):
 @pytest.mark.parametrize("key", PREPARATION_KEYS)
 @pytest.mark.parametrize("failure", ["partial", "duplicate", "ambiguous", "unrelated"])
 def test_preparation_cli_refuses_partial_duplicate_or_unbounded_input(key, failure):
-    candidate = runtime() | dict.fromkeys(PREPARATION_KEYS, "true")
+    candidate = dict[str, object](runtime() | dict.fromkeys(PREPARATION_KEYS, "true"))
     if failure == "partial":
         del candidate[key]
     elif failure == "ambiguous":
