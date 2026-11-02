@@ -47,7 +47,7 @@ on:
         required: true
       publication_recovery_json:
         type: string
-        description: "Optional exact recovery selector for published run41090712649 attempt1; no rebuild or tag overwrite"
+        description: "Optional exact allowlisted publication recovery selector; no rebuild or tag overwrite"
         required: false
         default: ""
       recovery_digest:
@@ -179,7 +179,7 @@ jobs:
             echo "recovery_digest=$RECOVERY_DIGEST"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Verify original failed publication and retained validation custody
+      - name: Verify original publication and retained validation custody
         id: publication_recovery
         if: ${{ inputs.publication_recovery_json != '' }}
         env:
@@ -1662,10 +1662,60 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - name: Assemble credentialless workflow-attempt evidence
+      - name: Checkout exact workflow-attempt validator
+        if: ${{ needs.deploy.result == 'success' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Load authenticated same-run staging deployment evidence
+        id: deployment_evidence
+        if: ${{ needs.deploy.result == 'success' }}
         env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          CANDIDATE_SHA_INPUT: ${{ inputs.candidate_sha }}
+          APPROVAL_PR_NUMBER_INPUT: ${{ inputs.approval_pr_number }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          SYNTHETIC_ONLY_CONFIRMED_INPUT: ${{ inputs.synthetic_only_confirmed }}
+          SYNTHETIC_EVIDENCE_SHA256_INPUT: ${{ inputs.synthetic_evidence_sha256 }}
+          STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT: ${{ inputs.staging_identity_fingerprints_sha256 }}
+          STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT: ${{ inputs.staging_effective_configuration_sha256 }}
+          STAGING_RUNTIME_PUBLIC_JSON: ${{ inputs.staging_runtime_public_json }}
+          EXPECTED_SCHEMA_BEFORE_INPUT: ${{ inputs.expected_schema_before }}
+          EXPECTED_SCHEMA_AFTER_INPUT: ${{ inputs.expected_schema_after }}
+          RECOVERY_DIGEST_INPUT: ${{ inputs.recovery_digest }}
+          VALIDATION_RUN_ID: ${{ needs.authorize.outputs.recovery_run_id || github.run_id }}
+          VALIDATION_RUN_ATTEMPT: ${{ needs.authorize.outputs.recovery_run_attempt || github.run_attempt }}
+          RECOVERY_RUN_ID: ${{ needs.authorize.outputs.recovery_run_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
+          mkdir staging-attempt-deployment
+          # The exact same-run producer uses overwrite:false. Its successful
+          # job and unique artifact name bind custody without screened outputs.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            > staging-attempt-deployment/artifacts.json
+          python scripts/staging_release_contract.py --complete-attempt-select \
+            staging-attempt-deployment/artifacts.json staging-attempt-deployment/metadata.json
+          artifact_id=$(jq -er '.id' staging-attempt-deployment/metadata.json)
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+            > staging-attempt-deployment/release.zip
+          python scripts/staging_release_contract.py --complete-attempt-validate \
+            staging-attempt-deployment/metadata.json staging-attempt-deployment/release.zip \
+            staging-attempt-deployment/verified.json
+
+      - name: Assemble credentialless workflow-attempt evidence
+        if: always()
+        env:
+          DEPLOYMENT_EVIDENCE_RESULT: ${{ steps.deployment_evidence.outcome }}
           APPROVAL_PR_NUMBER_INPUT: ${{ inputs.approval_pr_number }}
           AUTHORIZATION_RESULT: ${{ needs.authorize.result }}
           BACKEND_TEST_RESULT: ${{ needs.app.result }}
@@ -1703,6 +1753,15 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p staging-attempt-evidence
+          # Record failed attempts too, without accepting unverified JSON.
+          OBSERVED_CONFIGURATION=""
+          OBSERVED_WORKLOADS_BEFORE=""
+          OBSERVED_WORKLOADS_AFTER=""
+          if [[ "$DEPLOYMENT_EVIDENCE_RESULT" == "success" ]]; then
+            OBSERVED_CONFIGURATION=$(jq -ce '.configuration' staging-attempt-deployment/verified.json)
+            OBSERVED_WORKLOADS_BEFORE=$(jq -ce '.workloads_before' staging-attempt-deployment/verified.json)
+            OBSERVED_WORKLOADS_AFTER=$(jq -ce '.workloads_after' staging-attempt-deployment/verified.json)
+          fi
           jq -n \
             --arg recorded_at "$(date -u +%FT%TZ)" \
             --arg recovery_run_id "$RECOVERY_RUN_ID" \
@@ -1803,6 +1862,7 @@ jobs:
 
       - name: Require a complete successful staging attempt
         env:
+          DEPLOYMENT_EVIDENCE_RESULT: ${{ steps.deployment_evidence.outcome }}
           AUTHORIZATION_RESULT: ${{ needs.authorize.result }}
           BACKEND_TEST_RESULT: ${{ needs.authorize.outputs.recovery_backend_result || needs.app.result }}
           BUILD_ARCHIVE_SHA256: ${{ needs.authorize.outputs.recovery_archive_sha256 || needs.build.outputs.archive_sha256 }}
@@ -1850,6 +1910,12 @@ jobs:
           [[ "$SCHEMA_BEFORE" == "$EXPECTED_SCHEMA_BEFORE_INPUT" ]]
           [[ "$SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]
           [[ "$SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER_INPUT" ]]
+          # Keep all final guards; load their JSON from the validated immutable
+          # same-run artifact instead of GitHub's secret-screened job outputs.
+          [[ "$DEPLOYMENT_EVIDENCE_RESULT" == "success" ]] || exit 1
+          OBSERVED_CONFIGURATION=$(jq -ce '.configuration' staging-attempt-deployment/verified.json)
+          WORKLOADS_BEFORE=$(jq -ce '.workloads_before' staging-attempt-deployment/verified.json)
+          WORKLOADS_AFTER=$(jq -ce '.workloads_after' staging-attempt-deployment/verified.json)
           jq -e 'type == "object" and
             .flags.SENTRY_STAGING_ENABLED == "false" and
             .flags.ZOOM_WATCHDOG_ENABLED == "false"' \
