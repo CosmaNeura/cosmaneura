@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -590,6 +591,21 @@ async def execute_capture_operation(
         operation = protocol.OPERATION_ADAPTER.validate_python(operation.model_dump())
     except (ValueError, TypeError, AttributeError):
         raise CaptureReceiptInvalid from None
+    # A transcript/source/status read may continue during the export window;
+    # lease, upload, completion, corrections and note mutations retain processing authority.
+    if isinstance(operation, protocol.ReadOperation) and operation.kind in {
+        "transcription_status",
+        "transcript",
+        "working_transcript",
+        "capture_source",
+        "capture_recovery_state",
+        "capture_profile",
+        "capture_lease_state",
+        "creator_review",
+        "provider_encounter",
+        "encryption_key",
+    }:
+        caller = replace(caller, access_purpose="read")
     if (
         isinstance(operation, protocol.NativeSourceStartSequence)
         and client_request_key == operation.authorize_idempotency_key

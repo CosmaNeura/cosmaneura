@@ -92,7 +92,9 @@ def _provider_owner_discovery_rows(session, subject):
     return owner, member
 
 
-def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
+def _provider(
+    session, *, issuer, subject, session_id, tenant_ref, settings, purpose="process"
+):
     authority._ensure_enabled(settings)
     if issuer != settings.clerk_issuer:
         raise authority.AuthorityRequestDeniedError
@@ -208,6 +210,7 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
             or practice is None
             or not doctor_access_in_force(
                 doctor,
+                purpose=purpose,
                 _ownership=ownership,
                 _practice_id=link.practice_id,
             )
@@ -385,7 +388,10 @@ def _locked_provider(session, *, expected, doctor_id, args):
             or member.practice_id != link.practice_id
             or practice[0] != link.practice_id
             or not doctor_access_in_force(
-                doctor, _ownership=ownership, _practice_id=link.practice_id
+                doctor,
+                purpose=args.get("purpose", "process"),
+                _ownership=ownership,
+                _practice_id=link.practice_id,
             )
         ):
             raise authority.AuthorityRequestDeniedError
@@ -565,6 +571,7 @@ def read_discovery(
                     session_id=session_id,
                     tenant_ref=request.expected_tenant_ref,
                     settings=authority_settings,
+                    purpose="read",
                 )
                 connection, doctor_id = _provider(session, **arguments)
                 if isinstance(request, ConnectedRequest) and (

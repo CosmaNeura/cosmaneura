@@ -387,6 +387,9 @@ def encounter_workflow(
         session_id=session_id,
         tenant_ref=request.expected_tenant_ref,
         settings=authority_settings,
+        purpose="read"
+        if isinstance(request, (CatalogRequest, LookupRequest, PatientsRequest))
+        else "process",
     )
     # Browser routes already own an ActiveModel request scope. Reuse only that
     # exact inherited Session; native/service calls keep their fresh scope.
