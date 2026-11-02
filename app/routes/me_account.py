@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from starlette_context import context
 
+from app.configuration.account_self_delete import ACCOUNT_SELF_DELETE_ENABLED
 from app.configuration.clerk import CLERK_PRIVATE_KEY
 from app.routes.dependencies.clerk import AuthenticateClerkRequest
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
@@ -35,12 +36,28 @@ from sqlmodel import Session
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
 
 
+def require_account_self_delete_enabled() -> None:
+    """Refuse the surface while the latch is OFF.
+
+    Runs before auth and doctor injection so a dark deployment performs no
+    Clerk call, DB write, or audit side effect beyond normal request logging.
+    """
+
+    if not ACCOUNT_SELF_DELETE_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
 def inject_doctor_for_self_delete(request: Request) -> None:
     """Resolve the caller without recreating a fully deleted account.
 
     Unlike the general inject_doctor_record dependency, a completed self-delete
     is admitted so the handler can return already_deleted instead of 410.
     """
+
+    # Defense in depth: never touch the DB while the latch is dark, even if a
+    # dependency solver runs this after a failed gate check.
+    if not ACCOUNT_SELF_DELETE_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     clerk_id = request.state.auth_state.payload["sub"]
     doctor = Doctor.get(clerk_id=clerk_id)
@@ -75,6 +92,7 @@ me_account_api_app = APIRouter(
     tags=["me"],
     generate_unique_id_function=lambda route: route.name,
     dependencies=[
+        Depends(require_account_self_delete_enabled),
         Depends(authenticate_clerk_request_middleware),
         Depends(inject_doctor_for_self_delete),
     ],
@@ -112,6 +130,9 @@ def delete_my_account(
     session: Session = Depends(_session_dependency),
 ) -> DeleteMyAccountResponse:
     """Delete the signed-in user's Cosmaneura identity and personal data."""
+
+    if not ACCOUNT_SELF_DELETE_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     deny_view_as_browser_activity(request)
     doctor: Doctor = request.state.doctor

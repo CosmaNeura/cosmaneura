@@ -3,9 +3,13 @@
 import secrets
 from datetime import UTC, datetime
 
+import pytest
 from clerk_backend_api import User as ClerkUser
+from decouple import config as decouple_config
 from fastapi.testclient import TestClient
 
+import app.configuration.account_self_delete as account_self_delete_configuration
+import app.routes.me_account as me_account_route
 from app.routes.me_account import authenticate_clerk_request_middleware
 from app.server import api_app
 from app.services.doctor_access import doctor_tombstone, resolve_doctor_access
@@ -24,6 +28,16 @@ from tests.routes.utils import (
 
 VIEW_AS_BINDING_HEADER = "X-Cosmaneura-View-As-Binding"
 INACTIVE_VIEW_AS_BINDING = "inactive"
+
+
+@pytest.fixture
+def enable_account_self_delete(monkeypatch):
+    """ON behavior requires the server-side latch."""
+
+    monkeypatch.setattr(
+        account_self_delete_configuration, "ACCOUNT_SELF_DELETE_ENABLED", True
+    )
+    monkeypatch.setattr(me_account_route, "ACCOUNT_SELF_DELETE_ENABLED", True)
 
 
 def _client_for(doctor: Doctor) -> TestClient:
@@ -85,7 +99,90 @@ def _doctor_with_practice(*, role: str = "owner", is_solo: bool = True):
     return doctor, practice, member
 
 
-def test_unauthenticated_self_delete_is_refused():
+def test_account_self_delete_defaults_off_when_unset(monkeypatch):
+    monkeypatch.delenv("ACCOUNT_SELF_DELETE_ENABLED", raising=False)
+    assert (
+        decouple_config("ACCOUNT_SELF_DELETE_ENABLED", default=False, cast=bool)
+        is False
+    )
+    assert account_self_delete_configuration.ACCOUNT_SELF_DELETE_ENABLED is False
+
+
+def test_self_delete_off_returns_404_without_clerk_or_db_side_effects(
+    monkeypatch, global_session
+):
+    del global_session
+    monkeypatch.setattr(
+        account_self_delete_configuration, "ACCOUNT_SELF_DELETE_ENABLED", False
+    )
+    monkeypatch.setattr(me_account_route, "ACCOUNT_SELF_DELETE_ENABLED", False)
+    doctor, practice, member = _doctor_with_practice(is_solo=True)
+    doctor_before = {
+        "deleted_at": doctor.deleted_at,
+        "account_deletion_status": doctor.account_deletion_status,
+        "email": doctor.email,
+        "biography": doctor.biography,
+        "last_active_at": doctor.last_active_at,
+    }
+    practice_before = practice.owner_reassignment_needed_at
+    member_before = member.access_revoked_at
+    audit_before = PracticeAccessAudit.where(
+        PracticeAccessAudit.practice_id == practice.id,
+    ).count()
+    doctor_count_before = Doctor.count()
+    clerk_calls: list[str] = []
+    service_calls: list[object] = []
+
+    def forbid_clerk(clerk_id: str) -> bool:
+        clerk_calls.append(clerk_id)
+        raise AssertionError(
+            "Clerk must not be called while ACCOUNT_SELF_DELETE is OFF"
+        )
+
+    def forbid_service(**kwargs):
+        service_calls.append(kwargs)
+        raise AssertionError("delete_own_account must not run while OFF")
+
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        forbid_clerk,
+    )
+    monkeypatch.setattr(me_account_route, "delete_own_account", forbid_service)
+
+    client = _client_for(doctor)
+    try:
+        response = client.request(
+            "DELETE",
+            "/v1/me/account",
+            json={"confirm": "DELETE"},
+        )
+    finally:
+        api_app.dependency_overrides = {}
+
+    assert response.status_code == 404
+    assert clerk_calls == []
+    assert service_calls == []
+    doctor.refresh()
+    practice.refresh()
+    member.refresh()
+    assert doctor.deleted_at == doctor_before["deleted_at"]
+    assert doctor.account_deletion_status == doctor_before["account_deletion_status"]
+    assert doctor.email == doctor_before["email"]
+    assert doctor.biography == doctor_before["biography"]
+    assert doctor.last_active_at == doctor_before["last_active_at"]
+    assert practice.owner_reassignment_needed_at == practice_before
+    assert member.access_revoked_at == member_before
+    assert (
+        PracticeAccessAudit.where(
+            PracticeAccessAudit.practice_id == practice.id,
+        ).count()
+        == audit_before
+    )
+    assert Doctor.count() == doctor_count_before
+
+
+def test_unauthenticated_self_delete_is_refused(enable_account_self_delete):
+    del enable_account_self_delete
     api_app.dependency_overrides.pop(authenticate_clerk_request_middleware, None)
     with TestClient(api_app, base_url=base_server_url()) as client:
         client.headers[VIEW_AS_BINDING_HEADER] = INACTIVE_VIEW_AS_BINDING
@@ -97,8 +194,10 @@ def test_unauthenticated_self_delete_is_refused():
     assert response.status_code in {401, 403}
 
 
-def test_self_delete_endpoint_deletes_only_caller(monkeypatch, global_session):
-    del global_session
+def test_self_delete_endpoint_deletes_only_caller(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
     doctor, practice, _ = _doctor_with_practice(is_solo=False)
     peer = Doctor(
         clerk_id=f"user_test_selfdel_peer_{secrets.token_hex(5)}",
@@ -155,7 +254,8 @@ def test_self_delete_endpoint_deletes_only_caller(monkeypatch, global_session):
     )
 
 
-def test_self_delete_rejects_foreign_target_field():
+def test_self_delete_rejects_foreign_target_field(enable_account_self_delete):
+    del enable_account_self_delete
     doctor, _, _ = _doctor_with_practice()
     client = _client_for(doctor)
     try:
@@ -169,8 +269,10 @@ def test_self_delete_rejects_foreign_target_field():
     assert response.status_code == 422
 
 
-def test_self_delete_sole_owner_ownerless_via_route(monkeypatch, global_session):
-    del global_session
+def test_self_delete_sole_owner_ownerless_via_route(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
     doctor, practice, _ = _doctor_with_practice(is_solo=True)
     monkeypatch.setattr(
         "app.services.doctor_self_delete._delete_clerk_identity",
@@ -192,8 +294,10 @@ def test_self_delete_sole_owner_ownerless_via_route(monkeypatch, global_session)
     assert Practice.get(id=practice.id) is not None
 
 
-def test_self_delete_route_allows_deletion_pending_retry(monkeypatch, global_session):
-    del global_session
+def test_self_delete_route_allows_deletion_pending_retry(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
     doctor, _, _ = _doctor_with_practice(is_solo=True)
     calls: list[str] = []
 

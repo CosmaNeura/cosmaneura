@@ -37,6 +37,7 @@ PRESERVED_FLAG_SCOPES = {
     "SCRIBE_ENCOUNTER_CREATION_ENABLED": {API},
     "COMPANION_SESSION_PREP_ENABLED": {API},
 }
+ACCOUNT_SELF_DELETE_FLAG = "ACCOUNT_SELF_DELETE_ENABLED"
 REFUSAL = "staging_runtime_configuration_refused\n"
 
 
@@ -418,7 +419,11 @@ def test_contract_inventory_covers_all_workloads_and_sensitive_keys(contracts):
         )
     assert "STRIPE_SECRET_KEY" in by_name[WORKER]["secret_names"]
     assert "STRIPE_SECRET_KEY" not in by_name[SCHEDULER]["secret_names"]
-    for flag in ("SCRIBE_ENCOUNTER_CREATION_ENABLED", "COMPANION_SESSION_PREP_ENABLED"):
+    for flag in (
+        "SCRIBE_ENCOUNTER_CREATION_ENABLED",
+        "COMPANION_SESSION_PREP_ENABLED",
+        ACCOUNT_SELF_DELETE_FLAG,
+    ):
         assert flag in by_name[API]["public_names"]
         assert flag not in by_name[WORKER]["public_names"]
         assert flag not in by_name[SCHEDULER]["public_names"]
