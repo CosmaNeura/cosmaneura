@@ -56,6 +56,10 @@ PRESERVED_WORKFLOW_FLAGS = {
     "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
     "SESSION_PREP_HEALTH_ALERTS_ENABLED",
 }
+PRESERVED_PREPARATION_FLAGS = {
+    "SCRIBE_ENCOUNTER_CREATION_ENABLED",
+    "COMPANION_SESSION_PREP_ENABLED",
+}
 
 
 def require(value: object) -> None:
@@ -109,15 +113,19 @@ def bound_json(filename: str, digest: str):
 def validate_runtime(runtime: dict[str, str]) -> None:
     # Historical Scribe-only plans remain valid. Companion admission is an
     # explicit, complete group, including an empty caller for full withdrawal.
-    # Current workflow preservation is another exact, optional complete group;
-    # no arbitrary environment keys or partial flag defaults are admitted.
+    # Workflow and preparation preservation are independently optional complete
+    # groups. Old plans remain valid; absent groups never synthesize defaults.
     field_groups = (FIELDS, FIELDS | COMPANION_FIELDS)
+    existing_groups = (
+        *field_groups,
+        *(group | PRESERVED_WORKFLOW_FLAGS for group in field_groups),
+    )
     require(
         type(runtime) is dict
         and set(runtime)
         in (
-            *field_groups,
-            *(group | PRESERVED_WORKFLOW_FLAGS for group in field_groups),
+            *existing_groups,
+            *(group | PRESERVED_PREPARATION_FLAGS for group in existing_groups),
         )
     )
     require(all(type(value) is str and len(value) < 2048 for value in runtime.values()))
@@ -125,6 +133,12 @@ def validate_runtime(runtime: dict[str, str]) -> None:
     if PRESERVED_WORKFLOW_FLAGS <= runtime.keys():
         require(
             all(runtime[key] in {"true", "false"} for key in PRESERVED_WORKFLOW_FLAGS)
+        )
+    if PRESERVED_PREPARATION_FLAGS <= runtime.keys():
+        require(
+            all(
+                runtime[key] in {"true", "false"} for key in PRESERVED_PREPARATION_FLAGS
+            )
         )
     if COMPANION_FIELDS <= runtime.keys():
         require(all(runtime[key] in {"true", "false"} for key in COMPANION_FLAGS))
