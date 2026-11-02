@@ -29,6 +29,8 @@ import psycopg
 CONNECT_TIMEOUT_SECONDS = 10
 STATEMENT_TIMEOUT_MILLISECONDS = 30_000
 REPORT_SCHEMA_VERSION = 1
+CANCELLATION_REPORT_SCHEMA_VERSION = 2
+CANCELLATION_MIGRATION = "49126bf99c72"
 EXPECTED_ENVIRONMENT = "production"
 EXPECTED_DATABASE_NAME = "production"
 EXPECTED_SCHEMA = "public"
@@ -76,6 +78,12 @@ NORMALIZATION_SOURCE_CONTRACTS = (
         "40341cfce0b672f9120c908a0c7618f5b9e2d72560e207bb2fb5df564c3befa2",
     ),
     (
+        "app/services/scribe_cancellation_access.py",
+        None,
+        "cancellation_denial",
+        "96d9dab120b3dcc7018dc0fde2aeea31ebe26fb07d31c4000d6536b421dbd4c3",
+    ),
+    (
         "app/configuration/scribe_cancellation.py",
         None,
         "load_cancellation_settings",
@@ -117,6 +125,8 @@ DENIAL_REASONS = (
     "entitlement_not_in_force",
 )
 CLASSIFICATIONS = (*DENIAL_REASONS, "eligible")
+CANCELLATION_DENIAL_REASONS = ("scribe_cancelled_read_only", *DENIAL_REASONS)
+CANCELLATION_CLASSIFICATIONS = (*CANCELLATION_DENIAL_REASONS, "eligible")
 
 INTEGRITY_CHECKS = (
     "alembic_head_not_singular",
@@ -455,6 +465,21 @@ SELECT classification, count(*)::bigint
  ORDER BY classification
 """
 
+# Process authority stays denied after the export window, matching the pinned
+# runtime predicate. The exact Doctor reference never reaches command output.
+# Derivation preserves every original membership, BAA, billing and pilot gate.
+ELIGIBILITY_WITH_CANCELLATION_QUERY: LiteralString = ELIGIBILITY_QUERY.replace(
+    "provider_state AS (\n    SELECT CASE\n",
+    """provider_state AS (
+    SELECT CASE
+        WHEN EXISTS (
+            SELECT 1 FROM scribe_cancellation_operation AS cancelled
+             WHERE cancelled.doctor_ref COLLATE "C" = doctor.id::text COLLATE "C"
+        ) THEN 'scribe_cancelled_read_only'
+""",
+    1,
+)
+
 
 class InventoryFailure(RuntimeError):
     """A private failure whose details must never reach command output."""
@@ -734,16 +759,19 @@ def _parse_integrity(rows: Sequence[tuple[Any, ...]]) -> None:
 
 def _parse_classifications(
     rows: Sequence[tuple[Any, ...]],
+    *,
+    ledger_ready: bool = False,
 ) -> dict[str, int]:
     sparse: dict[str, int] = {}
-    allowed = set(CLASSIFICATIONS)
+    labels = CANCELLATION_CLASSIFICATIONS if ledger_ready else CLASSIFICATIONS
+    allowed = set(labels)
     for row in rows:
         if len(row) != 2 or not isinstance(row[0], str) or row[0] not in allowed:
             raise InventoryFailure("eligibility query returned an invalid shape")
         if row[0] in sparse:
             raise InventoryFailure("eligibility query returned a duplicate label")
         sparse[row[0]] = _count(row[1])
-    return {label: sparse.get(label, 0) for label in CLASSIFICATIONS}
+    return {label: sparse.get(label, 0) for label in labels}
 
 
 def _observed_at_text(observed_at: datetime) -> str:
@@ -762,26 +790,37 @@ def build_report(
     migration_head: str,
     observed_at: datetime,
     rollout_enabled: bool,
+    ledger_ready: bool = False,
 ) -> dict[str, Any]:
     """Build one identifier-free, canonically digested inventory report."""
 
     if not isinstance(rollout_enabled, bool):
         raise InventoryFailure("rollout state is invalid")
+    if type(ledger_ready) is not bool:
+        raise InventoryFailure("cancellation ledger state is invalid")
     if not isinstance(migration_head, str) or not migration_head:
         raise InventoryFailure("migration head is invalid")
-    if set(classification_counts) != set(CLASSIFICATIONS):
+    labels = CANCELLATION_CLASSIFICATIONS if ledger_ready else CLASSIFICATIONS
+    reasons = CANCELLATION_DENIAL_REASONS if ledger_ready else DENIAL_REASONS
+    if set(classification_counts) != set(labels):
         raise InventoryFailure("classification set is invalid")
-    counts = {label: _count(classification_counts[label]) for label in CLASSIFICATIONS}
+    counts = {label: _count(classification_counts[label]) for label in labels}
     payload: dict[str, Any] = {
-        "denial_reason_counts": {reason: counts[reason] for reason in DENIAL_REASONS},
+        "denial_reason_counts": {reason: counts[reason] for reason in reasons},
         "eligible": counts["eligible"],
         "environment": EXPECTED_ENVIRONMENT,
         "migration_head": migration_head,
         "observed_at": _observed_at_text(observed_at),
         "rollout_enabled": rollout_enabled,
-        "schema_version": REPORT_SCHEMA_VERSION,
+        "schema_version": (
+            CANCELLATION_REPORT_SCHEMA_VERSION
+            if ledger_ready
+            else REPORT_SCHEMA_VERSION
+        ),
         "total": sum(counts.values()),
     }
+    if ledger_ready:
+        payload["cancellation_ledger_ready"] = True
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["evidence_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
     return payload
@@ -797,8 +836,13 @@ def collect_inventory(
 ) -> dict[str, Any]:
     """Read aggregate eligibility state; never select or return identifiers."""
 
-    if type(ledger_ready) is not bool or ledger_ready:
-        raise InventoryFailure("cancellation ledger eligibility is not qualified")
+    if type(ledger_ready) is not bool:
+        raise InventoryFailure("cancellation ledger state is invalid")
+    if (
+        ledger_ready
+        and ELIGIBILITY_QUERY.count("provider_state AS (\n    SELECT CASE\n") != 1
+    ):
+        raise InventoryFailure("cancellation query contract is invalid")
     validate_runtime_normalization_contract()
     _parse_integrity(
         connection.execute(INTEGRITY_QUERY, (observed_at, observed_at)).fetchall()
@@ -808,17 +852,21 @@ def collect_inventory(
         _observed_migration_heads(connection.execute(MIGRATION_HEAD_QUERY).fetchall()),
         contract,
     )
+    if ledger_ready and CANCELLATION_MIGRATION not in contract.ancestors:
+        raise InventoryFailure("cancellation ledger migration is incompatible")
     counts = _parse_classifications(
         connection.execute(
-            ELIGIBILITY_QUERY,
+            ELIGIBILITY_WITH_CANCELLATION_QUERY if ledger_ready else ELIGIBILITY_QUERY,
             (observed_at, BAA_CURRENT_REFERENCE),
-        ).fetchall()
+        ).fetchall(),
+        ledger_ready=ledger_ready,
     )
     return build_report(
         counts,
         migration_head=migration_head,
         observed_at=observed_at,
         rollout_enabled=rollout_enabled,
+        ledger_ready=ledger_ready,
     )
 
 

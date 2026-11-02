@@ -4,9 +4,11 @@ import hashlib
 import json
 import secrets
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 
@@ -55,28 +57,41 @@ class _AggregateConnection:
         self.integrity = [(label, count) for label, count in integrity.items()]
         self.classifications = classifications
         self.migration_heads = migration_heads or ["current_head"]
+        self.queries: list[str] = []
 
     def execute(
         self,
         query: str,
         params: tuple[Any, ...] = (),
     ) -> _Rows:
+        self.queries.append(query)
         if query == preflight.INTEGRITY_QUERY:
             assert len(params) == 2 and params[0] == params[1]
             return _Rows(self.integrity)
         if query == preflight.MIGRATION_HEAD_QUERY:
             assert params == ()
             return _Rows([(head,) for head in self.migration_heads])
-        if query == preflight.ELIGIBILITY_QUERY:
+        if query in {
+            preflight.ELIGIBILITY_QUERY,
+            preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY,
+        }:
             assert params[1] == preflight.BAA_CURRENT_REFERENCE
             return _Rows(self.classifications)
         raise AssertionError("unexpected query")
 
 
-def _contract(head: str = "current_head") -> preflight.RepositoryMigrationContract:
+def _contract(
+    head: str = "current_head", *, ledger_ready: bool = False
+) -> preflight.RepositoryMigrationContract:
     return preflight.RepositoryMigrationContract(
         head=head,
-        ancestors=frozenset({head, *preflight.REQUIRED_SESSION_PREP_ANCESTORS}),
+        ancestors=frozenset(
+            {
+                head,
+                *preflight.REQUIRED_SESSION_PREP_ANCESTORS,
+                *({preflight.CANCELLATION_MIGRATION} if ledger_ready else set()),
+            }
+        ),
     )
 
 
@@ -89,7 +104,12 @@ def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None
             observed_at=observed_at,
             rollout_enabled=False,
             ledger_ready=True,
+            migration_contract=_contract(),
         )
+    assert connection.queries == [
+        preflight.INTEGRITY_QUERY,
+        preflight.MIGRATION_HEAD_QUERY,
+    ]
 
     first = preflight.collect_inventory(
         connection,
@@ -141,6 +161,80 @@ def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None
         "appointment_",
     ):
         assert forbidden not in serialized
+
+
+def test_ready_ledger_report_counts_cancellation_without_identifier_projection() -> (
+    None
+):
+    connection = _AggregateConnection(
+        [("eligible", 3), ("scribe_cancelled_read_only", 2), ("baa_not_in_force", 1)]
+    )
+    report = preflight.collect_inventory(
+        connection,
+        observed_at=datetime(2026, 11, 2, tzinfo=UTC),
+        rollout_enabled=False,
+        ledger_ready=True,
+        migration_contract=_contract(ledger_ready=True),
+    )
+    assert report["schema_version"] == 2
+    assert report["cancellation_ledger_ready"] is True
+    assert report["eligible"] == 3
+    assert report["total"] == 6
+    assert report["denial_reason_counts"]["scribe_cancelled_read_only"] == 2
+    assert report["denial_reason_counts"]["baa_not_in_force"] == 1
+    assert set(report["denial_reason_counts"]) == set(
+        preflight.CANCELLATION_DENIAL_REASONS
+    )
+    assert connection.queries[-1] == preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY
+    unsigned = {key: value for key, value in report.items() if key != "evidence_sha256"}
+    assert (
+        report["evidence_sha256"]
+        == hashlib.sha256(
+            json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert "doctor_ref" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("ledger_ready", [1, "true"])
+def test_invalid_ledger_state_refuses_before_queries(ledger_ready: Any) -> None:
+    connection = _AggregateConnection([])
+    with pytest.raises(preflight.InventoryFailure, match="cancellation ledger state"):
+        preflight.collect_inventory(
+            connection,
+            observed_at=datetime(2026, 11, 2, tzinfo=UTC),
+            rollout_enabled=False,
+            ledger_ready=ledger_ready,
+        )
+    assert connection.queries == []
+
+
+def test_changed_query_shape_refuses_ready_ledger_before_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(preflight, "ELIGIBILITY_QUERY", "SELECT 'eligible', 1")
+    connection = _AggregateConnection([])
+    with pytest.raises(preflight.InventoryFailure, match="cancellation query contract"):
+        preflight.collect_inventory(
+            connection,
+            observed_at=datetime(2026, 11, 2, tzinfo=UTC),
+            rollout_enabled=False,
+            ledger_ready=True,
+            migration_contract=_contract(ledger_ready=True),
+        )
+    assert connection.queries == []
+
+
+def test_unready_report_cannot_accept_ready_ledger_classifications() -> None:
+    connection = _AggregateConnection([("scribe_cancelled_read_only", 1)])
+    with pytest.raises(preflight.InventoryFailure, match="eligibility query"):
+        preflight.collect_inventory(
+            connection,
+            observed_at=datetime(2026, 11, 2, tzinfo=UTC),
+            rollout_enabled=False,
+            migration_contract=_contract(),
+        )
+    assert connection.queries[-1] == preflight.ELIGIBILITY_QUERY
 
 
 @pytest.mark.parametrize(
@@ -639,6 +733,111 @@ def test_aggregate_query_matches_the_live_strict_provider_predicate() -> None:
     assert (
         after_report["migration_head"] == preflight.repository_migration_contract().head
     )
+
+
+@pytest.mark.parametrize("ledger_ready", [False, True])
+@pytest.mark.parametrize("export_expired", [False, True])
+def test_aggregate_cancellation_matches_runtime_exact_doctor_and_gate_order(
+    monkeypatch: pytest.MonkeyPatch,
+    ledger_ready: bool,
+    export_expired: bool,
+) -> None:
+    from app.configuration import scribe_cancellation as cancellation_config
+
+    from app.models.scribe_cancellation import scribe_cancellation_operation
+
+    monkeypatch.setattr(
+        cancellation_config,
+        "SCRIBE_CANCELLATION_SETTINGS",
+        replace(
+            cancellation_config.SCRIBE_CANCELLATION_SETTINGS, ledger_ready=ledger_ready
+        ),
+    )
+    observed_at = datetime.now(UTC)
+    with get_session() as baseline:
+        before = _classification_counts(
+            preflight.collect_inventory(
+                cast(
+                    preflight.ReadOnlyConnection,
+                    baseline.connection().connection.driver_connection,
+                ),
+                observed_at=observed_at,
+                rollout_enabled=False,
+                ledger_ready=ledger_ready,
+            )
+        )
+
+    cancelled = _doctor("cancelled")
+    shared_practice = provision_practice_in_force(cancelled)
+    unavailable_cancelled = _doctor("unavailable-cancelled")
+    unavailable_cancelled.deleted_at = observed_at - timedelta(seconds=1)
+    unavailable_cancelled.save()
+    unrelated = _doctor("uncancelled")
+    save_practice_member(
+        PracticeMember(
+            practice_id=shared_practice.id,
+            doctor_id=unrelated.id,
+            role="clinician",
+            attested_at=observed_at,
+            attestation_name="Synthetic colleague",
+        )
+    )
+    providers = (cancelled, unavailable_cancelled, unrelated)
+
+    with get_session() as session:
+        # The ledger is immutable: isolate synthetic receipts in a savepoint,
+        # then roll back the insert instead of issuing a forbidden cleanup DELETE.
+        savepoint = session.begin_nested()
+        try:
+            accepted_at = observed_at - timedelta(days=91 if export_expired else 1)
+            for provider in (cancelled, unavailable_cancelled):
+                session.connection().execute(
+                    scribe_cancellation_operation.insert().values(
+                        id=uuid4(),
+                        caller_sha256=hashlib.sha256(
+                            str(provider.id).encode()
+                        ).hexdigest(),
+                        doctor_ref=str(provider.id),
+                        request_key_sha256="a" * 64,
+                        preview_sha256="b" * 64,
+                        inventory_sha256="c" * 64,
+                        inventory=[],
+                        policy={
+                            "grace_days": 90,
+                            "phi_scope": "core-and-scribe-clinical-records",
+                            "approval_sha256": "d" * 64,
+                        },
+                        accepted_at=accepted_at,
+                        export_until=accepted_at + timedelta(days=90),
+                        phase="read-only",
+                    )
+                )
+            expected: Counter[str] = Counter()
+            for provider in providers:
+                decision = resolve_session_prep_provider_access(
+                    provider, session=session, at=observed_at
+                )
+                classification = (
+                    "eligible" if decision.allowed else decision.denial_reason
+                )
+                assert classification is not None
+                expected[classification] += 1
+            report = preflight.collect_inventory(
+                cast(
+                    preflight.ReadOnlyConnection,
+                    session.connection().connection.driver_connection,
+                ),
+                observed_at=observed_at,
+                rollout_enabled=False,
+                ledger_ready=ledger_ready,
+            )
+            assert _classification_counts(report) - before == expected
+            assert report["total"] - sum(before.values()) == len(providers)
+            assert expected["eligible"] == (1 if ledger_ready else 2)
+            assert expected["scribe_cancelled_read_only"] == (2 if ledger_ready else 0)
+            assert expected["provider_unavailable"] == (0 if ledger_ready else 1)
+        finally:
+            savepoint.rollback()
 
 
 @pytest.mark.parametrize(
