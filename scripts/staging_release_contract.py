@@ -8,11 +8,13 @@ are read here and this module never calls a provider.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import stat
 import sys
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -55,6 +57,10 @@ PRESERVED_WORKFLOW_FLAGS = {
     "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
     "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
     "SESSION_PREP_HEALTH_ALERTS_ENABLED",
+}
+PRESERVED_PREPARATION_FLAGS = {
+    "SCRIBE_ENCOUNTER_CREATION_ENABLED",
+    "COMPANION_SESSION_PREP_ENABLED",
 }
 
 
@@ -109,15 +115,19 @@ def bound_json(filename: str, digest: str):
 def validate_runtime(runtime: dict[str, str]) -> None:
     # Historical Scribe-only plans remain valid. Companion admission is an
     # explicit, complete group, including an empty caller for full withdrawal.
-    # Current workflow preservation is another exact, optional complete group;
-    # no arbitrary environment keys or partial flag defaults are admitted.
+    # Workflow and preparation preservation are independently optional complete
+    # groups. Old plans remain valid; absent groups never synthesize defaults.
     field_groups = (FIELDS, FIELDS | COMPANION_FIELDS)
+    existing_groups = (
+        *field_groups,
+        *(group | PRESERVED_WORKFLOW_FLAGS for group in field_groups),
+    )
     require(
         type(runtime) is dict
         and set(runtime)
         in (
-            *field_groups,
-            *(group | PRESERVED_WORKFLOW_FLAGS for group in field_groups),
+            *existing_groups,
+            *(group | PRESERVED_PREPARATION_FLAGS for group in existing_groups),
         )
     )
     require(all(type(value) is str and len(value) < 2048 for value in runtime.values()))
@@ -125,6 +135,12 @@ def validate_runtime(runtime: dict[str, str]) -> None:
     if PRESERVED_WORKFLOW_FLAGS <= runtime.keys():
         require(
             all(runtime[key] in {"true", "false"} for key in PRESERVED_WORKFLOW_FLAGS)
+        )
+    if PRESERVED_PREPARATION_FLAGS <= runtime.keys():
+        require(
+            all(
+                runtime[key] in {"true", "false"} for key in PRESERVED_PREPARATION_FLAGS
+            )
         )
     if COMPANION_FIELDS <= runtime.keys():
         require(all(runtime[key] in {"true", "false"} for key in COMPANION_FLAGS))
@@ -293,7 +309,358 @@ def verify_recovery(
         require(row["latestReadyRevision"] == expected["revision"])
 
 
+def attempt_context(env: dict[str, str]) -> dict[str, Any]:
+    """Bind evidence to this authorized job, never to downloaded assertions."""
+    request = {
+        "workflow_control_sha": env["WORKFLOW_SHA"],
+        "source_sha": env["CANDIDATE_SHA_INPUT"],
+        "image_digest": env["IMAGE_DIGEST"],
+        "approval_pr_number": int(env["APPROVAL_PR_NUMBER_INPUT"]),
+        "dispatch": {
+            "actor": env["GITHUB_ACTOR"],
+            "triggering_actor": env["GITHUB_TRIGGERING_ACTOR"],
+            "ref": env["GITHUB_REF"],
+            "ref_protected": env["GITHUB_REF_PROTECTED"] == "true",
+        },
+        "synthetic_only_confirmed": env["SYNTHETIC_ONLY_CONFIRMED_INPUT"] == "true",
+        "synthetic_evidence_sha256": env["SYNTHETIC_EVIDENCE_SHA256_INPUT"],
+        "staging_identity_fingerprints_sha256": env[
+            "STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT"
+        ],
+        "staging_effective_configuration_sha256": env[
+            "STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT"
+        ],
+        "staging_runtime_public": json.loads(
+            env["STAGING_RUNTIME_PUBLIC_JSON"], object_pairs_hook=unique
+        ),
+        "expected_schema_before": env["EXPECTED_SCHEMA_BEFORE_INPUT"],
+        "expected_schema_after": env["EXPECTED_SCHEMA_AFTER_INPUT"],
+        "expected_recovery_digest": env["RECOVERY_DIGEST_INPUT"],
+    }
+    context = {
+        "request": request,
+        "repository": env["GITHUB_REPOSITORY"],
+        "repository_id": int(env["GITHUB_REPOSITORY_ID"]),
+        "run_id": int(env["GITHUB_RUN_ID"]),
+        "run_attempt": int(env["GITHUB_RUN_ATTEMPT"]),
+        "validation": {
+            "run_id": int(env["VALIDATION_RUN_ID"]),
+            "run_attempt": int(env["VALIDATION_RUN_ATTEMPT"]),
+            "reused": env["RECOVERY_RUN_ID"] != "",
+        },
+    }
+    validate_attempt_context(context)
+    return context
+
+
+def validate_attempt_context(context: dict[str, Any]) -> None:
+    request = context["request"]
+    require(context["repository"] == "CosmaNeura/cosmaneura")
+    require(context["repository_id"] == 881573489)
+    require(
+        request["dispatch"]
+        == {
+            "actor": "JohnClem",
+            "triggering_actor": "JohnClem",
+            "ref": "refs/heads/master",
+            "ref_protected": True,
+        }
+    )
+    require(request["synthetic_only_confirmed"] is True)
+    require(
+        type(request["approval_pr_number"]) is int and request["approval_pr_number"] > 0
+    )
+    for field in ("workflow_control_sha", "source_sha"):
+        require(re.fullmatch(r"[0-9a-f]{40}", request[field]))
+    for field in (
+        "image_digest",
+        "synthetic_evidence_sha256",
+        "staging_identity_fingerprints_sha256",
+        "staging_effective_configuration_sha256",
+        "expected_recovery_digest",
+    ):
+        require(re.fullmatch(r"sha256:[0-9a-f]{64}", request[field]))
+    for field in ("expected_schema_before", "expected_schema_after"):
+        require(re.fullmatch(r"[0-9a-f]{12}", request[field]))
+    validate_runtime(request["staging_runtime_public"])
+    for value in (
+        context["run_id"],
+        context["run_attempt"],
+        context["validation"]["run_id"],
+        context["validation"]["run_attempt"],
+    ):
+        require(type(value) is int and value > 0)
+    require(type(context["validation"]["reused"]) is bool)
+    if not context["validation"]["reused"]:
+        require(context["validation"]["run_id"] == context["run_id"])
+        require(context["validation"]["run_attempt"] == context["run_attempt"])
+
+
+def validate_attempt_artifact_metadata(
+    metadata: dict[str, Any], context: dict[str, Any]
+) -> None:
+    validate_attempt_context(context)
+    request = context["request"]
+    require(type(metadata["id"]) is int and metadata["id"] > 0)
+    require(
+        type(metadata["size_in_bytes"]) is int
+        and 0 < metadata["size_in_bytes"] <= 1048576
+    )
+    require(metadata["expired"] is False)
+    require(re.fullmatch(r"sha256:[0-9a-f]{64}", metadata["digest"]))
+    require(
+        metadata["name"]
+        == f"canonical-staging-release-{request['source_sha']}-{context['run_id']}-{context['run_attempt']}"
+    )
+    workflow = metadata["workflow_run"]
+    require(
+        all(
+            type(workflow[key]) is int
+            for key in ("id", "repository_id", "head_repository_id")
+        )
+    )
+    require(workflow["id"] == context["run_id"])
+    require(workflow["repository_id"] == context["repository_id"])
+    require(workflow["head_repository_id"] == context["repository_id"])
+    require(workflow["head_branch"] == "master")
+    require(workflow["head_sha"] == request["workflow_control_sha"])
+
+
+def select_attempt_artifact(
+    listing: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    """Require a complete authenticated same-run list and one exact producer name.
+
+    The producer uses overwrite:false and the consumer requires deploy success;
+    a competing artifact with this name makes that mandatory producer fail.
+    No artifact ID or digest needs to traverse GitHub's screened job outputs.
+    """
+    validate_attempt_context(context)
+    rows = cast(list[dict[str, Any]], listing["artifacts"])
+    require(type(rows) is list and type(listing["total_count"]) is int)
+    require(len(rows) == listing["total_count"] and len(rows) <= 100)
+    require(len({row["id"] for row in rows}) == len(rows))
+    name = f"canonical-staging-release-{context['request']['source_sha']}-{context['run_id']}-{context['run_attempt']}"
+    matches = [row for row in rows if row["name"] == name]
+    require(len(matches) == 1)
+    validate_attempt_artifact_metadata(matches[0], context)
+    return matches[0]
+
+
+def bounded_attempt_file(filename: str, limit: int) -> bytes:
+    path = Path(filename).absolute()
+    require(path.resolve() == path)
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1)
+        require(0 < before.st_size <= limit)
+        raw = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+        fields = (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_nlink",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        require(
+            all(
+                getattr(before, key) == getattr(after, key) == getattr(path.stat(), key)
+                for key in fields
+            )
+        )
+    require(len(raw) == before.st_size)
+    return raw
+
+
+def validate_attempt_bundle(
+    metadata: dict[str, Any], archive: bytes, context: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate immutable same-run deployment evidence without extracting a ZIP."""
+    validate_attempt_artifact_metadata(metadata, context)
+    require(len(archive) == metadata["size_in_bytes"])
+    require("sha256:" + hashlib.sha256(archive).hexdigest() == metadata["digest"])
+    names = {
+        "request.json",
+        "release.json",
+        "azure-identity.json",
+        "workflow-result.json",
+        "SHA256SUMS",
+    }
+    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+        entries = bundle.infolist()
+        require(
+            len(entries) == len(names) and {row.filename for row in entries} == names
+        )
+        require(sum(row.file_size for row in entries) <= 524288)
+        require(
+            all(
+                0 < row.file_size <= 131072
+                and not row.is_dir()
+                and not stat.S_ISLNK(row.external_attr >> 16)
+                and not row.flag_bits & 1
+                for row in entries
+            )
+        )
+        files = {row.filename: bundle.read(row) for row in entries}
+    checksums = files["SHA256SUMS"].decode("ascii").splitlines()
+    require(len(checksums) == 4)
+    expected = {
+        f"{hashlib.sha256(files[name]).hexdigest()}  {name}"
+        for name in names - {"SHA256SUMS"}
+    }
+    require(set(checksums) == expected)
+    docs = {
+        name: json.loads(raw, object_pairs_hook=unique)
+        for name, raw in files.items()
+        if name.endswith(".json")
+    }
+    request, release, result = (
+        docs["request.json"],
+        docs["release.json"],
+        docs["workflow-result.json"],
+    )
+    require(
+        json.dumps(request, sort_keys=True)
+        == json.dumps(context["request"], sort_keys=True)
+    )
+    github = {key: context[key] for key in ("repository", "run_id", "run_attempt")}
+    github.update(request["dispatch"])
+    require(
+        json.dumps(release["github"], sort_keys=True)
+        == json.dumps(github, sort_keys=True)
+    )
+    require(result["job_status"] == "success")
+    require(type(result["run_id"]) is int and type(result["run_attempt"]) is int)
+    require(result["workflow_control_sha"] == request["workflow_control_sha"])
+    require(
+        result["run_id"] == context["run_id"]
+        and result["run_attempt"] == context["run_attempt"]
+    )
+    for field in (
+        "workflow_control_sha",
+        "source_sha",
+        "approval_pr_number",
+        "synthetic_only_confirmed",
+        "synthetic_evidence_sha256",
+    ):
+        require(release[field] == request[field])
+    require(
+        type(release["approval_pr_number"]) is int
+        and release["synthetic_only_confirmed"] is True
+    )
+    require(release["observed_source_sha"] == request["source_sha"])
+    require(
+        json.dumps(release["candidate_validation"], sort_keys=True)
+        == json.dumps(context["validation"], sort_keys=True)
+    )
+    require(
+        release["candidate_tests"]
+        == dict.fromkeys(
+            (
+                "backend",
+                "frontend",
+                "public_configuration",
+                "credentialless_image_build",
+            ),
+            "success",
+        )
+    )
+    require(
+        release["provenance_checks"]
+        == dict.fromkeys(
+            (
+                "authorization",
+                "pre_credentials",
+                "publication",
+                "azure_identity",
+                "pre_migration_and_azure_mutation",
+            ),
+            "success",
+        )
+    )
+    require(
+        release["image"]
+        == {
+            "digest": request["image_digest"],
+            "reference": IMAGE + "@" + request["image_digest"],
+        }
+    )
+    require(
+        release["schema"]
+        == {
+            "before": request["expected_schema_before"],
+            "after": request["expected_schema_after"],
+        }
+    )
+    require(release["recovery_digest"] == request["expected_recovery_digest"])
+    require(
+        release["deployment_outcome"] == "success"
+        and release["release_contract_result"] == "passed"
+    )
+    require(release["smoke"]["healthcheck"] == {"http_status": 200, "result": "passed"})
+    require(release["staging_identity"] == docs["azure-identity.json"])
+    for key, field in (
+        ("staging_identity_fingerprints", "staging_identity_fingerprints_sha256"),
+        ("staging_effective_configuration", "staging_effective_configuration_sha256"),
+    ):
+        require(
+            release[key]
+            == {"expected_sha256": request[field], "observed_sha256": request[field]}
+        )
+    configuration = release["observed_configuration"]
+    require(configuration["deployment_blockers"] == [])
+    require(configuration["effective_configuration_preserved"] is True)
+    require(
+        configuration["effective_configuration_sha256"]
+        == request["staging_effective_configuration_sha256"]
+    )
+    require(
+        configuration["identity_fingerprint_set_sha256"]
+        == request["staging_identity_fingerprints_sha256"]
+    )
+    require(
+        configuration["expected_identity_fingerprint_set_sha256"]
+        == request["staging_identity_fingerprints_sha256"]
+    )
+    require(configuration["flags"]["SENTRY_STAGING_ENABLED"] == "false")
+    require(configuration["flags"]["ZOOM_WATCHDOG_ENABLED"] == "false")
+    before = cast(list[dict[str, Any]], release["workloads"]["before"])
+    after = cast(list[dict[str, Any]], release["workloads"]["after"])
+    for rows in (before, after):
+        require(type(rows) is list and len(rows) == 3)
+        require({row["name"] for row in rows} == APPS)
+    for row in after:
+        require(row["readyRevisionImage"] == IMAGE + "@" + request["image_digest"])
+        require(row["publicConfig"]["SENTRY_STAGING_ENABLED"] == "false")
+        require(row["publicConfig"]["ZOOM_WATCHDOG_ENABLED"] == "false")
+    return {
+        "configuration": configuration,
+        "workloads_before": before,
+        "workloads_after": after,
+        "artifact_id": metadata["id"],
+        "artifact_digest": metadata["digest"],
+    }
+
+
 def main(argv):
+    if argv and argv[0] in {"--complete-attempt-select", "--complete-attempt-validate"}:
+        require(len(argv) == (3 if argv[0] == "--complete-attempt-select" else 4))
+        context = attempt_context(dict(os.environ))
+        document = json.loads(
+            bounded_attempt_file(argv[1], 1048576), object_pairs_hook=unique
+        )
+        if argv[0] == "--complete-attempt-select":
+            output = select_attempt_artifact(document, context)
+        else:
+            output = validate_attempt_bundle(
+                document, bounded_attempt_file(argv[2], 1048576), context
+            )
+        with open(argv[-1], "x", encoding="utf-8") as stream:
+            json.dump(output, stream, sort_keys=True, separators=(",", ":"))
+        return
     if argv == ["--validate-runtime-public"]:
         raw = sys.stdin.buffer.read(65537)
         require(0 < len(raw) <= 65536)
@@ -331,5 +698,5 @@ def main(argv):
 if __name__ == "__main__":
     try:
         main(sys.argv[1:])
-    except (ValueError, KeyError, TypeError, OSError):
+    except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile):
         raise SystemExit("staging_release_contract_refused") from None
