@@ -47,7 +47,7 @@ on:
         required: true
       publication_recovery_json:
         type: string
-        description: "Optional exact recovery selector for published run41090712649 attempt1; no rebuild or tag overwrite"
+        description: "Optional exact allowlisted publication recovery selector; no rebuild or tag overwrite"
         required: false
         default: ""
       recovery_digest:
@@ -179,7 +179,7 @@ jobs:
             echo "recovery_digest=$RECOVERY_DIGEST"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Verify original failed publication and retained validation custody
+      - name: Verify original publication and retained validation custody
         id: publication_recovery
         if: ${{ inputs.publication_recovery_json != '' }}
         env:
