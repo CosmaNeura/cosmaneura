@@ -464,7 +464,8 @@ jobs:
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
             scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
-            scripts/production_core_candidate.py scripts/superadmin_capability_config_preflight.py; then
+            scripts/production_core_candidate.py scripts/production_core_runtime_binding.py \
+            scripts/superadmin_capability_config_preflight.py; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
           fi
@@ -681,6 +682,30 @@ jobs:
           RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
         run: |
           cd infra && bash deploy.sh "$GITHUB_SHA" "$CORE_PRODUCTION_IMAGE_REF"
+      - name: Record the actual Core/frontend runtime binding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PRODUCER_ATTEMPT: ${{ inputs.producer_run_attempt }}
+          ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/core-production-runtime-binding"
+          python3 scripts/production_core_runtime_binding.py record \
+            --run-id "$PRODUCER_RUN_ID" --run-attempt "$PRODUCER_ATTEMPT" \
+            --artifact-id "$ARTIFACT_ID" \
+            --configuration "$RUNNER_TEMP/production-frontend-build.json" \
+            --output "$RUNNER_TEMP/core-production-runtime-binding/runtime-binding.json"
+      - name: Retain the authenticated Core runtime binding
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-core-runtime-binding-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}/core-production-runtime-binding/runtime-binding.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: false
       - name: Remove resolved production frontend configuration
         if: always()
         run: rm -f -- "$RUNNER_TEMP/production-frontend-build.json"
