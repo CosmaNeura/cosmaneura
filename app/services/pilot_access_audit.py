@@ -31,6 +31,7 @@ from app.services.pilot_access_grandfather import (
     pilot_access_grant_plan_sha256,
     required_pilot_access_grandfather_account_count,
 )
+from app.services.pilot_practice_snapshot_binding import binding_evidence_valid
 
 from activemodel.session_manager import get_session
 from app.models.authority import AuthorityAuditEvent
@@ -39,6 +40,7 @@ from app.models.pilot_access_continuity_amendment import (
     PilotAccessContinuityAmendmentIdentity,
 )
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+from app.models.pilot_access_practice_binding import PilotAccessPracticeBinding
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
 from sqlmodel import Session, select
 
@@ -100,6 +102,15 @@ def _audit_with_session(
             select(AuthorityAuditEvent).where(
                 AuthorityAuditEvent.event_type == IDENTITY_REBIND_EVENT_TYPE,
                 AuthorityAuditEvent.resource_type == IDENTITY_REBIND_RESOURCE_TYPE,
+            )
+        ).all()
+    )
+    practice_bindings = list(session.exec(select(PilotAccessPracticeBinding)).all())
+    binding_receipts = list(
+        session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.action
+                == PracticeAccessAction.pilot_practice_snapshot_bound.value
             )
         ).all()
     )
@@ -235,6 +246,54 @@ def _audit_with_session(
             continue
         if str(predecessor.id) not in successor_for_predecessor:
             rebind_error_count += 1
+
+    identity_rebind_count = len(predecessor_for_successor)
+    binding_error_count = 0
+    if practice_bindings and (
+        expected_environment not in {"staging", "production"}
+        or not expected_clerk_issuer
+        or not expected_clerk_issuer.startswith("https://")
+        or expected_clerk_issuer != expected_clerk_issuer.strip()
+        or expected_clerk_issuer.endswith("/")
+    ):
+        binding_error_count += 1
+    binding_receipt_by_id = {str(row.id): row for row in binding_receipts}
+    used_binding_receipts: set[str] = set()
+    used_binding_plans: set[str] = set()
+    amendment_grant_ids = {str(row.grant_id) for row in amendment_entries}
+    for binding in practice_bindings:
+        predecessor = grant_by_id.get(str(binding.predecessor_grant_id))
+        successor = grant_by_id.get(str(binding.successor_grant_id))
+        receipt = binding_receipt_by_id.get(str(binding.receipt_id))
+        if (
+            predecessor is None
+            or successor is None
+            or receipt is None
+            or str(binding.receipt_id) in used_binding_receipts
+            or binding.plan_sha256 in used_binding_plans
+            or str(predecessor.id) in successor_for_predecessor
+            or str(successor.id) in predecessor_for_successor
+            or str(predecessor.id) in amendment_grant_ids
+            or str(successor.id) in amendment_grant_ids
+            or binding.plan_sha256 in identity_receipts_by_digest
+            or not binding_evidence_valid(
+                binding,
+                predecessor,
+                successor,
+                receipt,
+                environment=expected_environment,
+                issuer_sha256=_digest(expected_clerk_issuer)
+                if expected_clerk_issuer
+                else None,
+            )
+        ):
+            binding_error_count += 1
+            continue
+        used_binding_receipts.add(str(receipt.id))
+        used_binding_plans.add(binding.plan_sha256)
+        predecessor_for_successor[str(successor.id)] = predecessor
+        successor_for_predecessor[str(predecessor.id)] = successor
+    binding_error_count += len(binding_receipts) - len(used_binding_receipts)
 
     entries_by_amendment: dict[str, list[PilotAccessContinuityAmendmentIdentity]] = {}
     referenced_amendment_grants: set[str] = set()
@@ -434,6 +493,7 @@ def _audit_with_session(
         integrity_error_count
         + amendment_error_count
         + rebind_error_count
+        + binding_error_count
         + lineage_error_count
     )
     cohort_integrity_valid = bool(base_valid and total_integrity_errors == 0)
@@ -467,7 +527,8 @@ def _audit_with_session(
         "prelogin_snapshot_count": sum(
             grant.doctor_id_snapshot is None for grant in grants
         ),
-        "rebind_count": len(predecessor_for_successor),
+        "rebind_count": identity_rebind_count,
+        "practice_binding_count": len(used_binding_plans),
         "revocation_plan_digests": _count_digests(
             [
                 grant.revocation_plan_sha256
