@@ -17,6 +17,7 @@ import pytest
 
 import sqlalchemy as sa
 from sqlalchemy.schema import CreateTable
+from sqlmodel import SQLModel
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCEPTED = datetime(2026, 11, 2, tzinfo=UTC)
@@ -122,14 +123,23 @@ def f(tmp_path, monkeypatch):
     service = load(
         monkeypatch, "app.services.scribe_retention", "app/services/scribe_retention.py"
     )
-    operations_source = load(
-        monkeypatch,
-        "app.models.scribe_cancellation",
-        "app/models/scribe_cancellation.py",
-    )
-    events_source = load(
-        monkeypatch, "app.models.scribe_retention", "app/models/scribe_retention.py"
-    )
+    # CI has already loaded the real application's table metadata. Compile
+    # these actual model sources on private metadata, then immediately restore
+    # the original registry without redefining or removing application tables.
+    original_metadata = SQLModel.metadata
+    original_tables = dict(original_metadata.tables)
+    with monkeypatch.context() as table_scope:
+        table_scope.setattr(SQLModel, "metadata", sa.MetaData())
+        operations_source = load(
+            monkeypatch,
+            "app.models.scribe_cancellation",
+            "app/models/scribe_cancellation.py",
+        )
+        events_source = load(
+            monkeypatch, "app.models.scribe_retention", "app/models/scribe_retention.py"
+        )
+    assert SQLModel.metadata is original_metadata
+    assert dict(original_metadata.tables) == original_tables
     metadata = sa.MetaData()
     operations = operations_source.scribe_cancellation_operation.to_metadata(metadata)
     events = events_source.scribe_retention_event.to_metadata(metadata)
@@ -144,13 +154,6 @@ def f(tmp_path, monkeypatch):
                 "ck_scribe_retention_payload",
             }:
                 constraint.ddl_if(dialect="postgresql")
-    # Remove only this test's registered model tables from shared SQLModel metadata.
-    events_source.scribe_retention_event.metadata.remove(
-        events_source.scribe_retention_event
-    )
-    operations_source.scribe_cancellation_operation.metadata.remove(
-        operations_source.scribe_cancellation_operation
-    )
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'synthetic-retention.db'}")
     with engine.begin() as connection:
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
