@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "edf8497ddab3ae1aeba4fc4921b285413d46d7be",
+      "7226298f31a81a9b77cd4048cce6b15d6a2d270c",
     )
     const legacyBytes = await readFile(
       resolve(
