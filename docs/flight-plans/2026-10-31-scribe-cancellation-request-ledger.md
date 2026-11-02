@@ -84,3 +84,7 @@ Its version-2 report adds the cancellation denial and explicit ledger state;
 consumers must accept that version before using it as activation evidence.
 PostgreSQL query/runtime parity uses synthetic receipts inside rolled-back
 savepoints; it neither deletes immutable receipts nor changes live records.
+The aggregate query reconstructs the canonical `doctor_` TypeID from the native
+UUID column inside PostgreSQL. It compares that exact reference to the immutable
+ledger, retaining the runtime's exact-Doctor scope and cancellation-first order;
+neither the UUID nor the reference is projected into the aggregate report.

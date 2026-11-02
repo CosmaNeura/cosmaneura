@@ -468,13 +468,27 @@ SELECT classification, count(*)::bigint
 # Process authority stays denied after the export window, matching the pinned
 # runtime predicate. The exact Doctor reference never reaches command output.
 # Derivation preserves every original membership, BAA, billing and pilot gate.
+# TypeIDType stores only a UUID; the ledger stores str(doctor.id), including its
+# doctor_ prefix and Crockford base32 suffix. Reconstruct that exact reference
+# inside SQL rather than selecting identifiers or comparing unlike formats.
 ELIGIBILITY_WITH_CANCELLATION_QUERY: LiteralString = ELIGIBILITY_QUERY.replace(
     "provider_state AS (\n    SELECT CASE\n",
     """provider_state AS (
     SELECT CASE
         WHEN EXISTS (
             SELECT 1 FROM scribe_cancellation_operation AS cancelled
-             WHERE cancelled.doctor_ref COLLATE "C" = doctor.id::text COLLATE "C"
+             WHERE cancelled.doctor_ref COLLATE "C" = (
+                 'doctor_' || (
+                     SELECT string_agg(
+                         substr('0123456789abcdefghjkmnpqrstvwxyz',
+                             substring(B'00' ||
+                                 ('x' || replace(doctor.id::text, '-', ''))::bit(128)
+                                 FROM digit * 5 + 1 FOR 5)::integer + 1, 1),
+                         '' ORDER BY digit
+                     )
+                     FROM generate_series(0, 25) AS encoded(digit)
+                 )
+             ) COLLATE "C"
         ) THEN 'scribe_cancelled_read_only'
 """,
     1,
