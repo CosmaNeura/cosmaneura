@@ -4,10 +4,20 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from alembic import command
+from alembic.config import Config
+
+from activemodel.session_manager import get_engine
+from sqlalchemy import text
+
 MIGRATION_PATH = (
     Path(__file__).parents[1]
     / "migrations/versions/2026_11_02_c764298c7590_add_self_delete_account_fields.py"
 )
+
+SELF_DELETE_REVISION = "c764298c7590"
+PARENT_REVISION = "312b217ebba4"
 
 
 def _migration_module():
@@ -19,6 +29,42 @@ def _migration_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _column_names(table: str) -> set[str]:
+    with get_engine().connect() as connection:
+        return set(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = :table"
+                ),
+                {"table": table},
+            )
+            .scalars()
+            .all()
+        )
+
+
+def _doctor_check_names() -> set[str]:
+    with get_engine().connect() as connection:
+        return set(
+            connection.execute(
+                text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = 'doctor'::regclass AND contype = 'c'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+def _alembic_version() -> str:
+    with get_engine().connect() as connection:
+        return connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
 
 
 def test_self_delete_migration_upgrade_adds_columns_and_check():
@@ -43,10 +89,7 @@ def test_self_delete_migration_upgrade_adds_columns_and_check():
 
     migration.upgrade()
 
-    assert ("doctor", "account_deletion_status", "VARCHAR(32)") in [
-        (table, name, col_type.split("(")[0] + ("(32)" if "32" in col_type else ""))
-        for table, name, col_type in added
-    ] or any(
+    assert any(
         table == "doctor" and name == "account_deletion_status"
         for table, name, _ in added
     )
@@ -91,5 +134,42 @@ def test_self_delete_migration_downgrade_drops_additive_columns():
 
 def test_self_delete_migration_revises_current_head():
     migration = _migration_module()
-    assert migration.revision == "c764298c7590"
-    assert migration.down_revision == "312b217ebba4"
+    assert migration.revision == SELF_DELETE_REVISION
+    assert migration.down_revision == PARENT_REVISION
+
+
+def _has_account_deletion_status_check() -> bool:
+    # SQLModel's Postgres naming convention expands the migration's short
+    # constraint id into this durable database name.
+    return "doctor_ck_doctor_account_deletion_status_check" in _doctor_check_names()
+
+
+@pytest.mark.committed_database
+def test_self_delete_migration_owner_reassignment_column_survives_roundtrip():
+    """Live alembic downgrade/upgrade must drop and restore the practice flag."""
+
+    from sqlalchemy.orm import close_all_sessions
+
+    config = Config("alembic.ini")
+    assert _alembic_version() == SELF_DELETE_REVISION
+    assert "owner_reassignment_needed_at" in _column_names("practice")
+    assert "account_deletion_status" in _column_names("doctor")
+    assert _has_account_deletion_status_check()
+
+    try:
+        close_all_sessions()
+        get_engine().dispose()
+        command.downgrade(config, PARENT_REVISION)
+        assert _alembic_version() == PARENT_REVISION
+        assert "owner_reassignment_needed_at" not in _column_names("practice")
+        assert "account_deletion_status" not in _column_names("doctor")
+        assert not _has_account_deletion_status_check()
+    finally:
+        close_all_sessions()
+        get_engine().dispose()
+        command.upgrade(config, SELF_DELETE_REVISION)
+
+    assert _alembic_version() == SELF_DELETE_REVISION
+    assert "owner_reassignment_needed_at" in _column_names("practice")
+    assert "account_deletion_status" in _column_names("doctor")
+    assert _has_account_deletion_status_check()
