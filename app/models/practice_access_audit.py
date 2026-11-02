@@ -30,6 +30,7 @@ class PracticeAccessAction(str, Enum):
     organization_access_granted = "organization_access_granted"
     organization_access_revoked = "organization_access_revoked"
     doctor_identity_rebound = "doctor_identity_rebound"
+    pilot_practice_snapshot_bound = "pilot_practice_snapshot_bound"
     doctor_account_closed = "doctor_account_closed"
     practice_member_access_revoked = "practice_member_access_revoked"
     practice_member_access_restored = "practice_member_access_restored"
