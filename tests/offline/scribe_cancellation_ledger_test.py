@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import sqlalchemy as sa
+from sqlmodel import SQLModel
 
 ROOT = Path(__file__).resolve().parents[2]
 ISSUER = "https://synthetic.clerk.invalid"
@@ -68,17 +69,14 @@ def fixture(tmp_path, monkeypatch, request):
         "app.services.scribe_cancellation_contract",
         "app/services/scribe_cancellation_contract.py",
     )
-    # Actual table source; remove only our test-added SQLModel metadata on teardown.
-    model = source(
-        monkeypatch,
-        "app.models.scribe_cancellation",
-        "app/models/scribe_cancellation.py",
-    )
-    request.addfinalizer(
-        lambda: model.scribe_cancellation_operation.metadata.remove(
-            model.scribe_cancellation_operation
+    # Actual table source on private metadata: never alter a preloaded app table.
+    with monkeypatch.context() as table_scope:
+        table_scope.setattr(SQLModel, "metadata", sa.MetaData())
+        model = source(
+            monkeypatch,
+            "app.models.scribe_cancellation",
+            "app/models/scribe_cancellation.py",
         )
-    )
     service = source(
         monkeypatch,
         "app.services.scribe_cancellation",

@@ -83,6 +83,13 @@ def _contract(head: str = "current_head") -> preflight.RepositoryMigrationContra
 def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None:
     observed_at = datetime(2026, 10, 28, 18, 30, tzinfo=UTC)
     connection = _AggregateConnection([("eligible", 3), ("baa_not_in_force", 2)])
+    with pytest.raises(preflight.InventoryFailure, match="cancellation ledger"):
+        preflight.collect_inventory(
+            connection,
+            observed_at=observed_at,
+            rollout_enabled=False,
+            ledger_ready=True,
+        )
 
     first = preflight.collect_inventory(
         connection,

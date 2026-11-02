@@ -42,6 +42,7 @@ from app.services.doctor_access_row_ownership import (
     lookup_uses_provider_session,
     provider_doctor_access_rows,
 )
+from app.services.scribe_cancellation_access import AccessPurpose
 from app.services.view_as import ViewAsActorIdentity, actor_bound_unended_view_as_exists
 
 from activemodel.session_manager import global_session
@@ -93,7 +94,14 @@ def _provider_owner_discovery_rows(session, subject):
 
 
 def _provider(
-    session, *, issuer, subject, session_id, tenant_ref, settings, purpose="process"
+    session,
+    *,
+    issuer,
+    subject,
+    session_id,
+    tenant_ref,
+    settings,
+    purpose: AccessPurpose = "process",
 ):
     authority._ensure_enabled(settings)
     if issuer != settings.clerk_issuer:
@@ -571,9 +579,8 @@ def read_discovery(
                     session_id=session_id,
                     tenant_ref=request.expected_tenant_ref,
                     settings=authority_settings,
-                    purpose="read",
                 )
-                connection, doctor_id = _provider(session, **arguments)
+                connection, doctor_id = _provider(session, purpose="read", **arguments)
                 if isinstance(request, ConnectedRequest) and (
                     request.expected_actor_ref != connection.actor_ref
                     or request.connection_sha256 != connection.connection_sha256
@@ -591,7 +598,10 @@ def read_discovery(
                 if session.new or session.dirty or session.deleted:
                     raise RecordUnavailable
                 session.expire_all()
-                if _provider(session, **arguments) != (connection, doctor_id):
+                if _provider(session, purpose="read", **arguments) != (
+                    connection,
+                    doctor_id,
+                ):
                     raise authority.AuthorityRequestDeniedError
                 if session.new or session.dirty or session.deleted:
                     raise RecordUnavailable
