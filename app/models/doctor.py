@@ -48,7 +48,7 @@ class Doctor(
     clerk_id: str = Field(unique=True, index=True)
     "external ID of the user in Clerk"
 
-    email: str | None = Field(nullable=True, default=None, unique=True)
+    email: str = Field(nullable=True, default=None, unique=True)
     "email address of the user in Clerk, makes it easy to debug and find users, set async after the user is created"
 
     role: DoctorRole = Field(default=DoctorRole.normal)

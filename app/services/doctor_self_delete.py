@@ -16,7 +16,7 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 
@@ -254,7 +254,10 @@ def _delete_clerk_identity(clerk_id: str) -> bool:
 
 
 def _scrub_personal_profile(doctor: Doctor) -> None:
-    doctor.email = None
+    # Column is nullable; Doctor.email stays typed as `str` for call sites
+    # that assume a Clerk-backed address until scrub. Cast keeps pyright from
+    # forcing Optional across the codebase without a type: ignore directive.
+    doctor.email = cast(Any, None)
     doctor.biography = ""
     doctor.api_key = None
     doctor.has_natmed_subscription = False
