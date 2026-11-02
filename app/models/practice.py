@@ -255,7 +255,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Set when self-delete leaves this practice without an owner; support reassigns."
+    "Set when self-delete leaves the practice without an owner"
 
     def negotiated_baa_in_force(self, *, at: datetime | None = None) -> bool:
         """Whether the negotiated instrument itself is effective now."""
