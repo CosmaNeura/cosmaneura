@@ -31,6 +31,9 @@ class DoctorFactory(ActiveModelFactory[Doctor]):
     # polyfactory fills enums with a random member; terminology must default
     # to doctor/patient or "default wording" assertions become flaky
     terminology = Terminology.doctor_patient
+    # polyfactory otherwise invents random strings that violate the self-delete
+    # check constraint (NULL | deletion_pending | deleted)
+    account_deletion_status = None
 
     # TODO cleanup these prefixes
     # TODO can polyfactory handle this for us?
@@ -41,6 +44,12 @@ class DoctorFactory(ActiveModelFactory[Doctor]):
     @classmethod
     def clerk_id(cls) -> str:
         return str(TypeID(CLERK_OBJECT_PREFIX[0:-1]))
+
+    @classmethod
+    def email(cls) -> str:
+        # Stable unique address so nullable email never lands as NULL and
+        # reference-toolkit cohort checks in test stay ungated.
+        return f"doctor-{TypeID('email')}@example.com"
 
 
 class PatientFactory(ActiveModelFactory[Patient]):

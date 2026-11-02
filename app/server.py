@@ -49,6 +49,7 @@ from .routes.companion_session_prep import PATH as COMPANION_SESSION_PREP_PATH
 from .routes.companion_session_prep import router as companion_session_prep_router
 from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
+from .routes.me_account import me_account_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
 from .routes.scribe_capture_deadline import install_capture_boundaries
@@ -95,6 +96,8 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+# Apple 5.1.1(v) self-delete for Scribe. Not deployed until John says yes.
+api_app.include_router(me_account_api_app)
 api_app.include_router(cab_authorization_router, include_in_schema=False)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)

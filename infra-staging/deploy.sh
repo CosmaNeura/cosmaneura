@@ -577,6 +577,8 @@ SCRIBE_API_ONLY_PUBLIC_VARS=(
 	SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED SCRIBE_NATIVE_REQUEST_TIMING
 	SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED
 )
+# API-only: DELETE /v1/me/account latch. Staging sets true via .env.staging.backend.
+ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)
 API_WORKER_PUBLIC_VARS=(ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED)
 WORKER_ONLY_PUBLIC_VARS=(SESSION_PREP_HEALTH_ALERTS_ENABLED)
 BILLING_SECRET_VARS=(STRIPE_SECRET_KEY)
@@ -647,6 +649,7 @@ configure_workload_contract() {
 		container_secret_vars+=("${CAB_API_ONLY_SECRET_VARS[@]}")
 		container_public_vars+=("${CAB_API_ONLY_PUBLIC_VARS[@]}")
 		container_public_vars+=("${SCRIBE_API_ONLY_PUBLIC_VARS[@]}")
+		container_public_vars+=("${ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS[@]}")
 	fi
 	if [[ "$container_name" == "$API_CONTAINER" || "$container_name" == "$WORKER_CONTAINER" ]]; then
 		container_public_vars+=("${API_WORKER_PUBLIC_VARS[@]}")
