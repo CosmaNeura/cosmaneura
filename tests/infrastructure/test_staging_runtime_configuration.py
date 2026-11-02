@@ -34,6 +34,8 @@ PRESERVED_FLAG_SCOPES = {
     "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED": {API},
     "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED": {API, WORKER},
     "SESSION_PREP_HEALTH_ALERTS_ENABLED": {WORKER},
+    "SCRIBE_ENCOUNTER_CREATION_ENABLED": {API},
+    "COMPANION_SESSION_PREP_ENABLED": {API},
 }
 REFUSAL = "staging_runtime_configuration_refused\n"
 
@@ -456,6 +458,66 @@ def test_preserved_flag_drift_changes_fingerprint_and_refuses_live_state(
         assert result.returncode != 0
         assert result.stderr == REFUSAL
         _no_secret_output(result, configuration)
+
+
+def test_explicit_preparation_group_overlay_restores_full_fingerprint_without_defaults(
+    configuration, contracts
+):
+    keys = ("SCRIBE_ENCOUNTER_CREATION_ENABLED", "COMPANION_SESSION_PREP_ENABLED")
+    desired = dict(configuration, **dict.fromkeys(keys, "true"))
+    resolved = dict(desired, **dict.fromkeys(keys, "false"))
+    expected = _fingerprint(desired, contracts)
+    assert _fingerprint(resolved, contracts) != expected
+    runtime = _public_runtime_fixture() | dict.fromkeys(keys, "true")
+    desired.update(runtime)
+    expected = _fingerprint(desired, contracts)
+    source = DEPLOY.read_text()
+    start = source.index(
+        'elif [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]'
+    )
+    end = source.index("\nfi", start) + len("\nfi")
+    overlay = "if false; then :\n" + source[start:end]
+    program = (
+        _contract_shell()
+        + "\nRUNTIME_CONTRACTS_JSON=$(runtime_contracts_json)\n"
+        + overlay
+        + "\n"
+        + _function(source, "verify_effective_configuration_fingerprint")
+        + "\nverify_effective_configuration_fingerprint\n"
+    )
+    environment = {
+        **_environment(),
+        "PYTHON_BIN": sys.executable,
+        "REPOSITORY_ROOT": str(ROOT),
+        "ENV_JSON": json.dumps(resolved),
+        "STAGING_PRESERVE_EFFECTIVE_CONFIGURATION": "true",
+        "STAGING_RUNTIME_PUBLIC_JSON": json.dumps(runtime),
+        "EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256": expected,
+    }
+    restored = subprocess.run(
+        ["bash", "-ec", program],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert (restored.returncode, restored.stdout, restored.stderr) == (0, "", "")
+    configuration["ENCRYPTION_KEY"] += "-unreviewed-difference"
+    refused = subprocess.run(
+        ["bash", "-ec", program],
+        env=environment | {"ENV_JSON": json.dumps(configuration)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert refused.returncode == 1
+    assert refused.stdout == ""
+    assert refused.stderr == (
+        "Resolved staging configuration differs from the reviewed full runtime fingerprint.\n"
+    )
+    _no_secret_output(refused, configuration)
 
 
 @pytest.mark.parametrize("key", SENSITIVE_KEYS)
