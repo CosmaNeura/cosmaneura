@@ -150,7 +150,9 @@ variable "python_public_vars" {
     "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
     # capability authorization remains independent of Authority Kernel rollout
     "AUTHORITY_CLERK_ISSUER",
-    "DURABLE_WEBHOOK_INBOX_ENABLED"
+    "DURABLE_WEBHOOK_INBOX_ENABLED",
+    # Explicit default-off production input, shared by API/worker/scheduler.
+    "HELD_MEDICATION_WRITES_ENABLED"
   ]
 
   validation {
