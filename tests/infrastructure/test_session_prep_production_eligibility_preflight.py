@@ -27,6 +27,7 @@ from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
+from sqlalchemy import literal, text
 from sqlalchemy.exc import MultipleResultsFound
 
 from tests.factories import save_practice_member
@@ -808,7 +809,10 @@ def test_aggregate_cancellation_matches_runtime_exact_doctor_and_gate_order(
                             "approval_sha256": "d" * 64,
                         },
                         accepted_at=accepted_at,
-                        export_until=accepted_at + timedelta(days=90),
+                        # Keep this calendar-day receipt valid across DST in
+                        # the database session's timezone without disabling its
+                        # immutable policy constraint.
+                        export_until=literal(accepted_at) + text("INTERVAL '90 days'"),
                         phase="read-only",
                     )
                 )
