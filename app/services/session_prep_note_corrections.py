@@ -28,7 +28,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
-from app.models.practice import PracticeMember, lock_practice_seats
+from app.models.practice import lock_practice_seats
 from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.visit_audio_file import VisitAudioFile
 from sqlalchemy import update
@@ -48,30 +48,30 @@ def correct_source_note(
     if any(len(heading) > 200 for heading in fields):
         raise NoteSourceDenied("Note cannot be corrected")
     decision = resolve_session_prep_provider_access(doctor, session=session)
-    if not decision.allowed or decision.practice is None:
+    if not decision.allowed:
         raise NoteSourceDenied("Note is unavailable")
-    # Membership mutations use this same Practice -> Doctor acquisition order.
-    practice = lock_practice_seats(session, decision.practice.id)
+    # Preserve Practice -> Doctor order when a practice exists. A personal
+    # account needs only its own Doctor lock; membership is not enrollment in
+    # Session Prep and is never manufactured by a source correction.
+    if decision.practice is not None:
+        lock_practice_seats(session, decision.practice.id)
     current_doctor = session.exec(
         select(Doctor)
         .where(Doctor.id == doctor.id, Doctor.clerk_id == doctor.clerk_id)
         .with_for_update(read=True)
         .execution_options(populate_existing=True)
     ).one_or_none()
-    member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .with_for_update(read=True)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
+    current_decision = (
+        resolve_session_prep_provider_access(current_doctor, session=session)
+        if current_doctor is not None
+        else None
+    )
     if (
         current_doctor is None
-        or practice is None
-        or member is None
-        or member.practice_id != practice.id
-        or not resolve_session_prep_provider_access(
-            current_doctor, session=session
-        ).allowed
+        or current_decision is None
+        or not current_decision.allowed
+        or (current_decision.practice.id if current_decision.practice else None)
+        != (decision.practice.id if decision.practice else None)
     ):
         raise NoteSourceDenied("Note is unavailable")
     candidate = session.get(AIVisitNote, note_id)
