@@ -7634,7 +7634,7 @@
           "can_review_sources"
         ],
         "title": "SessionPrepSettingsData",
-        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current provider/practice/BAA/\nentitlement gate as review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
+        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current active-account decision\nas review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
       },
       "SettingsData": {
         "properties": {
