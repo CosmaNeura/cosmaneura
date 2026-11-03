@@ -21,6 +21,15 @@ from sqlmodel import Session, col, select
 
 SessionPrepProviderAccessDenial = Literal[
     "provider_unavailable",
+    # Retain denial-result compatibility for existing callers. The resolver
+    # below does not use legacy enrollment metadata as an eligibility gate.
+    "pilot_grant_revoked",
+    "onboarding_incomplete",
+    "practice_membership_required",
+    "practice_membership_inactive",
+    "practice_access_not_authorized",
+    "baa_not_in_force",
+    "entitlement_not_in_force",
     "scribe_cancelled_read_only",
     "scribe_export_period_expired",
 ]
@@ -47,10 +56,10 @@ def resolve_session_prep_provider_access(
 ) -> SessionPrepProviderAccessDecision:
     """Read fresh account state without a Session Prep enrollment requirement.
 
-The optional practice is a compatibility namespace for already-bound records,
-not an eligibility requirement. Accounts without one use their own authority
-namespace when an authenticated owned-record exchange is requested.
-"""
+    The optional practice is a compatibility namespace for already-bound records,
+    not an eligibility requirement. Accounts without one use their own authority
+    namespace when an authenticated owned-record exchange is requested.
+    """
 
     current_at = at or datetime.now(UTC)
     if session is None:

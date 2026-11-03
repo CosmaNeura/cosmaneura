@@ -158,6 +158,7 @@ def test_session_prep_practice_move_preserves_owned_scope_and_scribe_membership(
         ).all()
     )
     assert len(memberships) == 1
+    assert isinstance(memberships[0], AuthorityTenantMembership)
     assert str(memberships[0].tenant_id) == old_context.tenant_id
     assert (
         AuthorityAuditEvent.where(

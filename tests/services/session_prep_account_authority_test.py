@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from time import monotonic
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -162,7 +163,7 @@ def test_no_practice_upload_source_correction_preserves_exact_owner_and_cancella
                     phase="read-only",
                 )
             )
-        args = dict(
+        args: dict[str, Any] = dict(
             session=session,
             doctor=actor,
             note_id=note.id,
@@ -186,7 +187,7 @@ def test_no_practice_upload_source_correction_preserves_exact_owner_and_cancella
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-def _link_args(doctor, practice, mapping, scribe_tenant_id):
+def _link_args(doctor, practice, mapping, scribe_tenant_id) -> dict[str, Any]:
     return dict(
         doctor_id=doctor.id,
         practice_id=practice.id,
@@ -203,6 +204,8 @@ def _link_args(doctor, practice, mapping, scribe_tenant_id):
 
 def _shared_practice_case(personal_account, other_namespace, own_namespace="account"):
     doctor, _patient, visit = personal_account
+    original = None
+    personal_mapping = None
     if own_namespace == "account":
         original = _context(_token(doctor, str(visit.id)))
         personal_mapping = _mapping(visit)
@@ -237,6 +240,7 @@ def _shared_practice_case(personal_account, other_namespace, own_namespace="acco
     if own_namespace == "practice":
         original = _context(_token(doctor, str(visit.id)))
         personal_mapping = _mapping(visit)
+    assert original is not None and personal_mapping is not None
     return doctor, personal_mapping, original, other, other_mapping, practice
 
 
@@ -437,6 +441,7 @@ def test_scribe_onboarding_preserves_existing_account_tenant_and_prep(
         assert scope.practice_authority_id == mapping.id
         binding = session.get(AuthorityPersonBinding, scope.binding_id)
         assert binding is not None
+        assert binding.actor_id is not None
         assert (
             validate_provider_capture_record_scope(
                 session=session,
@@ -543,7 +548,7 @@ def test_personal_prep_survives_real_scribe_onboarding_creator_lookup_and_catalo
     doctor.save()
     practice = provision_practice_in_force(doctor)
     assert doctor.email
-    args = dict(
+    args: dict[str, Any] = dict(
         doctor_id=doctor.id,
         practice_id=practice.id,
         tenant_id=original_mapping.tenant_id,

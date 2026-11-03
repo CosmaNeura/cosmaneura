@@ -659,10 +659,13 @@ def lock_provider_record_owner(
     *, session: Session, clerk_subject: str
 ) -> tuple[Doctor, Practice]:
     """Take generic provider locks before any request view-as lock."""
-    return _lock_provider_record_owner(
-        session=session,
-        clerk_subject=clerk_subject,
-        session_prep=False,
+    return cast(
+        tuple[Doctor, Practice],
+        _lock_provider_record_owner(
+            session=session,
+            clerk_subject=clerk_subject,
+            session_prep=False,
+        ),
     )
 
 
