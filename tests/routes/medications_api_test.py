@@ -22,6 +22,149 @@ from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 from tests.routes.utils import get_clerk_dev_user
 
 
+@pytest.mark.parametrize("previous_status", ["active", "stopped"])
+def test_disabled_new_holds_preserves_existing_row_before_any_update(
+    authenticated_client: TestClient, monkeypatch, previous_status: str
+):
+    monkeypatch.setenv("HELD_MEDICATION_WRITES_ENABLED", "false")
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    row = PatientMedication(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        name="Synthetic existing medication",
+        status=MedicationStatus(previous_status),
+        dosage="Recorded dose",
+        confirmed=True,
+    ).save()
+    before = row.model_dump()
+    response = authenticated_client.patch(
+        api_app.url_path_for("medication_update", medication_id=str(row.id)),
+        json={"status": "held", "name": "Must not be assigned", "confirmed": False},
+        headers=READER_HEADERS,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "HELD_MEDICATION_WRITES_DISABLED"
+    assert PatientMedication.one(id=row.id).model_dump() == before
+
+
+def test_disabled_new_holds_keeps_old_create_values_and_public_control(
+    authenticated_client: TestClient, monkeypatch
+):
+    monkeypatch.setenv("HELD_MEDICATION_WRITES_ENABLED", "false")
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    endpoint = api_app.url_path_for("medication_create", patient_id=str(patient.id))
+    response = authenticated_client.post(
+        endpoint,
+        json={"name": "Synthetic hold", "status": "held"},
+        headers=READER_HEADERS,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "HELD_MEDICATION_WRITES_DISABLED"
+    assert (
+        PatientMedication.where(PatientMedication.patient_id == patient.id).count() == 0
+    )
+    for value in ("active", "stopped"):
+        response = authenticated_client.post(
+            endpoint, json={"name": "Synthetic " + value, "status": value}
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["status"] == value
+    panel = api_app.url_path_for(
+        "patient_reference_resources", patient_id=str(patient.id)
+    )
+    response = authenticated_client.get(panel)
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["held_medication_writes_enabled"] is False
+    assert {
+        item["medication"]["status"] for item in response.json()["medications"]
+    } == {"active", "stopped"}
+    monkeypatch.setenv("HELD_MEDICATION_WRITES_ENABLED", "true")
+    assert (
+        authenticated_client.get(panel).json()["held_medication_writes_enabled"] is True
+    )
+
+
+def test_disabled_new_holds_keeps_existing_hold_confirmation_edit_and_resume(
+    authenticated_client: TestClient, monkeypatch
+):
+    monkeypatch.setenv("HELD_MEDICATION_WRITES_ENABLED", "false")
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    source = AppointmentFactory.build(doctor_id=doctor.id, patient_id=patient.id).save()
+    row = PatientMedication(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_id=source.id,
+        name="Synthetic held",
+        status=MedicationStatus.held,
+        source=MedicationSource.transcript,
+    ).save()
+    endpoint = api_app.url_path_for("medication_update", medication_id=str(row.id))
+    for body in ({"status": "held", "dosage": "Recorded dose"}, {"confirmed": True}):
+        response = authenticated_client.patch(
+            endpoint, json=body, headers=READER_HEADERS
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["status"] == "held"
+        assert response.json()["appointment_id"] == str(source.id)
+    response = authenticated_client.get(
+        api_app.url_path_for("medication_list", patient_id=str(patient.id)),
+        headers=READER_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()[0]["status"] == "held"
+    confirmation = PatientMedication.one(id=row.id).confirmed_at
+    response = authenticated_client.patch(
+        endpoint, json={"status": "active"}, headers=READER_HEADERS
+    )
+    assert response.status_code == status.HTTP_200_OK
+    current = PatientMedication.one(id=row.id)
+    assert current.status == MedicationStatus.active and current.confirmed
+    assert current.confirmed_at == confirmation and current.appointment_id == source.id
+    assert (
+        current.source == MedicationSource.transcript
+        and current.dosage == "Recorded dose"
+    )
+
+
+def test_disabled_new_holds_still_checks_owner_and_reader_first(
+    authenticated_client: TestClient, monkeypatch
+):
+    monkeypatch.setenv("HELD_MEDICATION_WRITES_ENABLED", "false")
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    response = authenticated_client.post(
+        api_app.url_path_for("medication_create", patient_id=str(patient.id)),
+        json={"name": "Synthetic hold", "status": "held"},
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "MEDICATION_READER_UPGRADE_REQUIRED"
+    foreign = DoctorFactory.build().save()
+    foreign_patient = _patient_for(foreign)
+    row = PatientMedication(
+        doctor_id=foreign.id, patient_id=foreign_patient.id, name="Synthetic foreign"
+    ).save()
+    before = row.model_dump()
+    for headers in ({}, READER_HEADERS):
+        response = authenticated_client.post(
+            api_app.url_path_for(
+                "medication_create", patient_id=str(foreign_patient.id)
+            ),
+            json={"name": "Synthetic hold", "status": "held"},
+            headers=headers,
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        response = authenticated_client.patch(
+            api_app.url_path_for("medication_update", medication_id=str(row.id)),
+            json={"status": "held"},
+            headers=headers,
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert PatientMedication.one(id=row.id).model_dump() == before
+
+
 def _authed_doctor() -> Doctor:
     _, _, clerk_user = get_clerk_dev_user()
     return Doctor.find_or_create_by(clerk_id=clerk_user.id)

@@ -14,6 +14,13 @@ from typing import Any, TypedDict
 import pytest
 import yaml
 
+from tests.infrastructure.test_production_saved_image_identity import (
+    fixture as saved_fixture,
+)
+from tests.infrastructure.test_production_saved_image_identity import (
+    save as save_fixture,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location(
@@ -25,7 +32,7 @@ spec.loader.exec_module(candidate)
 SHA = "a" * 40
 TREE = "b" * 40
 IMAGE_DIGEST = "sha256:" + "c" * 64
-CONFIG_DIGEST = "sha256:" + "d" * 64
+CONFIG_DIGEST = saved_fixture(engine="classic")[0]["Id"]
 
 
 class ProducerEvidence(TypedDict):
@@ -65,26 +72,11 @@ def context(run=20):
 
 
 def local_image() -> dict[str, Any]:
-    return dict(
-        Id=CONFIG_DIGEST,
-        Os="linux",
-        Architecture="amd64",
-        Config=dict(
-            Labels={"org.opencontainers.image.revision": SHA},
-            Env=["PYTHON_ENV=production"],
-        ),
-    )
+    return saved_fixture(engine="classic")[0]
 
 
 def manifest_bytes() -> bytes:
-    return candidate.canonical(
-        {
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "config": {"digest": CONFIG_DIGEST},
-            "layers": [{"digest": IMAGE_DIGEST}],
-        }
-    )
+    return saved_fixture()[2]
 
 
 def retention_bytes(image_digest) -> bytes:
@@ -105,6 +97,187 @@ def runtime_environment() -> dict[str, str]:
         GITHUB_RUN_ID="20",
         GITHUB_RUN_ATTEMPT="1",
     )
+
+
+def admitted_frontend(tmp_path, monkeypatch, run=10):
+    for key, value in runtime_environment().items():
+        monkeypatch.setenv(key, str(run) if key == "GITHUB_RUN_ID" else value)
+    config_path, admission_path = (
+        tmp_path / f"config-{run}.json",
+        tmp_path / f"admission-{run}.json",
+    )
+    config_path.write_bytes(candidate.canonical(configuration()))
+    candidate.frontend_admission.prepare(config_path, admission_path, "true", SHA, SHA)
+    return json.loads(config_path.read_bytes()), admission_path
+
+
+def enabled_candidate(tmp_path, monkeypatch):
+    config, admission_path = admitted_frontend(tmp_path, monkeypatch)
+    image, exported, manifest = saved_fixture(engine="classic")
+    image_archive = save_fixture(tmp_path / "enabled-candidate-image.tar", exported)
+    saved_identity = candidate.saved_image_identity(image_archive, image)
+    value = candidate.candidate_record(
+        context(10),
+        config,
+        manifest,
+        image,
+        "sha256:" + "f" * 64,
+        record()["panel"],
+        candidate.digest(manifest),
+        saved_identity,
+        admission_path,
+    )
+    return value, config, admission_path
+
+
+def evidence_for(value):
+    data = evidence()
+    data["archive"] = archive(value)
+    data["artifact"]["digest"] = candidate.digest(data["archive"])
+    data["artifact"]["size_in_bytes"] = len(data["archive"])
+    return data
+
+
+def test_enabled_candidate_binds_actual_admission_to_authenticated_producer(
+    tmp_path, monkeypatch
+):
+    value, config, admission = enabled_candidate(tmp_path, monkeypatch)
+    assert value["schema_version"] == 2 and value["frontend_authority_enabled"] is True
+    assert value["frontend_admission"] == json.loads(admission.read_bytes())
+    assert value["public_configuration_digest"] == candidate.digest(
+        candidate.canonical(config)
+    )
+    assert (
+        candidate.verify_evidence(context(), 10, 1, 30, **evidence_for(value)) == value
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "missing",
+        "source",
+        "run",
+        "actor",
+        "workflow",
+        "configuration",
+        "version",
+        "extra",
+        "false",
+    ],
+)
+def test_enabled_archive_rejects_unbound_or_malformed_admission(
+    tmp_path, monkeypatch, tamper
+):
+    value, _, _ = enabled_candidate(tmp_path, monkeypatch)
+    admission = value["frontend_admission"]
+    if tamper == "missing":
+        del value["frontend_admission"]
+    elif tamper == "source":
+        admission["source_sha"] = "1" * 40
+    elif tamper == "run":
+        admission["manual_workflow_context"]["GITHUB_RUN_ID"] = "11"
+    elif tamper == "actor":
+        admission["manual_workflow_context"]["GITHUB_ACTOR"] = "Other"
+    elif tamper == "workflow":
+        admission["manual_workflow_context"]["GITHUB_WORKFLOW_REF"] = "retired@master"
+    elif tamper == "configuration":
+        admission["public_configuration_sha256"] = "0" * 64
+    elif tamper == "version":
+        admission["version"] = True
+    elif tamper == "extra":
+        admission["readiness"] = True
+    else:
+        value["frontend_authority_enabled"] = False
+    with pytest.raises(ValueError):
+        candidate.verify_evidence(context(), 10, 1, 30, **evidence_for(value))
+
+
+@pytest.mark.parametrize("run,source", [(20, SHA), (10, "1" * 40)])
+def test_producer_admission_cannot_be_reused_in_another_run_or_source(
+    tmp_path, monkeypatch, run, source
+):
+    value, config, admission = enabled_candidate(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_RUN_ID", str(run))
+    monkeypatch.setenv("GITHUB_SHA", source)
+    monkeypatch.setattr(
+        candidate,
+        "command",
+        lambda *a, **k: pytest.fail("client called before admission refusal"),
+    )
+    with pytest.raises(ValueError):
+        candidate.promotion_check(value, config, admission)
+
+
+def test_fresh_promotion_admission_preserves_identical_enabled_config_and_digest(
+    tmp_path, monkeypatch
+):
+    value, config, producer_admission = enabled_candidate(tmp_path, monkeypatch)
+    fresh_config, fresh_admission = admitted_frontend(tmp_path, monkeypatch, run=20)
+    assert fresh_config == config
+    assert fresh_admission.read_bytes() != producer_admission.read_bytes()
+    monkeypatch.setattr(candidate, "panel_identity", lambda *a: value["panel"])
+    monkeypatch.setattr(candidate, "source_context", lambda: context())
+    calls = []
+
+    def read(args, **kwargs):
+        calls.append(args)
+        if args[:4] == ["docker", "buildx", "imagetools", "inspect"]:
+            assert args[-1] == value["image"]
+            return manifest_bytes()
+        assert args[:4] == ["az", "acr", "repository", "show"]
+        return retention_bytes(candidate.digest(manifest_bytes()))
+
+    monkeypatch.setattr(candidate, "command", read)
+    assert (
+        candidate.promotion_check(value, fresh_config, fresh_admission)
+        == value["image"]
+    )
+    assert len(calls) == 3 and all(
+        "push" not in call and "build" not in call for call in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper", ["default_dark", "config_changed", "receipt_missing", "record_flag"]
+)
+def test_enabled_promotion_refuses_changed_choice_or_configuration_before_clients(
+    tmp_path, monkeypatch, tamper
+):
+    value, _, _ = enabled_candidate(tmp_path, monkeypatch)
+    config, admission = admitted_frontend(tmp_path, monkeypatch, run=20)
+    if tamper == "default_dark":
+        config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] = "false"
+    elif tamper == "config_changed":
+        config["VITE_POSTHOG_KEY"] = "changed-synthetic-setting"
+    elif tamper == "receipt_missing":
+        admission.unlink()
+    else:
+        value["frontend_authority_enabled"] = False
+    monkeypatch.setattr(
+        candidate,
+        "command",
+        lambda *a, **k: pytest.fail("client called before refusal"),
+    )
+    with pytest.raises((ValueError, OSError)):
+        candidate.promotion_check(value, config, admission)
+
+
+def test_unadmitted_enabled_publish_fails_before_image_or_registry_commands(
+    tmp_path, monkeypatch
+):
+    config = configuration()
+    config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] = "true"
+    path = tmp_path / "unadmitted.json"
+    path.write_bytes(candidate.canonical(config))
+    monkeypatch.setattr(candidate, "source_context", lambda: context())
+    monkeypatch.setattr(
+        candidate,
+        "command",
+        lambda *a, **k: pytest.fail("unadmitted publish reached a client"),
+    )
+    with pytest.raises(ValueError):
+        candidate.publish(path, tmp_path / "candidate.json")
 
 
 def record():
@@ -451,14 +624,14 @@ def test_runtime_environment_cannot_be_staging_or_ambiguous(env):
         candidate.image_source(context(), image)
 
 
+@pytest.mark.parametrize("engine", ["classic", "containerd"])
 def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, engine
 ):
     config_path = tmp_path / "configuration.json"
     config_path.write_bytes(candidate.canonical(configuration()))
-    raw = manifest_bytes()
+    image, exported, raw = saved_fixture(engine=engine)
     actual_digest = candidate.digest(raw)
-    image = local_image()
     calls = []
     monkeypatch.setattr(candidate, "source_context", lambda: context(10))
     monkeypatch.setattr(
@@ -471,6 +644,10 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
         calls.append(args)
         if args[:3] == ["docker", "image", "inspect"]:
             return candidate.canonical([image])
+        if args[:3] == ["docker", "image", "save"]:
+            assert args[-1] == image["Id"]
+            save_fixture(Path(args[args.index("--output") + 1]), exported)
+            return b""
         if args[:2] == ["docker", "create"]:
             return ("1" * 64).encode()
         if args[:4] == ["docker", "buildx", "imagetools", "inspect"]:
@@ -488,6 +665,12 @@ def test_publish_verifies_before_registry_mutation_and_protects_both_objects(
     candidate.publish(config_path, output)
     observed = json.loads(output.read_bytes())
     assert observed["image"] == candidate.IMAGE + "@" + actual_digest
+    assert observed["image_config_digest"] == CONFIG_DIGEST
+    tag = next(args for args in calls if args[:2] == ["docker", "tag"])
+    assert tag[2] == image["Id"]
+    assert next(
+        i for i, args in enumerate(calls) if args[:3] == ["docker", "image", "save"]
+    ) < next(i for i, args in enumerate(calls) if args[:2] == ["docker", "create"])
     first_push = next(
         i for i, args in enumerate(calls) if args[:2] == ["docker", "push"]
     )
@@ -525,8 +708,14 @@ def test_image_or_asset_failure_prevents_publication(
 
     def fake(args, **kwargs):
         assert args[0] == "docker" and args[1] in {"image", "create", "cp", "rm"}
-        if invalid_image and args[1] != "image":
+        if invalid_image and args[:3] != ["docker", "image", "inspect"]:
             pytest.fail("malformed image advanced beyond inspection")
+        if args[:3] == ["docker", "image", "save"]:
+            save_fixture(
+                Path(args[args.index("--output") + 1]),
+                saved_fixture(engine="classic")[1],
+            )
+            return b""
         return (
             candidate.canonical([None if invalid_image else image])
             if args[1] == "image"
@@ -885,3 +1074,32 @@ def test_client_children_receive_only_their_normal_capabilities(monkeypatch):
         (["gh", "api", "--hostname", "github.com", "synthetic"], True),
     ):
         assert candidate.command(args, github=github) == b"{}"
+
+
+def test_saved_config_failure_prevents_source_probe_and_registry_mutations(
+    monkeypatch, tmp_path
+):
+    image, entries, _raw = saved_fixture()
+    catalogue = json.loads(entries["manifest.json"])
+    entries[catalogue[0]["Config"]] = b"{}"
+    config_path = tmp_path / "configuration.json"
+    config_path.write_bytes(candidate.canonical(configuration()))
+    monkeypatch.setattr(candidate, "source_context", lambda: context(10))
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["docker", "image", "inspect"]:
+            return candidate.canonical([image])
+        if args[:3] == ["docker", "image", "save"]:
+            save_fixture(Path(args[args.index("--output") + 1]), entries)
+            return b""
+        pytest.fail("invalid saved config reached source/container/registry operation")
+
+    monkeypatch.setattr(candidate, "command", command)
+    output = tmp_path / "candidate.json"
+    with pytest.raises(
+        candidate.CandidateRefused, match="^production_core_candidate_refused$"
+    ):
+        candidate.publish(config_path, output)
+    assert len(calls) == 2 and not output.exists()
