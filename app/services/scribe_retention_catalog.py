@@ -46,6 +46,10 @@ CORE_PHI_TABLES = (
     "canonical_conversation_user_phase",
     "canonical_conversation_final_phase",
     "visit_prep_question_set",
+    "visit_prep_question_set_version",
+    "visit_prep_question",
+    "billing_header_prepared_operation",
+    "external_webhook_delivery",
 )
 SCRIBE_PHI_TABLES = (
     "consent_records",
@@ -102,11 +106,32 @@ CORE_LINK_TABLES = (
     "zoom_meeting",
     "ehr_sandbox_record_mapping",
     "synthetic_preview_appointment_fixture",
+    "note_template_preference",
+    "scribe_private_note_receipt",
+    "ehr_sandbox_patient_designation",
+    "external_webhook_operation",
 )
+
+# Several physical tables share a model source; preserve exact discovery paths.
+CORE_MODEL_FILES = {
+    "intake": "intake/intake.py",
+    "intake_summary": "intake/intake_summary.py",
+    "session_prep_artifact": "session_prep_runtime.py",
+    "session_prep_read_receipt": "session_prep_runtime.py",
+    "canonical_conversation_user_phase": "authority_conversation.py",
+    "canonical_conversation_final_phase": "authority_conversation.py",
+    "visit_prep_question_set_version": "visit_prep_question_set.py",
+    "visit_prep_question": "visit_prep_question_set.py",
+    "billing_header_prepared_operation": "billing_header_operation.py",
+}
 
 SURFACES = tuple(
     [
-        Surface(f"core.{name}", "erase", f"app/models/{name}.py")
+        Surface(
+            f"core.{name}",
+            "erase",
+            f"app/models/{CORE_MODEL_FILES.get(name, name + '.py')}",
+        )
         for name in CORE_PHI_TABLES
     ]
     + [
@@ -193,6 +218,6 @@ SURFACES = tuple(
         ),
     ]
 )
-CATALOG_VERSION = "core-scribe-retention-2026-11-02-v1"
+CATALOG_VERSION = "core-scribe-retention-2026-11-02-v2"
 BY_KEY = {surface.key: surface for surface in SURFACES}
 assert len(BY_KEY) == len(SURFACES)
