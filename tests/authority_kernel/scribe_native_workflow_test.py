@@ -353,10 +353,10 @@ async def test_existing_container_relay_does_not_cut_off_original_core_deadline(
         return httpx.Response(200, stream=Stream())
 
     gateway = CoreBundleGateway(FastAPI())
-    from asyncio.subprocess import Process
+    from subprocess import Popen
     from typing import cast
 
-    gateway.process = cast(Process, SimpleNamespace(returncode=None))
+    gateway.process = cast(Popen[bytes], SimpleNamespace(poll=lambda: None))
     async with httpx.AsyncClient(transport=httpx.MockTransport(child)) as loopback:
         gateway.client = loopback
         async with httpx.AsyncClient(
