@@ -229,8 +229,9 @@ async def test_current_clerk_session_view_as_guard_prevents_context_issuance(
 
 
 @pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("prep_unavailable", [False, True])
 def test_shared_exchange_guard_preserves_owner_lock_before_view_as(
-    monkeypatch, blocked
+    monkeypatch, blocked, prep_unavailable
 ):
     transaction = object()
     calls = []
@@ -252,6 +253,12 @@ def test_shared_exchange_guard_preserves_owner_lock_before_view_as(
         assert values == {"session": transaction, "clerk_subject": "user_test"}
         calls.append("owner_lock")
 
+    def prep_lock(**values):
+        assert values == {"session": transaction, "clerk_subject": "user_test"}
+        calls.append("prep_owner_lock")
+        if prep_unavailable:
+            raise provider_context_exchange.SessionPrepProviderScopeUnavailable
+
     def guard(session, **values):
         assert session is transaction
         assert values == {
@@ -264,6 +271,9 @@ def test_shared_exchange_guard_preserves_owner_lock_before_view_as(
         return blocked
 
     monkeypatch.setattr(provider_context_exchange, "lock_provider_record_owner", lock)
+    monkeypatch.setattr(
+        provider_context_exchange, "lock_session_prep_record_owner", prep_lock
+    )
     monkeypatch.setattr(
         provider_context_exchange, "context_token_exchange_blocked_by_view_as", guard
     )
@@ -278,7 +288,11 @@ def test_shared_exchange_guard_preserves_owner_lock_before_view_as(
         )
         is blocked
     )
-    assert calls == ["owner_lock", "view_as"]
+    assert calls == (
+        ["prep_owner_lock", "owner_lock", "view_as"]
+        if prep_unavailable
+        else ["prep_owner_lock", "view_as"]
+    )
 
 
 @pytest.mark.asyncio

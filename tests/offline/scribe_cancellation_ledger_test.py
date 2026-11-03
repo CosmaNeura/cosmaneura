@@ -744,6 +744,23 @@ def test_actual_account_resolver_and_internal_gate_preserve_read_export_only(
         == "scribe_export_period_expired"
     )
 
+    package(
+        monkeypatch,
+        "app.configuration.session_prep",
+        SESSION_PREP_PROVIDER_SETTINGS=SimpleNamespace(enabled=False),
+    )
+    package(
+        monkeypatch,
+        "app.services.session_prep_provider_access",
+        resolve_session_prep_provider_access=lambda *_args, **_kwargs: SimpleNamespace(
+            allowed=False
+        ),
+    )
+    source(
+        monkeypatch,
+        "app.routes.dependencies.session_prep_account",
+        "app/routes/dependencies/session_prep_account.py",
+    )
     gate = source(
         monkeypatch,
         "app.routes.dependencies.practice_gate",

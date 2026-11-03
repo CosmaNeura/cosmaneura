@@ -148,7 +148,7 @@ def _stale_mapped_member(actor):
     return mapping, member
 
 
-def test_ordinary_legacy_exchange_retires_stale_mapped_membership_and_reuses_scope(
+def test_ordinary_legacy_exchange_refuses_competing_mapped_membership_without_changes(
     scope,
 ):
     doctor, _practice, _patient, appointment = scope
@@ -161,11 +161,10 @@ def test_ordinary_legacy_exchange_retires_stale_mapped_membership_and_reuses_sco
     )
     current_before = _unchanged((current_member,))
 
-    context = _context(_token(doctor, str(appointment.id)))
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        _token(doctor, str(appointment.id))
 
-    assert "session-prep:read" in context.capabilities
-    assert context.session_prep_context_ref is not None
-    assert AuthorityTenantMembership.one(id=stale_member.id).status == "revoked"
+    assert AuthorityTenantMembership.one(id=stale_member.id).status == "active"
     assert _unchanged((current_member,)) == current_before
     assert _unchanged(rows) == before
     assert _unchanged((stale_mapping,)) == mapping_before
@@ -177,16 +176,8 @@ def test_ordinary_legacy_exchange_retires_stale_mapped_membership_and_reuses_sco
     for row in active_members:
         assert isinstance(row, AuthorityTenantMembership)
         active_member_ids.append(row.id)
-    assert active_member_ids == [current_member.id]
-    assert (
-        ProviderRecordAuthority.one(appointment_id=appointment.id).binding_id
-        == rows[-1].id
-    )
-    assert (
-        _context(_token(doctor, str(appointment.id))).session_prep_context_ref
-        == context.session_prep_context_ref
-    )
-    assert ProviderRecordAuthority.count() == 1
+    assert set(active_member_ids) == {current_member.id, stale_member.id}
+    assert ProviderRecordAuthority.count() == 0
     for event_type in (
         "authority.provider_membership.replaced",
         "authority.provider_record.bound",
@@ -195,11 +186,11 @@ def test_ordinary_legacy_exchange_retires_stale_mapped_membership_and_reuses_sco
             AuthorityAuditEvent.where(
                 AuthorityAuditEvent.event_type == event_type
             ).count()
-            == 1
+            == 0
         )
 
 
-def test_invalid_legacy_exchange_rolls_back_stale_membership_cleanup_in_savepoint(
+def test_invalid_legacy_exchange_rolls_back_without_mutating_other_membership(
     scope,
 ):
     doctor, _practice, _patient, appointment = scope
@@ -247,15 +238,13 @@ def test_invalid_legacy_exchange_rolls_back_stale_membership_cleanup_in_savepoin
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     savepoint = next(i for i, s in enumerate(statements) if s.startswith("SAVEPOINT "))
-    retired = next(
-        i
-        for i, s in enumerate(statements)
-        if s.startswith("UPDATE authority_tenant_membership")
-    )
     rolled_back = next(
         i for i, s in enumerate(statements) if s.startswith("ROLLBACK TO SAVEPOINT ")
     )
-    assert savepoint < retired < rolled_back
+    assert savepoint < rolled_back
+    assert not any(
+        s.startswith("UPDATE authority_tenant_membership") for s in statements
+    )
     assert _unchanged((*rows, stale_member)) == before
 
 
@@ -413,8 +402,19 @@ def test_current_practice_change_cannot_retarget_legacy_binding(scope):
     member.attestation_name = "Synthetic provider"
     save_practice_member(member)
 
-    with pytest.raises(authority.AuthorityRequestDeniedError):
-        _token(doctor, str(appointment.id))
+    context = _context(_token(doctor, str(appointment.id)))
 
-    assert ProviderRecordAuthority.count() == 0
+    assert "session-prep:read" in context.capabilities
+    stored = ProviderRecordAuthority.one(appointment_id=appointment.id)
+    assert stored.doctor_id == doctor.id
+    assert stored.binding_id == rows[-1].id
+    assert stored.practice_authority_id == rows[3].id
+    assert ProviderRecordAuthority.count() == 1
+    assert ProviderPracticeAuthority.count() == 1
+    assert (
+        ProviderPracticeAuthority.where(
+            ProviderPracticeAuthority.practice_id == current_practice.id
+        ).count()
+        == 0
+    )
     assert _unchanged(rows) == before
