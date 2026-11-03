@@ -80,6 +80,21 @@ export function shouldRetrySettingsQuery(failureCount: number, error: unknown) {
   return !isAccountRecoveryRequired(error) && failureCount < 3
 }
 
+export function canOpenSessionPrepDashboard(
+  settings:
+    | { session_prep?: { eligible: boolean; can_review_sources: boolean } }
+    | null
+    | undefined,
+  requestUrl: string,
+) {
+  const path = new URL(requestUrl).pathname.replace(/\/+$/, "")
+  return Boolean(
+    (path === "/notes" || path.startsWith("/notes/")) &&
+      settings?.session_prep?.eligible === true &&
+      settings.session_prep.can_review_sources === true,
+  )
+}
+
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const settings = settingsDataOptions()
   let settingsStarted = false
@@ -176,11 +191,15 @@ async function loadAuthenticatedData(
     throw error
   }
 
-  if (needsOnboarding(data)) {
+  const sessionPrepDashboard = canOpenSessionPrepDashboard(data, request.url)
+  if (!sessionPrepDashboard && needsOnboarding(data)) {
     throw redirect(href("/onboarding"))
   }
 
-  if (shouldRedirectToBillingRecovery(data, request.url)) {
+  if (
+    !sessionPrepDashboard &&
+    shouldRedirectToBillingRecovery(data, request.url)
+  ) {
     throw redirect(billingRecoveryLocation(request.url))
   }
 
