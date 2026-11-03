@@ -231,7 +231,10 @@ def _create(session, request, doctor_id, link, issuer, subject):
         return row, False
     mapping = session.exec(
         select(ProviderPracticeAuthority).where(
-            ProviderPracticeAuthority.practice_id == link.practice_id,
+            ProviderPracticeAuthority.tenant_id == link.tenant_id,
+            provider_record_authority._scribe_mapping_owner_predicate(
+                practice_id=link.practice_id, doctor_id=doctor_id
+            ),
         )
     ).one_or_none()
     memberships = list(

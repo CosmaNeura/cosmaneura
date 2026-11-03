@@ -614,6 +614,7 @@ def test_explicit_scribe_patient_match_can_finalize_selected_prior_source(
             )
         ).one()
         assert mapping is not None
+        assert mapping.practice_id is not None
         link = ScribeCaptureProviderLink(
             actor_id=identity.actor_id,
             tenant_id=mapping.tenant_id,
