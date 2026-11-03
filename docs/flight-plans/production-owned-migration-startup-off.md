@@ -16,10 +16,11 @@ changes; do not use a targeted apply or an unqualified historical plan.
 
 The existing production migration job remains the sole upgrade executor.
 Bind its actual process, admitted candidate/digest, database reference and
-current head before running it. The observed production head is `a659469204e2`;
-the rehearsed Session Prep path is `3d40e4e90e05` then `d4de1ee4bb02`.
-Recheck that path for the final admitted candidate, including any separately
-approved medication enum expand. Verify strict database TLS and a recoverable
+current head before running it. The earlier November 1 head observation is
+historical; it does not authorize a migration from that state. Reconcile a fresh
+database head against the final admitted candidate's complete migration graph,
+including the medication enum expand and practice-binding migration. Verify
+strict database TLS and a recoverable
 backup, agree a bounded lock window, then migrate before deploying the new
 API, worker and scheduler images.
 

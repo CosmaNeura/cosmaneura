@@ -110,16 +110,33 @@ def test_observability_is_default_off_and_aggregate_only() -> None:
     assert module.count('resource "azurerm_monitor_activity_log_alert"') == 1
 
 
-def test_startup_migration_switch_is_disabled_only_for_staging_deploy() -> None:
+def test_startup_migrations_are_owned_outside_all_deployed_runtimes() -> None:
     assert "AUTO_MIGRATE_ON_STARTUP" in _read("app/configuration/database.py")
 
     for path in (
         ".env.production.backend",
         ".env.staging.backend",
-        "infra/variables.tf",
         "infra-staging/variables.tf",
     ):
         assert "AUTO_MIGRATE_ON_STARTUP" not in _read(path)
+
+    production_runtime = _hcl_block(
+        _read("infra/session_prep_rollout.tf"),
+        "session_prep_shared_public_values =",
+    )
+    assert 'AUTO_MIGRATE_ON_STARTUP       = "false"' in production_runtime
+
+    for role in ("app", "worker", "scheduler"):
+        workload = _hcl_block(
+            _read("infra/main.tf"),
+            f'resource "azurerm_container_app" "{role}"',
+        )
+        assert "local.session_prep_shared_public_values" in workload
+
+    generic_public_vars = _hcl_block(
+        _read("infra/variables.tf"), 'variable "python_public_vars"'
+    )
+    assert '"AUTO_MIGRATE_ON_STARTUP"' in generic_public_vars
 
     staging_deploy = _read("infra-staging/deploy.sh")
     assert staging_deploy.count("AUTO_MIGRATE_ON_STARTUP") == 4

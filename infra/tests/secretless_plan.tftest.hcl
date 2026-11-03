@@ -353,7 +353,7 @@ run "reject_generic_startup_migration_override" {
   variables {
     adopt_existing_production_postgres_egress_rule = false
     production_container_apps_egress_ipv4          = "198.51.100.10"
-    python_public_vars                            = ["AUTO_MIGRATE_ON_STARTUP"]
+    python_public_vars                             = ["AUTO_MIGRATE_ON_STARTUP"]
   }
 
   expect_failures = [var.python_public_vars]
