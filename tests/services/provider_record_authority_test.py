@@ -131,7 +131,7 @@ def test_verified_exchange_binds_actual_record_and_reuses_practice_and_person(sc
     )
 
 
-def test_practice_move_replaces_prior_membership_without_ambiguous_actor(scope):
+def test_session_prep_practice_move_preserves_owned_scope_and_scribe_membership(scope):
     doctor, _practice, patient, appointment = scope
     old_token = _token(doctor, str(appointment.id))
     old_context = _context(old_token)
@@ -146,29 +146,25 @@ def test_practice_move_replaces_prior_membership_without_ambiguous_actor(scope):
     ).save()
     new_context = _context(_token(doctor, str(next_appointment.id)))
     assert new_context.actor_id == old_context.actor_id
-    assert new_context.tenant_id != old_context.tenant_id
-    memberships = AuthorityTenantMembership.where(
-        col(AuthorityTenantMembership.actor_id) == new_context.actor_id
-    ).all()
-    active_memberships = []
-    for row in memberships:
-        assert isinstance(row, AuthorityTenantMembership)
-        if row.status == "active":
-            active_memberships.append((str(row.tenant_id), row.status))
-    assert active_memberships == [(new_context.tenant_id, "active")]
-    stored_authority_tenant_membership = AuthorityTenantMembership.get(
-        actor_id=old_context.actor_id, tenant_id=old_context.tenant_id
+    assert new_context.tenant_id == old_context.tenant_id
+    assert (
+        _context(old_token).session_prep_context_ref
+        == old_context.session_prep_context_ref
     )
-    assert stored_authority_tenant_membership is not None
-    assert stored_authority_tenant_membership.status == "revoked"
-    with pytest.raises(authority.AuthorityRequestDeniedError):
-        _context(old_token)
+    memberships = list(
+        AuthorityTenantMembership.where(
+            col(AuthorityTenantMembership.actor_id) == new_context.actor_id,
+            col(AuthorityTenantMembership.status) == "active",
+        ).all()
+    )
+    assert len(memberships) == 1
+    assert str(memberships[0].tenant_id) == old_context.tenant_id
     assert (
         AuthorityAuditEvent.where(
             col(AuthorityAuditEvent.event_type)
             == "authority.provider_membership.replaced"
         ).count()
-        == 1
+        == 0
     )
 
 
@@ -331,6 +327,12 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         tenant = AuthorityTenant.one(id=binding.tenant_id)
         tenant.status = "revoked"
         tenant.save()
+    if change in {"member", "seat", "practice"}:
+        # Account feature access no longer depends on practice-seat eligibility;
+        # immutable record ownership and authority revocations still apply.
+        assert _context(token).session_prep_context_ref
+        assert _context(_token(doctor, str(appointment.id))).session_prep_context_ref
+        return
     if change == "rollout_disabled":
         for current in (_context(token), _context(_token(doctor, str(appointment.id)))):
             assert current.session_prep_context_ref is None
@@ -342,7 +344,7 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         _token(doctor, str(appointment.id))
 
 
-def test_record_scope_follows_an_owner_revocation_grace_period(scope):
+def test_active_account_keeps_own_prep_after_practice_seat_grace_ends(scope):
     doctor, _practice, _patient, appointment = scope
     token = _token(doctor, str(appointment.id))
     member = PracticeMember.one(doctor_id=doctor.id)
@@ -355,8 +357,7 @@ def test_record_scope_follows_an_owner_revocation_grace_period(scope):
 
     member.access_ends_at = datetime.now(UTC) - timedelta(seconds=1)
     save_practice_member(member)
-    with pytest.raises(authority.AuthorityRequestDeniedError):
-        _context(token)
+    assert _context(token).session_prep_context_ref
 
 
 def test_wrong_issuer_and_expired_token_are_denied(scope):
