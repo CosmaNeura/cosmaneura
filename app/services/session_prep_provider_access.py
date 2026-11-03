@@ -16,6 +16,7 @@ from typing import Literal, cast
 
 from app.services.organization_access import member_authorization_basis
 from app.services.pilot_access_grandfather import active_pilot_access_grant
+from app.services.scribe_cancellation_access import doctor_cancellation_denial
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -37,6 +38,8 @@ SessionPrepProviderAccessDenial = Literal[
     "practice_access_not_authorized",
     "baa_not_in_force",
     "entitlement_not_in_force",
+    "scribe_cancelled_read_only",
+    "scribe_export_period_expired",
 ]
 
 
@@ -69,6 +72,10 @@ def resolve_session_prep_provider_access(
                 session=cast(Session, managed),
                 at=current_at,
             )
+
+    cancellation = doctor_cancellation_denial(doctor, session=session, at=current_at)
+    if cancellation is not None:
+        return _denied(cancellation)
 
     active_pilot_grant = (
         select(col(PilotAccessGrandfatherGrant.id))

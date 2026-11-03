@@ -75,3 +75,7 @@ must remain single-headed. A bounded owned PostgreSQL16 DDL rehearsal and an
 independent same-chat final-source review are required before source acceptance.
 Native runtime, live production migration/configuration, and real cancellation
 acceptance remain separate gates. No live cancellation or destruction is run.
+
+The Session Prep aggregate preflight is qualified only with ledger readiness off.
+A ready ledger makes it refuse until the separate cancellation aggregate
+predicate is qualified; this interim guard never substitutes false eligibility.

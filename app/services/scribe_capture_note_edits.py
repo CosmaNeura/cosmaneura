@@ -218,7 +218,7 @@ async def check_capture_note_save(
 ) -> SaveResolution:
     """Read the exact save receipt without fencing or publishing the request."""
     return await resolve_capture_note_save(
-        caller=caller,
+        caller=replace(caller, access_purpose="read"),
         binding_ref=binding_ref,
         workspace_id=workspace_id,
         expected_session_id=expected_session_id,

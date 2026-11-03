@@ -59,6 +59,21 @@ ENTITLEMENT_EXEMPT_ROUTE_NAMES = {
 
 ADMIN_PATH_PREFIX = "/internal/v1/admin"
 
+# Reviewed own-record reads only. GET alone is not read authority: new GET
+# endpoints remain processing-gated until their effects have been reviewed.
+CANCELLATION_READ_ROUTE_NAMES = {
+    "intake_list",
+    "intake_detail",
+    "note_list",
+    "note_detail",
+    "patient_list",
+    "schedule_list",
+    "medication_list",
+    "patient_reference_resources",
+    "lab_panel_list",
+    "lab_range_list",
+}
+
 
 def require_practice_in_force(request: Request) -> None:
     route = request.scope.get("route")
@@ -75,9 +90,24 @@ def require_practice_in_force(request: Request) -> None:
     decision = resolve_doctor_access(
         doctor,
         require_entitlement=route_name not in ENTITLEMENT_EXEMPT_ROUTE_NAMES,
+        purpose="read"
+        if request.method == "GET" and route_name in CANCELLATION_READ_ROUTE_NAMES
+        else "process",
     )
     if decision.allowed:
         return
+
+    if decision.denial_reason in {
+        "scribe_cancelled_read_only",
+        "scribe_export_period_expired",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Scribe is canceled. This account is read-only during its export period."
+            if decision.denial_reason == "scribe_cancelled_read_only"
+            else "This account's export period has ended. Contact support for the retained-record status.",
+            headers={"Cache-Control": "no-store"},
+        )
 
     if decision.denial_reason == "entitlement_not_in_force":
         raise HTTPException(

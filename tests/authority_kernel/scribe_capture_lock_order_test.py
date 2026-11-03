@@ -210,7 +210,9 @@ def case(monkeypatch):
     monkeypatch.setattr(
         view_as, "mount_context_session_blocked_by_view_as", REAL_VIEW_AS_GUARD
     )
-    monkeypatch.setattr(capture, "doctor_access_in_force", lambda _: True)
+    monkeypatch.setattr(
+        capture, "doctor_access_in_force", lambda _doctor, **_kwargs: True
+    )
     monkeypatch.setattr(
         provider_record_authority,
         "doctor_access_in_force",

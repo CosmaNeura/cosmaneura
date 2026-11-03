@@ -67,7 +67,19 @@ NORMALIZATION_SOURCE_CONTRACTS = (
         "app/services/session_prep_provider_access.py",
         None,
         "resolve_session_prep_provider_access",
-        "bceba723b59de6606e5077c19045bb105ddb27a2e9fe9da8da7baf790e25a76b",
+        "aa7d294334c3967e6377d407ce94ddf8df201ee53b46461cbf0f5fa1b0dd4501",
+    ),
+    (
+        "app/services/scribe_cancellation_access.py",
+        None,
+        "doctor_cancellation_denial",
+        "40341cfce0b672f9120c908a0c7618f5b9e2d72560e207bb2fb5df564c3befa2",
+    ),
+    (
+        "app/configuration/scribe_cancellation.py",
+        None,
+        "load_cancellation_settings",
+        "2908a25e82b061e0012e6a93148620e24a34c251eb508eba749a61080e0d9281",
     ),
     (
         "app/models/practice.py",
@@ -781,9 +793,12 @@ def collect_inventory(
     observed_at: datetime,
     rollout_enabled: bool,
     migration_contract: RepositoryMigrationContract | None = None,
+    ledger_ready: bool = False,
 ) -> dict[str, Any]:
     """Read aggregate eligibility state; never select or return identifiers."""
 
+    if type(ledger_ready) is not bool or ledger_ready:
+        raise InventoryFailure("cancellation ledger eligibility is not qualified")
     validate_runtime_normalization_contract()
     _parse_integrity(
         connection.execute(INTEGRITY_QUERY, (observed_at, observed_at)).fetchall()
@@ -867,6 +882,9 @@ def main() -> int:
                 connection,
                 observed_at=observed_at,
                 rollout_enabled=rollout_enabled,
+                ledger_ready=_rollout_enabled(
+                    os.environ.get("SCRIBE_CANCELLATION_LEDGER_READY")
+                ),
             )
             connection.rollback()
     except Exception:

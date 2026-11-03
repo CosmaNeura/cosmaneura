@@ -42,6 +42,7 @@ from app.services.doctor_access_row_ownership import (
     lookup_uses_provider_session,
     provider_doctor_access_rows,
 )
+from app.services.scribe_cancellation_access import AccessPurpose
 from app.services.view_as import ViewAsActorIdentity, actor_bound_unended_view_as_exists
 
 from activemodel.session_manager import global_session
@@ -92,7 +93,16 @@ def _provider_owner_discovery_rows(session, subject):
     return owner, member
 
 
-def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
+def _provider(
+    session,
+    *,
+    issuer,
+    subject,
+    session_id,
+    tenant_ref,
+    settings,
+    purpose: AccessPurpose = "process",
+):
     authority._ensure_enabled(settings)
     if issuer != settings.clerk_issuer:
         raise authority.AuthorityRequestDeniedError
@@ -208,6 +218,7 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
             or practice is None
             or not doctor_access_in_force(
                 doctor,
+                purpose=purpose,
                 _ownership=ownership,
                 _practice_id=link.practice_id,
             )
@@ -385,7 +396,10 @@ def _locked_provider(session, *, expected, doctor_id, args):
             or member.practice_id != link.practice_id
             or practice[0] != link.practice_id
             or not doctor_access_in_force(
-                doctor, _ownership=ownership, _practice_id=link.practice_id
+                doctor,
+                purpose=args.get("purpose", "process"),
+                _ownership=ownership,
+                _practice_id=link.practice_id,
             )
         ):
             raise authority.AuthorityRequestDeniedError
@@ -566,7 +580,7 @@ def read_discovery(
                     tenant_ref=request.expected_tenant_ref,
                     settings=authority_settings,
                 )
-                connection, doctor_id = _provider(session, **arguments)
+                connection, doctor_id = _provider(session, purpose="read", **arguments)
                 if isinstance(request, ConnectedRequest) and (
                     request.expected_actor_ref != connection.actor_ref
                     or request.connection_sha256 != connection.connection_sha256
@@ -584,7 +598,10 @@ def read_discovery(
                 if session.new or session.dirty or session.deleted:
                     raise RecordUnavailable
                 session.expire_all()
-                if _provider(session, **arguments) != (connection, doctor_id):
+                if _provider(session, purpose="read", **arguments) != (
+                    connection,
+                    doctor_id,
+                ):
                     raise authority.AuthorityRequestDeniedError
                 if session.new or session.dirty or session.deleted:
                     raise RecordUnavailable

@@ -124,6 +124,7 @@ from app.services.reference_links import (
     resource_links_for,
 )
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
+from app.services.scribe_cancellation_access import doctor_cancellation_denial
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
     RecordGrantConfigurationError,
@@ -1167,7 +1168,9 @@ def _platform_admin_capability_active(request: Request) -> bool:
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     view_as_active = getattr(request.state, "view_as", None) is not None
-    access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    access_decision = resolve_doctor_access(
+        doctor, require_entitlement=False, purpose="read"
+    )
     session_prep_access_decision = (
         session_prep_provider_access.resolve_session_prep_provider_access(doctor)
     )
@@ -1231,6 +1234,7 @@ def settings_data(request: Request) -> SettingsData:
         practice_ready=_practice_ready(doctor, decision=access_decision),
         billing_recovery_required=(
             access_decision.allowed
+            and doctor_cancellation_denial(doctor) is None
             and access_decision.authorization_basis != "pilot_grant"
             and not access_decision.entitlement_in_force
         ),

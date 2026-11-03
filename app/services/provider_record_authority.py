@@ -70,7 +70,9 @@ class SessionPrepProviderScopeUnavailable(ProviderRecordScopeDenied):
 def _current_practice(session: Session, doctor: Doctor) -> Practice:
     """Resolve the existing provider-product policy used by Scribe capture."""
     now = datetime.now(UTC)
-    if doctor.deleted_at is not None or not doctor_access_in_force(doctor, at=now):
+    if doctor.deleted_at is not None or not doctor_access_in_force(
+        doctor, at=now, purpose="read"
+    ):
         raise ProviderRecordScopeDenied
     rows = session.exec(
         select(PracticeMember, Practice)

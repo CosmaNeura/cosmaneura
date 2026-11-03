@@ -321,6 +321,17 @@ class NativeCaptureRequest(BaseModel):
         return self
 
 
+def _native_access_purpose(data: NativeCaptureRequest) -> Literal["process", "read"]:
+    if (
+        data.action == "workflow_notes"
+        and data.note_request is not None
+        and data.note_request.action
+        in {"read", "templates", "template_preference", "save_status"}
+    ):
+        return "read"
+    return "process"
+
+
 async def execute_native_capture(
     *,
     issuer: str,
@@ -697,6 +708,7 @@ async def execute_native_capture(
         client_turn_id=turn,
         settings=authority_settings,
         capture_settings=capture_settings,
+        access_purpose=_native_access_purpose(data),
     )
     if data.action in {"fresh_admission", "workflow_admission"}:
         # Only the server-to-server receiver sends this action. Keep issuance,
@@ -735,6 +747,7 @@ async def execute_native_capture(
                 workspace_id=data.workspace_id,
                 appointment_ref=first["appointment_ref"],
                 request_nonce=data.request_nonce,
+                purpose="read",
             )
         binding = snapshot.binding_ref
         last = current()
