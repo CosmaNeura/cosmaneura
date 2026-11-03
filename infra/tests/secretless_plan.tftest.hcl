@@ -146,6 +146,7 @@ override_data {
       ENCRYPTION_KEY                             = "not-a-secret"
       ENTRA_TENANT_ID                            = "00000000-0000-0000-0000-000000000000"
       SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED     = "false"
+      HELD_MEDICATION_WRITES_ENABLED             = "false"
       INTAKE_CHAT_DOMAIN                         = "example.invalid"
       LOG_LEVEL                                  = "info"
       PORT                                       = "80"
@@ -222,6 +223,14 @@ run "secretless_static_plan" {
   variables {
     adopt_existing_production_postgres_egress_rule = false
     production_container_apps_egress_ipv4          = "198.51.100.10"
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.app, azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "AUTO_MIGRATE_ON_STARTUP"]) == "false"
+    ])
+    error_message = "All production runtimes must leave schema upgrades to the owned migration job even with Session Prep disabled"
   }
 
   assert {
@@ -302,6 +311,14 @@ run "session_prep_activation_projects_complete_worker_runtime" {
 
   assert {
     condition = alltrue([
+      for workload in [azurerm_container_app.app, azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "AUTO_MIGRATE_ON_STARTUP"]) == "false"
+    ])
+    error_message = "Session Prep activation must not restore startup migrations on any production runtime"
+  }
+
+  assert {
+    condition = alltrue([
       for workload in [azurerm_container_app.app, azurerm_container_app.worker] :
       one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "AUTHORITY_KERNEL_ENABLED"]) == "true"
     ])
@@ -329,6 +346,18 @@ run "session_prep_activation_projects_complete_worker_runtime" {
     )
     error_message = "Agent API identity and record-grant capability must remain API-only"
   }
+}
+
+run "reject_generic_startup_migration_override" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_public_vars                             = ["AUTO_MIGRATE_ON_STARTUP"]
+  }
+
+  expect_failures = [var.python_public_vars]
 }
 
 run "scribe_core_native_independent_projection" {
@@ -606,6 +635,7 @@ run "core_cab_api_only_configured_projection" {
         EMAIL_FROM_ADDRESS                         = "noreply@example.invalid"
         ENCRYPTION_KEY                             = "not-a-secret"
         ENTRA_TENANT_ID                            = "00000000-0000-0000-0000-000000000000"
+        HELD_MEDICATION_WRITES_ENABLED             = "false"
         INTAKE_CHAT_DOMAIN                         = "example.invalid"
         LOG_LEVEL                                  = "info"
         PORT                                       = "80"

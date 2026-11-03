@@ -23,6 +23,12 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import session_prep_production_frontend_admission as frontend_admission
+from production_saved_image_identity import (
+    ImageIdentityRefused,
+    published_manifest_identity,
+    saved_image_identity,
+)
 from superadmin_capability_config_preflight import (
     _clerk_issuer_from_publishable_key,
 )
@@ -105,7 +111,7 @@ def read_json(path: Path) -> Any:
         return decode(stream.read(MAX_JSON + 1))
 
 
-def command(args: list[str], *, github: bool = False) -> bytes:
+def command(args: list[str], *, github: bool = False, timeout: int = 60) -> bytes:
     # Keep normal client caches; never forward upstream build/1Password capabilities.
     allowed = ("HOME", "PATH", "TMPDIR", "LANG", "LC_ALL")
     if args[0] in {"docker", "az"}:
@@ -128,7 +134,7 @@ def command(args: list[str], *, github: bool = False) -> bytes:
             stderr=subprocess.DEVNULL,
             env=environment,
             check=False,
-            timeout=60,
+            timeout=timeout,
         )
         require(result.returncode == 0)
         output.seek(0)
@@ -176,7 +182,9 @@ def source_context() -> dict[str, Any]:
     }
 
 
-def public_configuration(value: Any) -> dict[str, str]:
+def public_configuration(
+    value: Any, source_sha: str | None = None, admission_path: Path | None = None
+) -> dict[str, str]:
     config = object_fields(value, set(PUBLIC_KEYS))
     require(
         all(
@@ -191,8 +199,12 @@ def public_configuration(value: Any) -> dict[str, str]:
     require(config["VITE_PYTHON_URL"] == "https://app.cosmaneura.com/")
     require(config["VITE_INTAKE_CHAT_DOMAIN"] == "chat.cosmaneura.com")
     require(config["VITE_SOVEREIGN_PROVIDER_URL"] == "https://sovereign.cosmaneura.com")
-    # Preserve dark admission; PR896 needs separate explicit composition.
-    require(config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "false")
+    flag = config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"]
+    require(flag in {"false", "true"})
+    if flag == "true":
+        if source_sha is None or admission_path is None:
+            raise CandidateRefused("production_core_candidate_refused")
+        frontend_admission.verify(canonical(config), admission_path, source_sha)
     issuer = _clerk_issuer_from_publishable_key(
         config["VITE_CLERK_PUBLIC_KEY"], environment="production"
     )
@@ -242,7 +254,7 @@ def panel_identity(assets: Path) -> dict[str, str]:
 
 
 def manifest_identity(
-    raw: bytes, expected: str, image_config: dict[str, Any] | None = None
+    raw: bytes, expected: str, saved_identity: dict[str, Any] | None = None
 ) -> None:
     require(type(expected) is str and DIGEST.fullmatch(expected))
     # Buildx may append one LF; only exact digest-matching bytes are admitted.
@@ -257,8 +269,11 @@ def manifest_identity(
     config = manifest.get("config")
     require(type(config) is dict and DIGEST.fullmatch(config.get("digest", "")))
     require(type(manifest.get("layers")) is list and manifest["layers"])
-    if image_config is not None:
-        require(config["digest"] == image_config["Id"])
+    if saved_identity is not None:
+        try:
+            published_manifest_identity(raw, expected, saved_identity)
+        except ImageIdentityRefused:
+            raise CandidateRefused("production_core_candidate_refused") from None
 
 
 def image_source(context: dict[str, Any], image_config: dict[str, Any]) -> None:
@@ -281,6 +296,20 @@ def image_source(context: dict[str, Any], image_config: dict[str, Any]) -> None:
     )
 
 
+def exported_identity(image_config: dict[str, Any]) -> dict[str, Any]:
+    """Read immutable local image bytes before any registry mutation."""
+    with tempfile.TemporaryDirectory() as directory:
+        archive = Path(directory) / "image.tar"
+        command(
+            ["docker", "image", "save", "--output", str(archive), image_config["Id"]],
+            timeout=900,
+        )
+        try:
+            return saved_image_identity(archive, image_config)
+        except ImageIdentityRefused:
+            raise CandidateRefused("production_core_candidate_refused") from None
+
+
 def compiled_assets(assets: Path, image_assets: Path) -> tuple[str, dict[str, str]]:
     assets_digest = asset_tree(assets)
     require(asset_tree(image_assets) == assets_digest)
@@ -295,36 +324,47 @@ def candidate_record(
     assets_digest: str,
     panel: dict[str, str],
     image_digest: str,
+    saved_identity: dict[str, Any],
+    admission_path: Path | None = None,
 ) -> dict[str, Any]:
-    config = public_configuration(config)
-    manifest_identity(manifest, image_digest, image_config)
+    config = public_configuration(config, context["source_sha"], admission_path)
+    enabled = config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "true"
+    manifest_identity(manifest, image_digest, saved_identity)
     image_source(context, image_config)
     record = {
-        "schema_version": 1,
+        "schema_version": 2 if enabled else 1,
         "purpose": "verified-production-core-candidate",
         "repository": REPOSITORY,
         "workflow_ref": WORKFLOW_REF,
         **context,
         "image": IMAGE + "@" + image_digest,
-        "image_config_digest": image_config["Id"],
+        "image_config_digest": saved_identity["config_digest"],
         "public_configuration_digest": digest(canonical(config)),
         "frontend_assets_digest": assets_digest,
         "panel": panel,
-        "frontend_authority_enabled": False,
+        "frontend_authority_enabled": enabled,
     }
+    if enabled:
+        if admission_path is None:
+            raise CandidateRefused("production_core_candidate_refused")
+        record["frontend_admission"] = decode(
+            frontend_admission.read_file(admission_path)
+        )
     return validate_record(record, context, context["run_id"], context["run_attempt"])
 
 
 def validate_record(
     record: Any, context: dict[str, Any], run_id: int, attempt: int
 ) -> dict[str, Any]:
-    record = object_fields(
-        record,
-        set(
-            "schema_version purpose repository workflow_ref source_sha source_tree run_id run_attempt image image_config_digest public_configuration_digest frontend_assets_digest panel frontend_authority_enabled".split()
-        ),
+    require(type(record) is dict)
+    schema = record.get("schema_version")
+    require(type(schema) is int and schema in {1, 2})
+    keys: set[str] = set(
+        "schema_version purpose repository workflow_ref source_sha source_tree run_id run_attempt image image_config_digest public_configuration_digest frontend_assets_digest panel frontend_authority_enabled".split()
     )
-    require(type(record["schema_version"]) is int and record["schema_version"] == 1)
+    if schema == 2:
+        keys.add("frontend_admission")
+    record = object_fields(record, keys)
     require(record["purpose"] == "verified-production-core-candidate")
     require(
         record["repository"] == REPOSITORY and record["workflow_ref"] == WORKFLOW_REF
@@ -359,7 +399,16 @@ def validate_record(
         panel["integrity"]
         == "sha256-" + base64.b64encode(bytes.fromhex(panel["sha256"])).decode()
     )
-    require(record["frontend_authority_enabled"] is False)
+    if schema == 1:
+        require(record["frontend_authority_enabled"] is False)
+    else:
+        require(record["frontend_authority_enabled"] is True)
+        frontend_admission.verify_authenticated_receipt(
+            record["frontend_admission"],
+            record["public_configuration_digest"].removeprefix("sha256:"),
+            context["source_sha"],
+            run_id,
+        )
     return record
 
 
@@ -524,9 +573,13 @@ def retention(tag: str, image_digest: str) -> None:
         )
 
 
-def publish(config_path: Path, output: Path) -> None:
+def publish(
+    config_path: Path, output: Path, admission_path: Path | None = None
+) -> None:
     context = source_context()
-    config = public_configuration(read_json(config_path))
+    config = public_configuration(
+        read_json(config_path), context["source_sha"], admission_path
+    )
     local_image = "cosmaneura:" + context["source_sha"]
     inspected = decode(command(["docker", "image", "inspect", local_image]))
     require(type(inspected) is list and len(inspected) == 1)
@@ -534,9 +587,12 @@ def publish(config_path: Path, output: Path) -> None:
     if type(image_config) is not dict:
         raise CandidateRefused("production_core_candidate_refused")
     image_source(context, image_config)
+    saved_identity = exported_identity(image_config)
     # Verify exact stopped-image files; never execute the application.
     container = (
-        command(["docker", "create", "--network", "none", local_image]).decode().strip()
+        command(["docker", "create", "--network", "none", image_config["Id"]])
+        .decode()
+        .strip()
     )
     require(re.fullmatch(r"[0-9a-f]{64}", container))
     try:
@@ -551,7 +607,7 @@ def publish(config_path: Path, output: Path) -> None:
         f"upload-{context['run_id']}-{context['run_attempt']}-{context['source_sha']}"
     )
     tag = f"candidate-{context['source_sha']}-{context['run_id']}-{context['run_attempt']}"
-    command(["docker", "tag", local_image, IMAGE + ":" + upload])
+    command(["docker", "tag", image_config["Id"], IMAGE + ":" + upload])
     command(["docker", "push", IMAGE + ":" + upload])
     descriptor = decode(
         command(
@@ -578,7 +634,7 @@ def publish(config_path: Path, output: Path) -> None:
             IMAGE + "@" + image_digest,
         ]
     )
-    manifest_identity(manifest, image_digest, image_config)
+    manifest_identity(manifest, image_digest, saved_identity)
     # No-force import; protect/read back both tag and manifest before success.
     command(
         [
@@ -623,7 +679,15 @@ def publish(config_path: Path, output: Path) -> None:
         )
     retention(tag, image_digest)
     record = candidate_record(
-        context, config, manifest, image_config, assets_digest, panel, image_digest
+        context,
+        config,
+        manifest,
+        image_config,
+        assets_digest,
+        panel,
+        image_digest,
+        saved_identity,
+        admission_path,
     )
     require(source_context() == context)
     descriptor_file = os.open(
@@ -633,8 +697,14 @@ def publish(config_path: Path, output: Path) -> None:
         stream.write(canonical(record) + b"\n")
 
 
-def promotion_check(record: dict[str, Any], config: Any) -> str:
-    config = public_configuration(config)
+def promotion_check(
+    record: dict[str, Any], config: Any, admission_path: Path | None = None
+) -> str:
+    config = public_configuration(config, record["source_sha"], admission_path)
+    require(
+        record["frontend_authority_enabled"]
+        is (config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "true")
+    )
     require(digest(canonical(config)) == record["public_configuration_digest"])
     require(record["panel"] == panel_identity(ROOT / "web/public"))
     image_digest = record["image"].split("@")[1]
@@ -653,6 +723,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("context", "publish", "admit", "check"))
     parser.add_argument("--configuration", type=Path)
+    parser.add_argument("--frontend-admission", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--producer-run-id", type=int)
     parser.add_argument("--producer-attempt", type=int)
@@ -663,7 +734,7 @@ def main() -> int:
             source_context()
         elif args.mode == "publish":
             require(args.configuration is not None and args.output is not None)
-            publish(args.configuration, args.output)
+            publish(args.configuration, args.output, args.frontend_admission)
         else:
             run_id, attempt, artifact_id = (
                 positive(value)
@@ -676,7 +747,11 @@ def main() -> int:
             record = admit(run_id, attempt, artifact_id)
             if args.mode == "check":
                 require(args.configuration is not None)
-                print(promotion_check(record, read_json(args.configuration)))
+                print(
+                    promotion_check(
+                        record, read_json(args.configuration), args.frontend_admission
+                    )
+                )
     except (
         ValueError,
         KeyError,

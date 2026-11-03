@@ -76,6 +76,15 @@ independent same-chat final-source review are required before source acceptance.
 Native runtime, live production migration/configuration, and real cancellation
 acceptance remain separate gates. No live cancellation or destruction is run.
 
-The Session Prep aggregate preflight is qualified only with ledger readiness off.
-A ready ledger makes it refuse until the separate cancellation aggregate
-predicate is qualified; this interim guard never substitutes false eligibility.
+The separate Session Prep preflight companion preserves the existing query and
+version-1 report while ledger readiness is off. With readiness on, it requires
+the ledger migration and counts exact-Doctor processing cancellations before the
+original access gates, matching the pinned runtime even after the export window.
+Its version-2 report adds the cancellation denial and explicit ledger state;
+consumers must accept that version before using it as activation evidence.
+PostgreSQL query/runtime parity uses synthetic receipts inside rolled-back
+savepoints; it neither deletes immutable receipts nor changes live records.
+The aggregate query reconstructs the canonical `doctor_` TypeID from the native
+UUID column inside PostgreSQL. It compares that exact reference to the immutable
+ledger, retaining the runtime's exact-Doctor scope and cancellation-first order;
+neither the UUID nor the reference is projected into the aggregate report.
