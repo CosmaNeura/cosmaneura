@@ -1,16 +1,15 @@
-import copy
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-import app.services.session_prep_provider_access as provider_access
 from app.services.organization_access import (
     RosterApprovalInput,
     claim_roster_access,
     configure_provider_organization,
     import_roster_approvals,
+    revoke_roster_access,
 )
 from app.services.session_prep_provider_access import (
     resolve_session_prep_provider_access,
@@ -57,7 +56,7 @@ def _pilot_grant(
         source_sha256="a" * 64,
         grant_plan_sha256="b" * 64,
         granted_by_ref="test-suite",
-        grant_reason="Verify active-account Session Prep access",
+        grant_reason="Prove pilot access cannot replace Session Prep prerequisites",
         granted_at=granted_at if granted_at is not None else now - timedelta(minutes=1),
     ).save()
 
@@ -92,7 +91,7 @@ def _rostered_provider(
         slug=f"session-prep-{label}-{secrets.token_hex(5)}",
         email_domain=domain,
         operator_ref="test-session-prep-roster",
-        reason="Verify MCD account access for Session Prep",
+        reason="Verify MCD roster eligibility for Session Prep",
         now=now,
     )
     if expires_at is None:
@@ -125,7 +124,7 @@ def _rostered_provider(
     return doctor, practice
 
 
-def test_active_account_with_current_practice_is_allowed() -> None:
+def test_current_onboarded_provider_with_full_access_is_allowed() -> None:
     doctor = _doctor("allowed")
     practice = provision_practice_in_force(doctor)
 
@@ -137,19 +136,24 @@ def test_active_account_with_current_practice_is_allowed() -> None:
     assert decision.practice.id == practice.id
 
 
-def test_active_new_account_needs_no_onboarding_or_practice() -> None:
-    doctor = _doctor("new-no-practice", onboarded=False)
+def test_current_mcd_roster_provider_is_allowed() -> None:
+    now = datetime.now(UTC)
+    doctor, practice = _rostered_provider("allowed", now=now)
 
-    decision = resolve_session_prep_provider_access(doctor)
+    decision = resolve_session_prep_provider_access(
+        doctor,
+        at=now + timedelta(seconds=2),
+    )
 
     assert decision.allowed is True
     assert decision.denial_reason is None
-    assert decision.practice is None
+    assert decision.practice is not None
+    assert decision.practice.id == practice.id
 
 
-def test_expired_mcd_roster_does_not_disable_the_account() -> None:
+def test_expired_mcd_roster_provider_is_denied() -> None:
     now = datetime.now(UTC)
-    doctor, practice = _rostered_provider(
+    doctor, _ = _rostered_provider(
         "expired",
         now=now,
         expires_at=now + timedelta(minutes=5),
@@ -160,139 +164,113 @@ def test_expired_mcd_roster_does_not_disable_the_account() -> None:
         at=now + timedelta(minutes=6),
     )
 
-    assert decision.allowed is True
-    assert decision.denial_reason is None
-    assert decision.practice is not None
-    assert decision.practice.id == practice.id
+    assert decision.allowed is False
+    assert decision.denial_reason == "practice_access_not_authorized"
 
 
-def test_null_practice_legacy_grant_needs_no_membership() -> None:
-    doctor = _doctor("legacy-null-practice")
+def test_revoked_mcd_roster_provider_is_denied() -> None:
+    now = datetime.now(UTC)
+    doctor, practice = _rostered_provider("revoked", now=now)
+    revoke_roster_access(
+        practice,
+        doctor.email or "",
+        operator_ref="test-session-prep-roster",
+        reason="Verify revoked MCD roster access stays closed",
+        now=now + timedelta(minutes=1),
+    )
+
+    decision = resolve_session_prep_provider_access(
+        doctor,
+        at=now + timedelta(minutes=2),
+    )
+
+    assert decision.allowed is False
+    assert decision.denial_reason == "provider_unavailable"
+
+
+def test_completed_onboarding_is_required_even_with_current_practice_access() -> None:
+    doctor = _doctor("incomplete", onboarded=False)
+    provision_practice_in_force(doctor)
+
+    decision = resolve_session_prep_provider_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.denial_reason == "onboarding_incomplete"
+
+
+def test_pilot_grant_cannot_replace_practice_membership() -> None:
+    doctor = _doctor("pilot-no-membership")
     _pilot_grant(doctor)
 
     decision = resolve_session_prep_provider_access(doctor)
 
-    assert decision.allowed is True
-    assert decision.denial_reason is None
-    assert decision.practice is None
+    assert decision.allowed is False
+    assert decision.denial_reason == "practice_membership_required"
 
 
-def test_practice_baa_and_authorized_membership_do_not_gate_active_account() -> None:
-    doctor = _doctor("no-baa")
+def test_pilot_grant_cannot_replace_baa_or_authorized_membership() -> None:
+    doctor = _doctor("pilot-no-baa")
     practice = Practice(
         legal_name="Session Prep no-BAA practice",
         join_code=f"S{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
-        billing_exempt=False,
+        billing_exempt=True,
     ).save()
     save_practice_member(
         PracticeMember(
             practice_id=practice.id,
             doctor_id=doctor.id,
             role="workforce",
-            attested_at=None,
+            attested_at=datetime.now(UTC),
+            attestation_name="Test Clinician",
         )
     )
+    _pilot_grant(doctor, practice=practice)
 
     decision = resolve_session_prep_provider_access(doctor)
 
-    assert decision.allowed is True
-    assert decision.denial_reason is None
-    assert decision.practice is not None
-    assert decision.practice.id == practice.id
+    assert decision.allowed is False
+    assert decision.denial_reason == "baa_not_in_force"
 
 
-def test_expired_trial_does_not_gate_active_account() -> None:
-    doctor = _doctor("expired-trial")
-    practice = provision_practice_in_force(doctor)
-    practice.billing_exempt = False
-    practice.billing_exempt_until = None
-    practice.trial_ends_at = datetime.now(UTC) - timedelta(minutes=1)
-    practice.subscription_status = None
-    practice.save()
-
-    decision = resolve_session_prep_provider_access(doctor)
-
-    assert decision.allowed is True
-    assert decision.denial_reason is None
-    assert decision.practice is not None
-    assert decision.practice.id == practice.id
-
-
-def test_membership_revocation_does_not_replace_account_status() -> None:
-    doctor = _doctor("revoked-membership")
+def test_revoked_membership_is_denied() -> None:
+    doctor = _doctor("revoked")
     provision_practice_in_force(doctor)
     member = PracticeMember.one(doctor_id=doctor.id)
     now = datetime.now(UTC)
     member.access_revoked_at = now
     member.access_revoked_by_ref = "test-suite"
-    member.access_revocation_reason = "Test practice revocation"
+    member.access_revocation_reason = "Test revocation"
     member.access_records_retain_until = now + timedelta(days=2922)
     save_practice_member(member)
 
     decision = resolve_session_prep_provider_access(doctor)
 
-    assert decision.allowed is True
-    assert decision.denial_reason is None
+    assert decision.allowed is False
+    assert decision.denial_reason == "practice_membership_inactive"
 
 
-@pytest.mark.parametrize(
-    "legacy_state",
-    ["missing", "unbound_practice", "other_practice", "future", "email", "doctor"],
-)
-def test_legacy_grant_metadata_is_not_an_enrollment_gate(legacy_state: str) -> None:
-    doctor = _doctor(f"legacy-{legacy_state}")
-    practice = provision_practice_in_force(doctor)
-    practice.billing_exempt = False
-    practice.billing_exempt_until = None
-    practice.trial_ends_at = None
-    practice.subscription_status = None
-    practice.save()
-    if legacy_state != "missing":
-        grant_practice = None if legacy_state == "unbound_practice" else practice
-        if legacy_state == "other_practice":
-            grant_practice = provision_practice_in_force(_doctor("other-practice"))
-        _pilot_grant(
-            doctor,
-            practice=grant_practice,
-            snapshot_doctor=(
-                _doctor("other-doctor") if legacy_state == "doctor" else None
-            ),
-            granted_at=(
-                datetime.now(UTC) + timedelta(days=1)
-                if legacy_state == "future"
-                else None
-            ),
-        )
-        if legacy_state == "email":
-            doctor.email = f"changed-{secrets.token_hex(4)}@example.com"
-            doctor.save()
-
-    decision = resolve_session_prep_provider_access(doctor)
-
-    assert decision.allowed is True
-    assert decision.denial_reason is None
-
-
-def test_retired_pilot_grant_does_not_disable_an_active_account() -> None:
+def test_revoked_pilot_tombstone_remains_a_hard_denial() -> None:
     doctor = _doctor("revoked-pilot")
+    provision_practice_in_force(doctor)
     grant = _pilot_grant(doctor)
     now = datetime.now(UTC)
     grant.revoked_at = now
     grant.revoked_by_ref = "test-suite"
-    grant.revocation_reason = "Test account stop"
+    grant.revocation_reason = "Test revocation"
     grant.revocation_plan_sha256 = "c" * 64
     grant.retain_until = now + timedelta(days=2922)
     grant.save()
 
     decision = resolve_session_prep_provider_access(doctor)
 
-    assert decision.allowed is True
-    assert decision.denial_reason is None
+    assert decision.allowed is False
+    assert decision.denial_reason == "pilot_grant_revoked"
 
 
-def test_active_replacement_is_also_ignored_as_enrollment_metadata() -> None:
+def test_active_replacement_clears_historical_pilot_tombstone() -> None:
     doctor = _doctor("replacement-pilot")
+    provision_practice_in_force(doctor)
     revoked = _pilot_grant(doctor)
     now = datetime.now(UTC)
     revoked.revoked_at = now
@@ -309,49 +287,64 @@ def test_active_replacement_is_also_ignored_as_enrollment_metadata() -> None:
     assert decision.denial_reason is None
 
 
-def test_fresh_deleted_state_overrides_stale_active_input() -> None:
-    doctor = _doctor("fresh-delete", onboarded=False)
-    stale = copy.deepcopy(doctor)
-    doctor.deleted_at = datetime.now(UTC)
-    doctor.save()
-    assert stale.deleted_at is None
-
-    decision = resolve_session_prep_provider_access(stale)
-
-    assert decision.allowed is False
-    assert decision.denial_reason == "provider_unavailable"
-
-
-def test_nonpersisted_provider_is_unavailable() -> None:
-    doctor = Doctor(
-        clerk_id="user_session_prep_missing_provider",
-        email="session-prep-missing-provider@example.com",
-        biography="",
-    )
+def test_current_pilot_grant_covers_only_its_authorized_practice_entitlement() -> None:
+    doctor = _doctor("pilot-unentitled")
+    practice = provision_practice_in_force(doctor)
+    practice.billing_exempt = False
+    practice.billing_exempt_until = None
+    practice.trial_ends_at = None
+    practice.subscription_status = None
+    practice.save()
+    _pilot_grant(doctor, practice=practice)
 
     decision = resolve_session_prep_provider_access(doctor)
 
-    assert decision.allowed is False
-    assert decision.denial_reason == "provider_unavailable"
+    assert decision.allowed is True
+    assert decision.denial_reason is None
+    assert decision.practice is not None
+    assert decision.practice.id == practice.id
 
 
 @pytest.mark.parametrize(
-    "denial",
-    ["scribe_cancelled_read_only", "scribe_export_period_expired"],
+    "invalid",
+    ["missing", "unbound_practice", "other_practice", "future", "email", "doctor"],
 )
-def test_fresh_cancellation_state_refreezes_previously_active_account(
-    denial: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    doctor = _doctor(f"cancel-{denial}", onboarded=False)
-    assert resolve_session_prep_provider_access(doctor).allowed is True
-    monkeypatch.setattr(
-        provider_access,
-        "doctor_cancellation_denial",
-        lambda *_args, **_kwargs: denial,
-    )
+def test_pilot_entitlement_requires_current_bound_grant(invalid: str) -> None:
+    doctor = _doctor(f"pilot-invalid-{invalid}")
+    practice = provision_practice_in_force(doctor)
+    practice.billing_exempt = False
+    practice.billing_exempt_until = None
+    practice.trial_ends_at = None
+    practice.subscription_status = None
+    practice.save()
+    if invalid != "missing":
+        grant_practice = None if invalid == "unbound_practice" else practice
+        if invalid == "other_practice":
+            grant_practice = provision_practice_in_force(_doctor("other-practice"))
+        _pilot_grant(
+            doctor,
+            practice=grant_practice,
+            snapshot_doctor=_doctor("other-doctor") if invalid == "doctor" else None,
+            granted_at=(
+                datetime.now(UTC) + timedelta(days=1) if invalid == "future" else None
+            ),
+        )
+        if invalid == "email":
+            doctor.email = f"changed-{secrets.token_hex(4)}@example.com"
+            doctor.save()
 
     decision = resolve_session_prep_provider_access(doctor)
 
     assert decision.allowed is False
-    assert decision.denial_reason == denial
+    assert decision.denial_reason == "entitlement_not_in_force"
+
+
+def test_current_practice_pilot_does_not_complete_onboarding() -> None:
+    doctor = _doctor("pilot-unonboarded", onboarded=False)
+    practice = provision_practice_in_force(doctor)
+    _pilot_grant(doctor, practice=practice)
+
+    decision = resolve_session_prep_provider_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.denial_reason == "onboarding_incomplete"
