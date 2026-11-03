@@ -118,7 +118,7 @@ async def test_tokens_origin_path_stream_and_core_denial_remain_separate():
         )
 
     gateway = bundle.CoreBundleGateway(core)
-    gateway.process = SimpleNamespace(returncode=None)
+    gateway.process = SimpleNamespace(poll=lambda: None)
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as child:
         gateway.client = child
         async with httpx.AsyncClient(
@@ -153,7 +153,7 @@ async def test_tokens_origin_path_stream_and_core_denial_remain_separate():
 @pytest.mark.asyncio
 async def test_connection_cannot_remove_authority_headers():
     gateway = bundle.CoreBundleGateway(FastAPI())
-    gateway.process = SimpleNamespace(returncode=None)
+    gateway.process = SimpleNamespace(poll=lambda: None)
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: pytest.fail("no child call"))
     ) as child:
@@ -185,17 +185,36 @@ def test_lifespan_preserves_core_and_stops_child(monkeypatch):
             events.append("child-term")
             self.returncode = 0
 
-        async def wait(self):
+        def poll(self):
             return self.returncode
 
-    async def spawn(*arguments, **kwargs):
-        assert arguments == (bundle.PYTHON, bundle.CHILD_SCRIPT, "api")
+        def wait(self, **kwargs):
+            assert kwargs == {"timeout": 20}
+            return self.returncode
+
+    def spawn(arguments, **kwargs):
+        assert arguments == [bundle.PYTHON, bundle.CHILD_SCRIPT, "api"]
         assert kwargs["user"] == 10001 and kwargs["group"] == 10001
+        assert kwargs["cwd"] == "/opt/scribe"
+        assert (
+            kwargs["stdin"]
+            == kwargs["stdout"]
+            == kwargs["stderr"]
+            == bundle.subprocess.DEVNULL
+        )
+        assert kwargs["env"] == bundle.child_environment("api", environment())
         events.append("child-start")
         return Process()
 
     client_type = httpx.AsyncClient
-    monkeypatch.setattr(bundle.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(
+        bundle.asyncio,
+        "create_subprocess_exec",
+        lambda *_args, **_kwargs: pytest.fail(
+            "uvloop transport must not receive user/group"
+        ),
+    )
+    monkeypatch.setattr(bundle.subprocess, "Popen", spawn)
     monkeypatch.setattr(
         bundle.httpx,
         "AsyncClient",
@@ -203,10 +222,55 @@ def test_lifespan_preserves_core_and_stops_child(monkeypatch):
             transport=httpx.MockTransport(lambda _: httpx.Response(204)), **kwargs
         ),
     )
-    monkeypatch.setattr(bundle, "child_environment", lambda _: {})
+    for key, value in environment().items():
+        monkeypatch.setenv(key, value)
     with TestClient(bundle.CoreBundleGateway(core)):
         pass
     assert events == ["core-start", "child-start", "child-term", "core-stop"]
+
+
+@pytest.mark.asyncio
+async def test_stop_api_child_kills_and_reaps_after_bounded_term_timeout():
+    events = []
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, signal):
+            assert signal == bundle.signal.SIGTERM
+            events.append("term")
+
+        def wait(self, **kwargs):
+            if kwargs:
+                assert kwargs == {"timeout": 20}
+                events.append("bounded-wait")
+                raise bundle.subprocess.TimeoutExpired("synthetic-process", 20)
+            events.append("reaped")
+            return self.returncode
+
+        def kill(self):
+            events.append("kill")
+            self.returncode = -9
+
+    await bundle.stop_child(Process())
+    assert events == ["term", "bounded-wait", "kill", "reaped"]
+
+
+@pytest.mark.asyncio
+async def test_exited_api_child_fails_closed_before_forwarding():
+    gateway = bundle.CoreBundleGateway(FastAPI())
+    gateway.process = SimpleNamespace(poll=lambda: 78)
+    gateway.client = SimpleNamespace()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gateway), base_url="https://core.example"
+    ) as client:
+        response = await client.get("/provider/v1/catalog")
+    assert (
+        response.status_code == 503 and response.headers["cache-control"] == "no-store"
+    )
 
 
 def test_disabled_worker_does_not_connect_or_spawn(monkeypatch):
