@@ -16,15 +16,17 @@ are fabricated.
 
 Release sequence:
 
-1. Merge the account-owned namespace, additive migration and Scribe continuity
-   change after independent review and required checks.
-2. Merge the own-record dashboard routing and active-account HTTP access change
-   after independent review and required checks. Deploy both in one canonical
-   staging candidate, preserving current runtime configuration and Scribe apps.
-3. Rehearse the actual staging schema through the current single Alembic head
+1. Merge the dormant account-owned namespace, additive migration and Scribe
+   continuity change after independent review and required checks.
+2. Merge the active-account policy together with its eligibility diagnostics
+   and native namespace cases after independent review and required checks.
+3. Merge the own-record dashboard routing and active-account HTTP access change
+   after independent review and required checks. Deploy all three in one
+   canonical staging candidate, preserving runtime configuration and Scribe apps.
+4. Rehearse the actual staging schema through the current single Alembic head
    on a new synthetic local database. Capture fresh staging identity,
    configuration, schema and recovery image evidence before dispatch.
-4. Verify John and dev under their own accounts: discovery, an existing owned
+5. Verify John and dev under their own accounts: discovery, an existing owned
    visit, prior notes, answer persistence/export and foreign-record denial.
    Verify view-as explains how to return to the account's own visits.
 

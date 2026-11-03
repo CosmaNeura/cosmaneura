@@ -105,9 +105,8 @@ def test_concurrent_review_actions_record_only_one_exact_revision():
 
 
 @pytest.mark.parametrize("via_http", [False, True])
-@pytest.mark.parametrize("account_active", [False, True])
-def test_account_state_is_rechecked_after_practice_lock_wait(
-    monkeypatch, via_http, account_active
+def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(
+    monkeypatch, via_http
 ):
     doctor = DoctorFactory.build(onboarding_completed_at=datetime.now(UTC)).save()
     practice = provision_practice_in_force(doctor)
@@ -157,9 +156,6 @@ def test_account_state_is_rechecked_after_practice_lock_wait(
                         "record_ref": str(appointment.id),
                     },
                 )
-            if account_active:
-                assert response.status_code == 201
-                return "accepted"
             assert response.status_code == 403, response.text
             assert response.json()["code"] == "REQUEST_DENIED"
             return "denied"
@@ -203,7 +199,7 @@ def test_account_state_is_rechecked_after_practice_lock_wait(
                 sleep(0.02)
             # This is the organization's established Practice -> Doctor order.
             # Doctor-first exchange would already hold this row and fail NOWAIT.
-            current_doctor = session.exec(
+            session.exec(
                 select(Doctor)
                 .where(col(Doctor.id) == doctor.id)
                 .with_for_update(nowait=True)
@@ -213,15 +209,8 @@ def test_account_state_is_rechecked_after_practice_lock_wait(
             ).one()
             member.seat_state = "inactive"
             session.add(member)
-            # Ending a practice seat does not deactivate an account's own
-            # Session Prep. Actual account deactivation still denies exchange.
-            if not account_active:
-                current_doctor.deleted_at = datetime.now(UTC)
-                session.add(current_doctor)
             session.commit()
-            assert future.result(timeout=5) == (
-                "accepted" if account_active else "denied"
-            )
+            assert future.result(timeout=5) == "denied"
         finally:
             session.rollback()
-    assert ProviderRecordAuthority.count() == (1 if account_active else 0)
+    assert ProviderRecordAuthority.count() == 0
