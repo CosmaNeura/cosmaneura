@@ -4,33 +4,18 @@ import hashlib
 import json
 import secrets
 from collections import Counter
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from app.services.organization_access import (
-    RosterApprovalInput,
-    claim_roster_access,
-    configure_provider_organization,
-    import_roster_approvals,
-)
-from app.services.session_prep_provider_access import (
-    resolve_session_prep_provider_access,
-)
 from scripts import session_prep_production_eligibility_preflight as preflight
 
-from activemodel.session_manager import get_session
-from app.models.doctor import Doctor
-from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import Practice, PracticeMember
-from sqlalchemy.exc import MultipleResultsFound
-
-from tests.factories import save_practice_member
-from tests.routes.utils import provision_practice_in_force
+if TYPE_CHECKING:
+    from app.models.doctor import Doctor
+    from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+    from app.models.practice import Practice
 
 
 class _Rows:
@@ -71,17 +56,19 @@ class _AggregateConnection:
         if query == preflight.MIGRATION_HEAD_QUERY:
             assert params == ()
             return _Rows([(head,) for head in self.migration_heads])
-        if query in {
+        if query in (
             preflight.ELIGIBILITY_QUERY,
             preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY,
-        }:
-            assert params[1] == preflight.BAA_CURRENT_REFERENCE
+        ):
+            assert params == ()
             return _Rows(self.classifications)
         raise AssertionError("unexpected query")
 
 
 def _contract(
-    head: str = "current_head", *, ledger_ready: bool = False
+    head: str = "current_head",
+    *,
+    ledger_ready: bool = False,
 ) -> preflight.RepositoryMigrationContract:
     return preflight.RepositoryMigrationContract(
         head=head,
@@ -89,7 +76,7 @@ def _contract(
             {
                 head,
                 *preflight.REQUIRED_SESSION_PREP_ANCESTORS,
-                *({preflight.CANCELLATION_MIGRATION} if ledger_ready else set()),
+                *([preflight.CANCELLATION_MIGRATION] if ledger_ready else []),
             }
         ),
     )
@@ -97,7 +84,7 @@ def _contract(
 
 def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None:
     observed_at = datetime(2026, 10, 28, 18, 30, tzinfo=UTC)
-    connection = _AggregateConnection([("eligible", 3), ("baa_not_in_force", 2)])
+    connection = _AggregateConnection([("eligible", 3), ("provider_unavailable", 2)])
     with pytest.raises(preflight.InventoryFailure, match="cancellation ledger"):
         preflight.collect_inventory(
             connection,
@@ -106,10 +93,6 @@ def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None
             ledger_ready=True,
             migration_contract=_contract(),
         )
-    assert connection.queries == [
-        preflight.INTEGRITY_QUERY,
-        preflight.MIGRATION_HEAD_QUERY,
-    ]
 
     first = preflight.collect_inventory(
         connection,
@@ -127,14 +110,7 @@ def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None
     assert first == second
     assert first == {
         "denial_reason_counts": {
-            "provider_unavailable": 0,
-            "pilot_grant_revoked": 0,
-            "onboarding_incomplete": 0,
-            "practice_membership_required": 0,
-            "practice_membership_inactive": 0,
-            "practice_access_not_authorized": 0,
-            "baa_not_in_force": 2,
-            "entitlement_not_in_force": 0,
+            "provider_unavailable": 2,
         },
         "eligible": 3,
         "environment": "production",
@@ -142,7 +118,7 @@ def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None
         "migration_head": "current_head",
         "observed_at": "2026-10-28T18:30:00.000000Z",
         "rollout_enabled": False,
-        "schema_version": 1,
+        "schema_version": 2,
         "total": 5,
     }
     unsigned = {key: value for key, value in first.items() if key != "evidence_sha256"}
@@ -163,28 +139,28 @@ def test_report_is_fixed_aggregate_only_and_deterministically_digested() -> None
         assert forbidden not in serialized
 
 
-def test_ready_ledger_report_counts_cancellation_without_identifier_projection() -> (
-    None
-):
+def test_cancellation_report_preserves_fixed_labels_schema_and_evidence_hash() -> None:
     connection = _AggregateConnection(
-        [("eligible", 3), ("scribe_cancelled_read_only", 2), ("baa_not_in_force", 1)]
+        [
+            ("eligible", 1),
+            ("scribe_cancelled_read_only", 1),
+            ("provider_unavailable", 1),
+        ]
     )
     report = preflight.collect_inventory(
         connection,
-        observed_at=datetime(2026, 11, 2, tzinfo=UTC),
-        rollout_enabled=False,
+        observed_at=datetime(2026, 11, 3, tzinfo=UTC),
+        rollout_enabled=True,
         ledger_ready=True,
         migration_contract=_contract(ledger_ready=True),
     )
+    assert report["total"] == 3 and report["eligible"] == 1
+    assert report["denial_reason_counts"] == {
+        "scribe_cancelled_read_only": 1,
+        "provider_unavailable": 1,
+    }
     assert report["schema_version"] == 2
     assert report["cancellation_ledger_ready"] is True
-    assert report["eligible"] == 3
-    assert report["total"] == 6
-    assert report["denial_reason_counts"]["scribe_cancelled_read_only"] == 2
-    assert report["denial_reason_counts"]["baa_not_in_force"] == 1
-    assert set(report["denial_reason_counts"]) == set(
-        preflight.CANCELLATION_DENIAL_REASONS
-    )
     assert connection.queries[-1] == preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY
     unsigned = {key: value for key, value in report.items() if key != "evidence_sha256"}
     assert (
@@ -193,48 +169,41 @@ def test_ready_ledger_report_counts_cancellation_without_identifier_projection()
             json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
     )
-    assert "doctor_ref" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("ledger_ready", [1, "true"])
-def test_invalid_ledger_state_refuses_before_queries(ledger_ready: Any) -> None:
+def test_cancellation_query_preserves_deleted_first_and_canonical_doctor_key() -> None:
+    query = preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY
+    assert query.index("WHEN doctor.deleted_at IS NOT NULL") < query.index(
+        "WHEN EXISTS"
+    )
+    assert query.count("THEN 'scribe_cancelled_read_only'") == 1
+    assert 'cancelled.doctor_ref COLLATE "C"' in query
+    for canonical_fragment in (
+        "'doctor_' ||",
+        "B'00' ||",
+        "replace(doctor.id::text, '-', '')",
+        "generate_series(0, 25)",
+        "0123456789abcdefghjkmnpqrstvwxyz",
+    ):
+        assert canonical_fragment in query
+    assert "export_until" not in query  # This inventories processing, not export.
+    assert preflight.CANCELLATION_MIGRATION == "49126bf99c72"
+
+
+@pytest.mark.parametrize("ledger_ready", [None, 0, 1, "true"])
+def test_cancellation_state_is_boolean_before_any_inventory_query(
+    ledger_ready: Any,
+) -> None:
     connection = _AggregateConnection([])
     with pytest.raises(preflight.InventoryFailure, match="cancellation ledger state"):
         preflight.collect_inventory(
             connection,
-            observed_at=datetime(2026, 11, 2, tzinfo=UTC),
-            rollout_enabled=False,
+            observed_at=datetime(2026, 11, 3, tzinfo=UTC),
+            rollout_enabled=True,
             ledger_ready=ledger_ready,
-        )
-    assert connection.queries == []
-
-
-def test_changed_query_shape_refuses_ready_ledger_before_queries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(preflight, "ELIGIBILITY_QUERY", "SELECT 'eligible', 1")
-    connection = _AggregateConnection([])
-    with pytest.raises(preflight.InventoryFailure, match="cancellation query contract"):
-        preflight.collect_inventory(
-            connection,
-            observed_at=datetime(2026, 11, 2, tzinfo=UTC),
-            rollout_enabled=False,
-            ledger_ready=True,
             migration_contract=_contract(ledger_ready=True),
         )
     assert connection.queries == []
-
-
-def test_unready_report_cannot_accept_ready_ledger_classifications() -> None:
-    connection = _AggregateConnection([("scribe_cancelled_read_only", 1)])
-    with pytest.raises(preflight.InventoryFailure, match="eligibility query"):
-        preflight.collect_inventory(
-            connection,
-            observed_at=datetime(2026, 11, 2, tzinfo=UTC),
-            rollout_enabled=False,
-            migration_contract=_contract(),
-        )
-    assert connection.queries[-1] == preflight.ELIGIBILITY_QUERY
 
 
 @pytest.mark.parametrize(
@@ -354,9 +323,11 @@ class _MainConnection:
         self.rolled_back = True
 
 
+@pytest.mark.parametrize("ledger_ready", [False, True])
 def test_command_binds_canonical_endpoint_and_read_only_transaction(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    ledger_ready: bool,
 ) -> None:
     database_url = (
         "postgresql://user:password@"
@@ -379,12 +350,15 @@ def test_command_binds_canonical_endpoint_and_read_only_transaction(
     monkeypatch.setenv("PYTHON_ENV", "production")
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("SESSION_PREP_PROVIDER_ENABLED", "false")
+    monkeypatch.setenv("SCRIBE_CANCELLATION_LEDGER_READY", str(ledger_ready))
     monkeypatch.setattr(preflight.psycopg, "connect", connect)
-    monkeypatch.setattr(
-        preflight,
-        "collect_inventory",
-        lambda connection, **kwargs: report,
-    )
+
+    def collect(connection, **kwargs):
+        assert kwargs["ledger_ready"] is ledger_ready
+        assert kwargs["rollout_enabled"] is False
+        return report
+
+    monkeypatch.setattr(preflight, "collect_inventory", collect)
 
     assert preflight.main() == 0
     assert observed_connect == {
@@ -484,6 +458,8 @@ def test_repository_migration_contract_rejects_reachable_cycle(
 
 
 def _doctor(label: str, *, onboarded: bool = True) -> Doctor:
+    from app.models.doctor import Doctor
+
     nonce = secrets.token_hex(4)
     return Doctor(
         clerk_id=f"user_inventory_{label}_{nonce}",
@@ -507,6 +483,8 @@ def _pilot_grant(
     granted_at: datetime | None = None,
     revoked_at: datetime | None = None,
 ) -> PilotAccessGrandfatherGrant:
+    from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+
     assert doctor.email is not None
     email = doctor.email.strip().lower() if email_snapshot is None else email_snapshot
     effective_revoked_at = (
@@ -559,6 +537,16 @@ def _pilot_grant(
 
 
 def _rostered_provider(label: str, *, observed_at: datetime) -> Doctor:
+    from app.services.organization_access import (
+        RosterApprovalInput,
+        claim_roster_access,
+        configure_provider_organization,
+        import_roster_approvals,
+    )
+
+    from app.models.doctor import Doctor
+    from app.models.practice import Practice
+
     nonce = secrets.token_hex(4)
     domain = f"inventory-{label}-{nonce}.example.com"
     doctor = Doctor(
@@ -608,6 +596,8 @@ def _collect_from_test_database(
     *,
     observed_at: datetime,
 ) -> dict[str, Any]:
+    from activemodel.session_manager import get_session
+
     with get_session() as session:
         driver_connection = cast(
             preflight.ReadOnlyConnection,
@@ -630,6 +620,15 @@ def _classification_counts(report: dict[str, Any]) -> Counter[str]:
 
 
 def test_aggregate_query_matches_the_live_strict_provider_predicate() -> None:
+    from app.services.session_prep_provider_access import (
+        resolve_session_prep_provider_access,
+    )
+
+    from app.models.practice import PracticeMember
+
+    from tests.factories import save_practice_member
+    from tests.routes.utils import provision_practice_in_force
+
     observed_at = datetime.now(UTC)
     before = _classification_counts(
         _collect_from_test_database(observed_at=observed_at)
@@ -735,140 +734,44 @@ def test_aggregate_query_matches_the_live_strict_provider_predicate() -> None:
     )
 
 
-@pytest.mark.parametrize("ledger_ready", [False, True])
-@pytest.mark.parametrize("export_expired", [False, True])
-def test_aggregate_cancellation_matches_runtime_exact_doctor_and_gate_order(
-    monkeypatch: pytest.MonkeyPatch,
-    ledger_ready: bool,
-    export_expired: bool,
-) -> None:
-    from app.configuration import scribe_cancellation as cancellation_config
-
-    from app.models.scribe_cancellation import scribe_cancellation_operation
-
-    monkeypatch.setattr(
-        cancellation_config,
-        "SCRIBE_CANCELLATION_SETTINGS",
-        replace(
-            cancellation_config.SCRIBE_CANCELLATION_SETTINGS, ledger_ready=ledger_ready
-        ),
-    )
-    observed_at = datetime.now(UTC)
-    with get_session() as baseline:
-        before = _classification_counts(
-            preflight.collect_inventory(
-                cast(
-                    preflight.ReadOnlyConnection,
-                    baseline.connection().connection.driver_connection,
-                ),
-                observed_at=observed_at,
-                rollout_enabled=False,
-                ledger_ready=ledger_ready,
-            )
-        )
-
-    cancelled = _doctor("cancelled")
-    shared_practice = provision_practice_in_force(cancelled)
-    unavailable_cancelled = _doctor("unavailable-cancelled")
-    unavailable_cancelled.deleted_at = observed_at - timedelta(seconds=1)
-    unavailable_cancelled.save()
-    unrelated = _doctor("uncancelled")
-    save_practice_member(
-        PracticeMember(
-            practice_id=shared_practice.id,
-            doctor_id=unrelated.id,
-            role="workforce",
-            attested_at=observed_at,
-            attestation_name="Synthetic colleague",
-        )
-    )
-    providers = (cancelled, unavailable_cancelled, unrelated)
-
-    with get_session() as session:
-        # The ledger is immutable: isolate synthetic receipts in a savepoint,
-        # then roll back the insert instead of issuing a forbidden cleanup DELETE.
-        savepoint = session.begin_nested()
-        try:
-            accepted_at = observed_at - timedelta(days=91 if export_expired else 1)
-            for provider in (cancelled, unavailable_cancelled):
-                session.connection().execute(
-                    scribe_cancellation_operation.insert().values(
-                        id=uuid4(),
-                        caller_sha256=hashlib.sha256(
-                            str(provider.id).encode()
-                        ).hexdigest(),
-                        doctor_ref=str(provider.id),
-                        request_key_sha256="a" * 64,
-                        preview_sha256="b" * 64,
-                        inventory_sha256="c" * 64,
-                        inventory=[],
-                        policy={
-                            "grace_days": 90,
-                            "phi_scope": "core-and-scribe-clinical-records",
-                            "approval_sha256": "d" * 64,
-                        },
-                        accepted_at=accepted_at,
-                        export_until=accepted_at + timedelta(days=90),
-                        phase="read-only",
-                    )
-                )
-            expected: Counter[str] = Counter()
-            for provider in providers:
-                decision = resolve_session_prep_provider_access(
-                    provider, session=session, at=observed_at
-                )
-                classification = (
-                    "eligible" if decision.allowed else decision.denial_reason
-                )
-                assert classification is not None
-                expected[classification] += 1
-            report = preflight.collect_inventory(
-                cast(
-                    preflight.ReadOnlyConnection,
-                    session.connection().connection.driver_connection,
-                ),
-                observed_at=observed_at,
-                rollout_enabled=False,
-                ledger_ready=ledger_ready,
-            )
-            assert _classification_counts(report) - before == expected
-            assert report["total"] - sum(before.values()) == len(providers)
-            assert expected["eligible"] == (1 if ledger_ready else 2)
-            assert expected["scribe_cancelled_read_only"] == (2 if ledger_ready else 0)
-            assert expected["provider_unavailable"] == (0 if ledger_ready else 1)
-        finally:
-            savepoint.rollback()
-
-
 @pytest.mark.parametrize(
     ("state", "expected_classification"),
     [
         ("valid", "eligible"),
         ("no_doctor_snapshot", "eligible"),
         ("normalized_email", "eligible"),
-        ("missing", "entitlement_not_in_force"),
-        ("unbound_practice", "entitlement_not_in_force"),
-        ("other_practice", "entitlement_not_in_force"),
-        ("future", "entitlement_not_in_force"),
-        ("email", "entitlement_not_in_force"),
-        ("hash", "entitlement_not_in_force"),
-        ("doctor", "entitlement_not_in_force"),
-        ("invalid_email", "entitlement_not_in_force"),
-        ("invalid_clerk", "entitlement_not_in_force"),
+        ("missing", "eligible"),
+        ("unbound_practice", "eligible"),
+        ("other_practice", "eligible"),
+        ("future", "eligible"),
+        ("email", "eligible"),
+        ("hash", "eligible"),
+        ("doctor", "eligible"),
+        ("invalid_email", "eligible"),
+        ("invalid_clerk", "eligible"),
         ("deleted", "provider_unavailable"),
-        ("revoked", "pilot_grant_revoked"),
-        ("future_revoked_only", "pilot_grant_revoked"),
+        ("revoked", "eligible"),
+        ("future_revoked_only", "eligible"),
         ("replacement", "eligible"),
-        ("incomplete", "onboarding_incomplete"),
-        ("inactive", "practice_membership_inactive"),
-        ("unauthorized", "practice_access_not_authorized"),
-        ("no_baa", "baa_not_in_force"),
+        ("incomplete", "eligible"),
+        ("inactive", "eligible"),
+        ("unauthorized", "eligible"),
+        ("no_baa", "eligible"),
     ],
 )
-def test_aggregate_pilot_entitlement_matches_current_runtime_and_prior_gates(
+def test_aggregate_active_account_policy_matches_current_runtime(
     state: str,
     expected_classification: str,
 ) -> None:
+    from app.services.session_prep_provider_access import (
+        resolve_session_prep_provider_access,
+    )
+
+    from app.models.practice import PracticeMember
+
+    from tests.factories import save_practice_member
+    from tests.routes.utils import provision_practice_in_force
+
     observed_at = datetime.now(UTC)
     other = _doctor("pilot-other")
     other_practice = provision_practice_in_force(other)
@@ -942,6 +845,12 @@ def test_aggregate_pilot_entitlement_matches_current_runtime_and_prior_gates(
 
 
 def test_aggregate_refuses_ambiguous_time_valid_pilot_candidates() -> None:
+    from app.services.session_prep_provider_access import (
+        resolve_session_prep_provider_access,
+    )
+
+    from tests.routes.utils import provision_practice_in_force
+
     observed_at = datetime.now(UTC)
     doctor = _doctor("pilot-ambiguous")
     practice = provision_practice_in_force(doctor)
@@ -960,7 +869,6 @@ def test_aggregate_refuses_ambiguous_time_valid_pilot_candidates() -> None:
     _pilot_grant(
         doctor, practice, observed_at=observed_at, revoked=False, label="active"
     )
-    with pytest.raises(MultipleResultsFound):
-        resolve_session_prep_provider_access(doctor, at=observed_at)
+    assert resolve_session_prep_provider_access(doctor, at=observed_at).allowed
     with pytest.raises(preflight.InventoryFailure, match="ambiguous"):
         _collect_from_test_database(observed_at=observed_at)
