@@ -1097,8 +1097,8 @@ class SessionPrepSettingsData(BaseModel, extra="forbid"):
     """PHI-free discovery state for the current provider context.
 
     This is intentionally narrower than an execution authorization.
-    ``can_review_sources`` reflects the same current provider/practice/BAA/
-    entitlement gate as review execution. Session Prep read and review routes
+    ``can_review_sources`` reflects the same current active-account decision
+    as review execution. Session Prep read and review routes
     still re-resolve record and note ownership at request time.
     """
 

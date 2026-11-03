@@ -1,22 +1,27 @@
 """Fail-closed practice gate for the internal API.
 
-CLAUDE_BAA_IMPLEMENTATION guardrail 5 and ARCHITECTURE.md §8: no PHI-bearing
-feature is reachable by an account without a recorded BAA acceptance for its
-practice (or the negotiated-BAA-on-file fallback), an authorized membership,
-and entitlement (trial, subscription, or exemption — ADR 0017). Routes are
-gated by default so a future endpoint cannot ship ungated; the allowlist is
-the onboarding surface that must work before the BAA exists, and the
-internal-admin surface is governed by ``require_admin`` rather than by any
-customer's BAA.
+Ordinary PHI-bearing platform features require current practice access and
+entitlement. Routes are gated by default so a future endpoint cannot ship
+ungated. A closed list of Doctor-owned Session Prep reads and actions instead
+uses Session Prep's current active-account decision; those routes independently
+enforce exact record ownership and reject view-as. The onboarding allowlist must
+work before a practice exists, and the internal-admin surface is governed by
+``require_admin`` rather than by any customer's practice.
 
-Doctors predating practices are not exempt: on their next login the frontend
-routes them through practice creation and BAA acceptance (or an internal
-admin sets ``negotiated_baa_on_file``).
+No other Scribe, upload, billing, practice or clinical route inherits the
+Session Prep exception.
 """
 
 from fastapi import HTTPException, Request, status
 
+import app.configuration.session_prep as session_prep_configuration
+from app.routes.dependencies.session_prep_account import (
+    is_session_prep_active_account_route,
+)
 from app.services.doctor_access import resolve_doctor_access
+from app.services.session_prep_provider_access import (
+    resolve_session_prep_provider_access,
+)
 
 from app.models.doctor import Doctor
 
@@ -75,6 +80,22 @@ CANCELLATION_READ_ROUTE_NAMES = {
 }
 
 
+def _session_prep_active_account_route(
+    request: Request,
+    doctor: Doctor,
+) -> bool:
+    if getattr(
+        request.state, "view_as", None
+    ) is not None or not is_session_prep_active_account_route(
+        request,
+        rollout_enabled=(
+            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
+        ),
+    ):
+        return False
+    return resolve_session_prep_provider_access(doctor).allowed
+
+
 def require_practice_in_force(request: Request) -> None:
     route = request.scope.get("route")
     route_name = route.name if route is not None else None
@@ -87,6 +108,8 @@ def require_practice_in_force(request: Request) -> None:
         return
 
     doctor: Doctor = request.state.doctor
+    if _session_prep_active_account_route(request, doctor):
+        return
     decision = resolve_doctor_access(
         doctor,
         require_entitlement=route_name not in ENTITLEMENT_EXEMPT_ROUTE_NAMES,
