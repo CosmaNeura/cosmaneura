@@ -16,24 +16,22 @@ are fabricated.
 
 Release sequence:
 
-1. Merge the dormant account-owned namespace, additive migration and Scribe
-   continuity change after independent review and required checks.
-2. Merge the active-account policy together with its eligibility diagnostics
-   and native namespace cases after independent review and required checks.
-3. Merge the own-record dashboard routing and active-account HTTP access change
-   after independent review and required checks. Deploy all three in one
-   canonical staging candidate, preserving runtime configuration and Scribe apps.
-4. Rehearse the actual staging schema through the current single Alembic head
+1. Merge the account namespace, additive migration, active-account policy and
+   matching eligibility diagnostics after independent review and required checks.
+2. Merge the own-record dashboard routing, HTTP access and native account tests
+   after independent review and required checks. Deploy both in one canonical
+   staging candidate, preserving runtime configuration and Scribe apps.
+3. Rehearse the actual staging schema through the current single Alembic head
    on a new synthetic local database. Capture fresh staging identity,
    configuration, schema and recovery image evidence before dispatch.
-5. Verify John and dev under their own accounts: discovery, an existing owned
+4. Verify John and dev under their own accounts: discovery, an existing owned
    visit, prior notes, answer persistence/export and foreign-record denial.
    Verify view-as explains how to return to the account's own visits.
 
-Recovery: restore the previously verified Core image and its preserved runtime
-configuration. Keep the additive namespace column, constraints and new rows;
-do not drop or rewrite immutable ownership evidence. Existing Scribe
-applications and the provider service are not replaced by this release.
+Recovery: close Session Prep with its rollout flag and retain additive schema
+and immutable ownership evidence. After private namespaces are issued, use
+only account-namespace-compatible Core images; never restore older readers.
+No automatic image rollback runs; Scribe apps/provider service stay in place.
 
 Production activation requires a separate production deployment decision.
 Independent review evidence is pinned to the final source commits in the PRs.

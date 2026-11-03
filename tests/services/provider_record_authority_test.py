@@ -328,9 +328,9 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         tenant = AuthorityTenant.one(id=binding.tenant_id)
         tenant.status = "revoked"
         tenant.save()
-    if change == "practice":
-        # An eligible provider retains the immutable owned namespace after a
-        # real practice move; it must not retire the shared Scribe membership.
+    if change in {"member", "seat", "practice"}:
+        # Account feature access no longer depends on practice-seat eligibility;
+        # immutable record ownership and authority revocations still apply.
         assert _context(token).session_prep_context_ref
         assert _context(_token(doctor, str(appointment.id))).session_prep_context_ref
         return
@@ -345,7 +345,7 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         _token(doctor, str(appointment.id))
 
 
-def test_record_scope_follows_an_owner_revocation_grace_period(scope):
+def test_active_account_keeps_own_prep_after_practice_seat_grace_ends(scope):
     doctor, _practice, _patient, appointment = scope
     token = _token(doctor, str(appointment.id))
     member = PracticeMember.one(doctor_id=doctor.id)
@@ -358,8 +358,7 @@ def test_record_scope_follows_an_owner_revocation_grace_period(scope):
 
     member.access_ends_at = datetime.now(UTC) - timedelta(seconds=1)
     save_practice_member(member)
-    with pytest.raises(authority.AuthorityRequestDeniedError):
-        _context(token)
+    assert _context(token).session_prep_context_ref
 
 
 def test_wrong_issuer_and_expired_token_are_denied(scope):
