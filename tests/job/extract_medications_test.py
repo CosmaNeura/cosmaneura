@@ -91,6 +91,48 @@ def test_missing_transcript_is_noop():
     perform("ai_visit_transcript_00000000000000000000000000")
 
 
+def test_disabled_holds_are_omitted_before_lookup_without_relabeling_old_values(
+    monkeypatch,
+):
+    monkeypatch.setenv("HELD_MEDICATION_WRITES_ENABLED", "false")
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    transcript = _transcript(
+        doctor, patient, [("Patient", "Synthetic medication statuses.")]
+    )
+    extraction_calls = []
+    lookup_names = []
+
+    def extract(_text):
+        extraction_calls.append(_text)
+        return [
+            {"name": value, "status": value} for value in ("held", "active", "stopped")
+        ]
+
+    def lookup(name):
+        lookup_names.append(name)
+        return None, None
+
+    monkeypatch.setattr(job, "extract_from_text", extract)
+    monkeypatch.setattr(job, "normalize_drug_name", lookup)
+    perform(transcript.id)
+    rows = cast(
+        list[PatientMedication],
+        list(PatientMedication.where(PatientMedication.patient_id == patient.id).all()),
+    )
+    assert {(row.name, row.status.value) for row in rows} == {
+        ("active", "active"),
+        ("stopped", "stopped"),
+    }
+    assert lookup_names == ["active", "stopped"]
+    assert all(
+        row.appointment_id == transcript.appointment_id and not row.confirmed
+        for row in rows
+    )
+    perform(transcript.id)
+    assert len(extraction_calls) == 1 and lookup_names == ["active", "stopped"]
+
+
 def test_literal_held_sdk_result_persists_source_and_repeat_does_not_overwrite(
     monkeypatch,
 ):
