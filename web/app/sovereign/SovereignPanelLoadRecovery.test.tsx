@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 
@@ -9,7 +10,10 @@ const authority = vi.hoisted(() => ({
   getClient: vi.fn(),
   getViewAsStatus: vi.fn(),
 }))
-vi.mock("~/configuration/clerk", () => ({ getClient: authority.getClient }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: authority.getClient,
+  useBrowserPrincipal: () => syntheticClerk.principal(authority.getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({
   getViewAsStatus: authority.getViewAsStatus,
 }))
@@ -41,10 +45,15 @@ async function fixture() {
     "https://provider-sovereign.example",
   )
   authority.getViewAsStatus.mockResolvedValue({ active: false })
-  authority.getClient.mockResolvedValue({
-    user: { id: "user_synthetic_load_recovery" },
-    session: { getToken: vi.fn(async () => "synthetic-platform-token") },
-  })
+  authority.getClient.mockResolvedValue(
+    syntheticClerk.bindResource({
+      user: { id: "user_synthetic_load_recovery" },
+      session: {
+        id: "session_synthetic_load_recovery",
+        getToken: vi.fn(async () => "synthetic-platform-token"),
+      },
+    }),
+  )
   const records: string[] = []
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -59,7 +68,14 @@ async function fixture() {
           expires_at: new Date(now + 900000).toISOString(),
         })
       }
-      if (String(input).endsWith("/embed/history")) return json(emptyHistory())
+      if (String(input).endsWith("/embed/history-retained"))
+        return json({ ...emptyHistory(), schema_version: "1.2.0" })
+      if (String(input).endsWith("/embed/history-timed"))
+        return json({
+          ...emptyHistory(),
+          schema_version: "1.3.0",
+          observed_at: new Date().toISOString(),
+        })
       if (String(input).endsWith("/welcome")) {
         return json({
           persona: "provider",
@@ -133,6 +149,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  syntheticClerk.bind(null)
   vi.clearAllMocks()
   delete window.CosmaNeuraPanel
 })
@@ -170,7 +187,20 @@ describe("pending pinned panel load ownership", () => {
     await f.staleCallbacks(old)
     expect(f.mounts).toHaveLength(1)
     expect(f.scripts[1].remove).not.toHaveBeenCalled()
-    expect(f.fetchMock).toHaveBeenCalledTimes(3) // Fresh exchange, welcome and recent history.
+    expect(f.fetchMock).toHaveBeenCalledTimes(4) // Fresh exchange, welcome, retained history and timed history.
+    const [timedUrl, timedInit] = f.fetchMock.mock.calls[3]
+    expect(String(timedUrl)).toBe(
+      "https://provider-sovereign.example/embed/history-timed",
+    )
+    expect(timedInit?.method).toBe("POST")
+    expect(new Headers(timedInit?.headers).get("authorization")).toBe(
+      `Bearer mctx_${"1".repeat(48)}`,
+    )
+    expect(JSON.parse(String(timedInit?.body))).toEqual({
+      schema_version: "1.3.0",
+      mode: "recent",
+      client_turn_id: null,
+    })
   })
 
   it("releases a departing appointment's load and ignores its late callbacks", async () => {

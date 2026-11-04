@@ -22,6 +22,7 @@ class MedicationKind(str, Enum):
 class MedicationStatus(str, Enum):
     active = "active"
     stopped = "stopped"
+    held = "held"
 
 
 class MedicationSource(str, Enum):

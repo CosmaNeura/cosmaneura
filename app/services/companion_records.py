@@ -377,6 +377,7 @@ def read_record(
                         client_turn_id=interaction.client_turn_id,
                         settings=authority_settings,
                         capture_settings=capture_settings,
+                        purpose="read",
                     )
 
                 binding = authorize()

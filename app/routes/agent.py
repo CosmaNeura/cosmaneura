@@ -26,7 +26,9 @@ import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
+import app.services.authority_conversation_display as retained_history
 import app.services.authority_conversation_read as history
+import app.services.authority_conversation_timed_display as timed_history
 import app.services.authority_usage
 import app.services.provider_chat_admission as admission
 import app.services.provider_question_context as provider_question
@@ -46,6 +48,7 @@ from app.services.provider_database_connection import (
 )
 from app.services.provider_database_deadline import ProviderDatabaseDeadlineExceeded
 from app.services.provider_thread_admission import provider_thread_slot
+from app.services.reviewed_excerpt_citations import ReviewedExcerptSelection
 from app.services.session_prep_runtime import SessionPrepFactsToolResponse
 
 from activemodel.session_manager import aglobal_session, get_session
@@ -266,6 +269,7 @@ class FinalResponseTurnWrite(BaseModel):
     provider_context_ref: str | None = Field(
         default=None, min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._~-]{8,160}$"
     )
+    reviewed_excerpts: ReviewedExcerptSelection | None = None
 
 
 ConversationTurnWriteRequest = Annotated[
@@ -999,6 +1003,18 @@ async def _invoke_tool(
     response.headers["X-Cosmaneura-Client-Turn-ID"] = str(client_turn_id)
     response.headers["Idempotency-Replayed"] = str(result.replayed).lower()
     response.headers["Cache-Control"] = "no-store"
+    if (
+        isinstance(result, provider_question.ProviderQuestionRead)
+        and isinstance(
+            result.response.result,
+            (
+                provider_question.ProviderQuestionSourcesResult,
+                provider_question.ProviderQuestionSourcesOnlyResult,
+            ),
+        )
+        and result.response.result.state == "ready"
+    ):
+        response.headers["X-Cosmaneura-Reviewed-Excerpts"] = "1.0.0"
     return result.response
 
 
@@ -1298,7 +1314,9 @@ async def write_conversation_turn(
             trace_id=resolved_trace_id,
         )
     try:
-        raw_data = await request.json()
+        raw_data = json.loads(
+            await request.body(), object_pairs_hook=_closed_json_object
+        )
     except (UnicodeDecodeError, ValueError):
         return agent_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1326,6 +1344,12 @@ async def write_conversation_turn(
             trace_id=resolved_trace_id,
         )
 
+    canonical_data = data.model_dump(mode="json")
+    if (
+        isinstance(data, FinalResponseTurnWrite)
+        and "reviewed_excerpts" not in data.model_fields_set
+    ):
+        canonical_data.pop("reviewed_excerpts", None)
     try:
         result = await _run_agent_database(
             app.services.authority_conversation.write_conversation_turn,
@@ -1334,7 +1358,7 @@ async def write_conversation_turn(
             interaction_ref=interaction_ref,
             client_turn_id=client_turn_id,
             idempotency_key=idempotency_key,
-            payload=data.model_dump(mode="json"),
+            payload=canonical_data,
             settings=settings,
         )
     except admission.ProviderChatAdmissionLimited as limited:
@@ -1783,7 +1807,19 @@ async def report_model_usage_event(
 
 
 @agent_api_app.post(
+    "/conversation-turns/read-display-timed",
+    response_model=timed_history.TimedConversationReadResponse,
+)
+@agent_api_app.post(
+    "/conversation-turns/read-retained",
+    response_model=retained_history.RetainedConversationReadResponse,
+)
+@agent_api_app.post(
     "/conversation-turns/read", response_model=history.ConversationReadResponse
+)
+@agent_api_app.post(
+    "/conversation-turns/read-with-citations",
+    response_model=retained_history.ConversationCitationReadResponse,
 )
 async def read_conversation_turns(
     request: Request,
@@ -1825,7 +1861,16 @@ async def read_conversation_turns(
             if len(chunk) > 8192 - len(raw):
                 return problem("VALIDATION_FAILED", 422)
             raw.extend(chunk)
-        body = history.ConversationReadRequest.model_validate(
+        request_model = (
+            timed_history.TimedConversationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-display-timed")
+            else retained_history.RetainedConversationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-retained")
+            else retained_history.ConversationCitationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-with-citations")
+            else history.ConversationReadRequest
+        )
+        body = request_model.model_validate(
             json.loads(raw, object_pairs_hook=_closed_json_object)
         )
     except (ValueError, UnicodeDecodeError, RecursionError):
@@ -1833,6 +1878,30 @@ async def read_conversation_turns(
 
     def read_in_session():
         with get_session() as managed:
+            if isinstance(body, timed_history.TimedConversationReadRequest):
+                return timed_history.read_timed_conversation(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
+            if isinstance(body, retained_history.RetainedConversationReadRequest):
+                return retained_history.read_retained_conversation(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
+            if isinstance(body, retained_history.ConversationCitationReadRequest):
+                return retained_history.read_current_with_citations(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
             return history.read_conversation(
                 session=cast(Session, managed),
                 workload_client_id=principal.client_id,

@@ -51,9 +51,12 @@ from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
+from .routes.scribe_cancellation import install as install_scribe_cancellation
 from .routes.scribe_capture_deadline import install_capture_boundaries
 from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.scribe_native_capture import native_capture_api_app
+from .routes.scribe_native_encounters import install as install_scribe_native_encounters
+from .routes.scribe_provider_context import install as install_scribe_provider_context
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
 from .services.scribe_http_pool import install_scribe_connections
@@ -136,6 +139,9 @@ install_companion_records(api_app)
 install_companion_encounters(api_app)
 install_companion_appointment_setup(api_app)
 install_scribe_encounters(api_app)
+install_scribe_provider_context(api_app)
+install_scribe_cancellation(api_app)
+install_scribe_native_encounters(api_app)
 install_capture_boundaries(api_app)
 install_scribe_connections(
     api_app,

@@ -1,4 +1,4 @@
-"""Reviewed Actions-off staging build launcher; no publication or Azure operations.
+"""Reviewed local staging build launcher; no publication or Azure operations.
 
 Invoke with isolated Python and an independently reviewed plan's exact SHA256.
 The actual founder selection/delegation and approved invocation supply authority;
@@ -428,6 +428,7 @@ def run(
             "github_user_sha256": observed.github_user_sha256,
             "source_archive_sha256": observed.source_archive_sha256,
             "protection_sha256": observed.protection_sha256,
+            "github_actions_enabled": observed.github_actions_enabled,
         }
     build_inputs = inputs.BuildInputs(
         candidate,
@@ -459,6 +460,8 @@ def run(
         "candidate_sha": candidate,
         "controller_sha": plan["controller_sha"],
         "source_archive_sha256": sha(source_archive),
+        "github_actions_enabled": observed.github_actions_enabled,
+        "protection_sha256": observed.protection_sha256,
         "frontend_configuration_sha256": sha(frontend),
         "started_at": datetime.now(UTC).isoformat(),
         "publication_authorized": False,

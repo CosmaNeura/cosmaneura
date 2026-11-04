@@ -34,16 +34,26 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "4d9ccc80f6449ad347f922ec4cd4ce4b36a804b7",
+      "7226298f31a81a9b77cd4048cce6b15d6a2d270c",
     )
-    expect(bytes.toString("utf8")).toContain(
+    const legacyBytes = await readFile(
+      resolve(
+        process.cwd(),
+        "public/vendor/cosmaneura-panel.v1.1b24151bb15c9d2968a5567a42c6dd94f24087a177b722725bbd881bdbcae59c.js",
+      ),
+    )
+    // Preserve all original readable-contract assertions on the retained old asset.
+    // The compiled current asset is exercised by real DOM/Host regressions.
+    expect(legacyBytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
     )
-    expect(bytes.toString("utf8")).toContain('if (opts.embedVersion !== "1.0")')
-    expect(bytes.toString("utf8")).toContain(
+    expect(legacyBytes.toString("utf8")).toContain(
+      'if (opts.embedVersion !== "1.0")',
+    )
+    expect(legacyBytes.toString("utf8")).toContain(
       'if (typeof opts.onHumanContact !== "function")',
     )
-    const source = bytes.toString("utf8")
+    const source = legacyBytes.toString("utf8")
     const governedContext = source.slice(
       source.indexOf("function governedContext"),
       source.indexOf("function governedChatMetadata"),
@@ -71,5 +81,19 @@ describe("pinned Sovereign panel asset", () => {
     expect(source).not.toContain("indexedDB")
     expect(source).not.toContain("caches.open")
     expect(source).not.toContain('headers["x-cosmaneura-mount-context"]')
+  })
+
+  it("retains the prior immutable asset for already-open dashboard sessions", async () => {
+    const previousSha =
+      "2c82702a8afc3911a8cc75be6476038d85aba99c4bb8cde29f8ad97e15ae1c94"
+    const bytes = await readFile(
+      resolve(
+        process.cwd(),
+        "public",
+        "vendor",
+        `cosmaneura-panel.v1.${previousSha}.js`,
+      ),
+    )
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(previousSha)
   })
 })

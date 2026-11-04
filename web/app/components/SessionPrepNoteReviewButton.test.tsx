@@ -26,6 +26,7 @@ describe("SessionPrepNoteReviewButton", () => {
       />,
     )
     expect(reviewNoteForSessionPrep).not.toHaveBeenCalled()
+    expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
     fireEvent.click(
       screen.getByRole("button", { name: "Mark reviewed for Session Prep" }),
     )
@@ -58,6 +59,7 @@ describe("SessionPrepNoteReviewButton", () => {
         status === 409 ? "Reload the page" : "could not be saved",
       )
       expect(screen.queryByRole("status")).not.toBeInTheDocument()
+      expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
       expect(screen.getByRole("button")).toBeEnabled()
     },
   )
@@ -93,5 +95,35 @@ describe("SessionPrepNoteReviewButton", () => {
     expect(reviewNoteForSessionPrep).toHaveBeenCalledTimes(1)
     finish({ response: new Response(null, { status: 503 }) } as never)
     await waitFor(() => expect(screen.getByRole("button")).toBeEnabled())
+  })
+
+  it("follows authoritative metadata changes for the same note and digest", async () => {
+    const view = render(
+      <SessionPrepNoteReviewButton
+        noteId="visit_note_synthetic"
+        review={{ content_sha256: digest, reviewed_at: null }}
+      />,
+    )
+    expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible()
+    view.rerender(
+      <SessionPrepNoteReviewButton
+        noteId="visit_note_synthetic"
+        review={{ content_sha256: digest, reviewed_at: "2026-10-31T12:00:00Z" }}
+      />,
+    )
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Reviewed for Session Prep",
+    )
+    view.rerender(
+      <SessionPrepNoteReviewButton
+        noteId="visit_note_synthetic"
+        review={{ content_sha256: digest, reviewed_at: null }}
+      />,
+    )
+    await waitFor(() =>
+      expect(screen.getByText("Not reviewed for Session Prep")).toBeVisible(),
+    )
+    expect(screen.queryByRole("status")).not.toBeInTheDocument()
+    expect(reviewNoteForSessionPrep).not.toHaveBeenCalled()
   })
 })

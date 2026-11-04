@@ -5,12 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  useBrowserPrincipal: () => syntheticClerk.principal(getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 const inactiveViewAs = {
@@ -64,15 +68,18 @@ describe("Sovereign panel terminal authorization integration", () => {
     )
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
     vi.mocked(getViewAsStatus).mockResolvedValue(inactiveViewAs)
-    vi.mocked(getClient).mockResolvedValue({
-      loaded: true,
-      load: async () => {},
-      user: { id: "user_provider_test" },
-      session: {
-        getToken: vi.fn(async () => "platform-session-token"),
-      },
-      redirectToSignIn: async () => {},
-    })
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource({
+        loaded: true,
+        load: async () => {},
+        user: { id: "user_provider_test" },
+        session: {
+          id: "session_provider_test",
+          getToken: vi.fn(async () => "platform-session-token"),
+        },
+        redirectToSignIn: async () => {},
+      }),
+    )
 
     const firstToken = `mctx_${"a".repeat(48)}`
     const rotatedToken = `mctx_${"b".repeat(48)}`
@@ -81,6 +88,11 @@ describe("Sovereign panel terminal authorization integration", () => {
       body: string
       clientTurnId: string | null
     }> = []
+    const timedRequests: Array<{
+      method: string | undefined
+      authorization: string | null
+      body: unknown
+    }> = []
     let exchanges = 0
     let rotations = 0
 
@@ -88,7 +100,20 @@ describe("Sovereign panel terminal authorization integration", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
-        if (url.endsWith("/embed/history")) return json(emptyHistory())
+        if (url.endsWith("/embed/history-retained"))
+          return json({ ...emptyHistory(), schema_version: "1.2.0" })
+        if (url.endsWith("/embed/history-timed")) {
+          timedRequests.push({
+            method: init?.method,
+            authorization: new Headers(init?.headers).get("authorization"),
+            body: JSON.parse(String(init?.body)),
+          })
+          return json({
+            ...emptyHistory(),
+            schema_version: "1.3.0",
+            observed_at: new Date().toISOString(),
+          })
+        }
         if (url === "/embed/v1/context-tokens/exchange") {
           exchanges += 1
           return json(contextTokenResponse(firstToken), 201)
@@ -156,6 +181,17 @@ describe("Sovereign panel terminal authorization integration", () => {
         document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
       ).toBe(false),
     )
+    expect(timedRequests).toEqual([
+      {
+        method: "POST",
+        authorization: `Bearer ${firstToken}`,
+        body: {
+          schema_version: "1.3.0",
+          mode: "recent",
+          client_turn_id: null,
+        },
+      },
+    ])
     const input = document.querySelector<HTMLTextAreaElement>(".cnp-in")
     const send = document.querySelector<HTMLButtonElement>(".cnp-send")
     expect(input).not.toBeNull()

@@ -467,7 +467,7 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
 
 locals {
   # NOTE `postgres://` cannot be used with python! It must be `postgresql://`
-  postgresql_connection_string = "postgresql://${azurerm_postgresql_flexible_server.main.administrator_login}:${azurerm_postgresql_flexible_server.main.administrator_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/production?sslmode=require"
+  postgresql_connection_string = "postgresql://${azurerm_postgresql_flexible_server.main.administrator_login}:${azurerm_postgresql_flexible_server.main.administrator_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/production?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
   redis_connection_string      = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
 }
 
@@ -610,8 +610,9 @@ resource "azurerm_container_app" "app" {
       }
 
       startup_probe {
-        port      = 80
-        transport = "TCP"
+        failure_count_threshold = 10
+        port                    = 80
+        transport               = "TCP"
       }
 
       liveness_probe {
@@ -656,6 +657,14 @@ resource "azurerm_container_app" "app" {
 
       dynamic "env" {
         for_each = local.scribe_native_api_public_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.scribe_bundle_api_values
         content {
           name  = env.key
           value = env.value
@@ -775,6 +784,10 @@ resource "azurerm_container_app" "app" {
     precondition {
       condition     = length(local.scribe_native_api_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic API environment-name sets"
+    }
+    precondition {
+      condition     = local.scribe_native_workload_prerequisites_valid
+      error_message = "native workload activation requires the existing canonical Clerk issuer"
     }
 
     precondition {
@@ -900,6 +913,13 @@ resource "azurerm_container_app" "scheduler" {
 
       # Beat is lightweight: it polls Redis every few seconds and enqueues
       # the occasional task. Half a CPU and 512Mi is generous.
+      dynamic "env" {
+        for_each = local.scribe_bundle_scheduler_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
       cpu    = 0.25
       memory = "0.5Gi"
     }
@@ -982,7 +1002,7 @@ resource "azurerm_container_app" "worker" {
   # user-assigned identity rather than permitting an ambient credential chain.
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.health_services.id]
+    identity_ids = concat([azurerm_user_assigned_identity.health_services.id], var.scribe_core_bundle.attach_existing_translation_identity ? [data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id] : [])
   }
 
   template {
@@ -1071,6 +1091,14 @@ resource "azurerm_container_app" "worker" {
       dynamic "env" {
         for_each = local.zoom_durable_public_values
 
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.scribe_bundle_worker_values
         content {
           name  = env.key
           value = env.value

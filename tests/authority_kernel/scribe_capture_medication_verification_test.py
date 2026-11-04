@@ -1,8 +1,11 @@
 """Verification metadata is retained without rewriting clinical source facts."""
 
+import json
+
 import pytest
 
 from app.services import scribe_capture_history_grounding as history
+from app.services import scribe_capture_plan_grounding as plans
 
 
 def apply(fields, plan_fields=("Plan",)):
@@ -22,6 +25,42 @@ def test_known_role_soap_cannot_drop_verification_limit_with_model_prose():
     assert result["Subjective"] == fields["Subjective"]
     assert result["Plan"] == fields["Plan"]
     assert history.MEDICATION_LIST_UNVERIFIED not in fields["Objective"]
+
+
+def test_concise_history_assessment_plan_retains_source_and_verification_limit():
+    """The normal concise template must not hide the current-list limitation."""
+    fields = {
+        "History": "",
+        "Assessment": "No assessment was explicitly stated.",
+        "Plan": "- Unidentified speaker: No medication changes planned.",
+    }
+    source = plans.PlanSource.speech(
+        "Unknown", "I have not started, stopped, or changed any medicine."
+    )
+    grounding = history.ReportedHistoryGrounding.for_capture(
+        tuple(fields), ("Plan",), (source,), patient_only=True
+    )
+    assert grounding.fields == ("History",)
+    raw = json.dumps(
+        {
+            "fields": fields,
+            history.KEY: {"History": {"source_refs": [1]}},
+        }
+    )
+    _, rendered = grounding.resolve(raw, max_bytes=262144)
+    generated = {**fields, **rendered}
+    result = apply(generated)
+
+    assert tuple(result) == tuple(fields)
+    assert result["History"] == (
+        history.MEDICATION_LIST_UNVERIFIED + "\n\n" + generated["History"]
+    )
+    assert source.text in result["History"]
+    assert "Unidentified speaker" in result["History"]
+    assert result["Assessment"] == fields["Assessment"]
+    assert result["Plan"] == fields["Plan"]
+    assert apply(result) == result
+    assert history.MEDICATION_LIST_UNVERIFIED not in generated["History"]
 
 
 def test_reported_current_medicines_remain_complete_without_absence_assertion():
@@ -47,10 +86,12 @@ def test_existing_source_rendered_limit_is_not_duplicated():
 
 def test_medication_heading_is_preferred_over_objective_regardless_of_field_order():
     fields = {
+        "History": "A source-bound history.",
         "Objective": "A reported home reading.",
         "Medications": "A reported list.",
     }
     result = apply(fields)
+    assert result["History"] == fields["History"]
     assert result["Objective"] == fields["Objective"]
     assert result["Medications"].startswith(history.MEDICATION_LIST_UNVERIFIED)
 

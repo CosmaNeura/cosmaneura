@@ -26,6 +26,8 @@ VisitPrepAccessDenialReason = Literal[
     "practice_access_not_authorized",
     "baa_not_in_force",
     "entitlement_not_in_force",
+    "scribe_cancelled_read_only",
+    "scribe_export_period_expired",
     "cohort_not_enabled",
 ]
 

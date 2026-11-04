@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import copy
 import hashlib
+import io
 import json
 import re
+import runpy
+import shlex
 import subprocess
 import sys
+import textwrap
+import zipfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
@@ -15,6 +23,58 @@ LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
 UNTAGGED_UPLOADER = ROOT / "scripts" / "staging_acr_untagged_upload.py"
 BOUND_ACR = ROOT / "scripts" / "staging_acr_cli_bound.py"
 BOUND_AZURE_CLI = ROOT / "scripts" / "staging_azure_cli_bound.py"
+
+
+@pytest.mark.parametrize("resolver_succeeds", [True, False])
+def test_actual_deployer_drops_resolver_credentials_before_next_child(
+    resolver_succeeds: bool,
+) -> None:
+    source = (ROOT / "infra-staging/deploy.sh").read_text()
+    opening = "CONFIGURATION_STATUS=0\n"
+    closing = "if ! printf '%s' \"$ENV_JSON\" |"
+    assert source.count(opening) == 1
+    start = source.index(opening)
+    actual_resolution_and_cleanup = source[start : source.index(closing, start)]
+    credentials = (
+        "OP_SERVICE_ACCOUNT_TOKEN",
+        "RECALL_WEBHOOK_SECRET",
+        "RECALL_API_KEY_INPUT",
+    )
+    probe = (
+        "import json,os;print(json.dumps({name:name in os.environ for name in "
+        + repr(credentials)
+        + "}))"
+    )
+    next_child = shlex.join([sys.executable, "-I", "-S", "-B", "-c", probe])
+    # The EXIT observer also checks the failure branch after its real exit.
+    # This fixture substitutes only the resolver, never runs the deployer or
+    # reads real credentials. The production just path remains unchanged.
+    fake_just = "printf '{}'" if resolver_succeeds else "return 1"
+    script = (
+        "set -euo pipefail\nREPOSITORY_ROOT="
+        + shlex.quote(str(ROOT))
+        + "\ntrap "
+        + shlex.quote(next_child)
+        + " EXIT\njust() { "
+        + fake_just
+        + "; }\n"
+        + actual_resolution_and_cleanup
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin"}
+        | {name: "fictional-test-value" for name in credentials},
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == (0 if resolver_succeeds else 1)
+    assert json.loads(result.stdout.splitlines()[-1]) == {
+        name: False for name in credentials
+    }
+    assert "fictional-test-value" not in result.stdout + result.stderr
 
 
 def _source() -> str:
@@ -36,6 +96,94 @@ def _step(job: str, name: str) -> str:
     return job[start:] if end == -1 else job[start:end]
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_status", "builder_runs", "trust_runs"),
+    [
+        ("success", 0, True, True),
+        ("source-mismatch", 1, False, False),
+        ("partial-producer-failure", 19, False, True),
+        ("empty-producer", 1, False, True),
+        ("builder-failure", 23, True, True),
+        ("cleanup-failure", 1, True, True),
+    ],
+)
+def test_actual_candidate_build_scopes_trust_and_stops_before_failed_producer(
+    tmp_path: Path,
+    mode: str,
+    expected_status: int,
+    builder_runs: bool,
+    trust_runs: bool,
+) -> None:
+    step = _step(
+        _job(_source(), "build"),
+        "Build exact candidate image without protected credentials",
+    )
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / ".envrc").write_text("fictional verified candidate environment\n")
+    temporary = tmp_path / "runner-temp"
+    temporary.mkdir()
+    calls = tmp_path / "calls.txt"
+    # Execute the actual workflow shell with only Git, direnv, just and Docker
+    # replaced by local functions. No real trust, image or credential is used.
+    fixtures = """
+git() {
+  case "$1" in
+    rev-parse) printf '%s\\n' "$CANDIDATE_SHA" ;;
+    status) return 0 ;;
+    cat-file)
+      if [ "$CASE_MODE" = source-mismatch ]; then
+        printf 'different source\\n'
+      else
+        printf 'fictional verified candidate environment\\n'
+      fi ;;
+    *) return 99 ;;
+  esac
+}
+direnv() {
+  printf 'direnv %s %s\\n' "$1" "$2" >> "$CALLS"
+  if [ "$1" = deny ] && [ "$CASE_MODE" = cleanup-failure ]; then
+    return 26
+  fi
+}
+just() {
+  if [ "$1" = _javascript_nixpacks_env_args ]; then
+    if [ "$CASE_MODE" = empty-producer ]; then return 0; fi
+    printf '%s\\0%s\\0' --env OPENAPI_JSON_PATH=openapi.json
+    if [ "$CASE_MODE" = partial-producer-failure ]; then return 19; fi
+  else
+    docker build .
+    if [ "$CASE_MODE" = builder-failure ]; then return 23; fi
+  fi
+}
+docker() { printf 'docker %s\\n' "$*" >> "$CALLS"; }
+"""
+    result = subprocess.run(
+        ["/bin/bash", "-c", fixtures + script],
+        cwd=candidate,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CANDIDATE_SHA": "a" * 40,
+            "CASE_MODE": mode,
+            "CALLS": str(calls),
+            "RUNNER_TEMP": str(temporary),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == expected_status, result.stderr
+    observed = calls.read_text().splitlines() if calls.exists() else []
+    assert ("docker build ." in observed) is builder_runs
+    trust_path = str(candidate / ".envrc")
+    assert (f"direnv allow {trust_path}" in observed) is trust_runs
+    assert (f"direnv deny {trust_path}" in observed) is trust_runs
+    assert list(temporary.iterdir()) == []
+
+
 def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() -> None:
     source = _source()
     trigger = source[: source.index("permissions:")]
@@ -48,6 +196,8 @@ def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() 
         "synthetic_only_confirmed",
         "synthetic_evidence_sha256",
         "staging_identity_fingerprints_sha256",
+        "staging_effective_configuration_sha256",
+        "staging_runtime_public_json",
         "expected_schema_before",
         "expected_schema_after",
         "recovery_digest",
@@ -163,7 +313,11 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
     assert "just db_lint" in _job(source, "backend-quality")
     assert "just py_test-ci-${{ matrix.shard }}" in _job(source, "backend-tests")
     assert "name: Candidate Backend" in _job(source, "app")
-    assert "needs: [backend-quality, backend-tests]" in _job(source, "app")
+    assert "needs: [authorize, backend-quality, backend-tests]" in _job(source, "app")
+    assert (
+        "if: ${{ always() && needs.authorize.outputs.recovery_verified != 'true' }}"
+        in _job(source, "app")
+    )
     assert "pnpm run openapi" in _job(source, "web")
     assert "just js_lint" in _job(source, "web")
     assert "just js_test" in _job(source, "web")
@@ -324,7 +478,13 @@ def test_publication_is_sha_only_and_deployment_is_digest_pinned() -> None:
     assert "immutable candidate tag already exists" in publish
     assert "^sha256:[0-9a-f]{64}$" in publish
     assert "docker buildx imagetools inspect" in publish
-    assert '"$candidate_image" --raw | sha256sum' in publish
+    assert "\"$candidate_image\" --format '{{.Manifest.Digest}}'" in publish
+    assert (
+        '"$REGISTRY_HOST/cosmaneura/cosmaneura@$RECOVERY_IMAGE_DIGEST" --raw' in publish
+    )
+    assert '"$remote_config" != "$EXPECTED_IMAGE_ID"' in publish
+    assert '"$remote_digest" != "$image_digest"' in publish
+    assert '"$candidate_image" --raw | sha256sum' not in publish
     assert ":latest" not in publish
     assert "build_push" not in publish
     assert "docker load --input candidate-image.tar" in publish_job
@@ -452,6 +612,67 @@ def test_identity_fingerprint_digest_contract_is_canonical_across_files() -> Non
         "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256: "
         "${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}"
     ) in workflow
+
+
+@pytest.mark.parametrize(
+    ("preserved", "observed", "accepted"),
+    [
+        (True, "sha256:" + "a" * 64, True),
+        (False, "sha256:" + "a" * 64, False),
+        (True, "sha256:" + "b" * 64, False),
+        (True, None, False),
+    ],
+)
+def test_terminal_attempt_requires_the_requested_preserved_configuration(
+    preserved: bool,
+    observed: str | None,
+    accepted: bool,
+) -> None:
+    workflow = _source()
+    authorize = _job(workflow, "authorize")
+    deploy = _job(workflow, "deploy")
+    assert (
+        "STAGING_EFFECTIVE_CONFIGURATION_SHA256: "
+        "${{ inputs.staging_effective_configuration_sha256 }}"
+    ) in authorize
+    deployment = _step(deploy, "Deploy candidate digest with protected-master controls")
+    assert 'STAGING_PRESERVE_EFFECTIVE_CONFIGURATION: "true"' in deployment
+    assert (
+        "EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256: "
+        "${{ needs.authorize.outputs.staging_effective_configuration_sha256 }}"
+    ) in deployment
+    assert (
+        "STAGING_RUNTIME_PUBLIC_JSON: "
+        "${{ needs.authorize.outputs.staging_runtime_public_json }}"
+    ) in deployment
+    assert "scripts/staging_release_contract.py --validate-runtime-public" in authorize
+    terminal = _step(
+        _job(workflow, "attempt_evidence"),
+        "Require a complete successful staging attempt",
+    )
+    start = terminal.index('          jq -e --arg expected "$STAGING_EFFECTIVE')
+    end = terminal.index('<<< "$OBSERVED_CONFIGURATION" >/dev/null', start)
+    actual_guard = terminal[
+        start : end + len('<<< "$OBSERVED_CONFIGURATION" >/dev/null')
+    ]
+    result = subprocess.run(
+        ["/bin/bash", "-c", actual_guard],
+        env={
+            "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
+            "STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT": "sha256:" + "a" * 64,
+            "OBSERVED_CONFIGURATION": json.dumps(
+                {
+                    "effective_configuration_preserved": preserved,
+                    "effective_configuration_sha256": observed,
+                }
+            ),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert (result.returncode == 0) == accepted
 
 
 def test_azure_identity_is_pinned_and_legacy_branch_trust_is_rejected() -> None:
@@ -689,3 +910,569 @@ def test_every_external_action_is_pinned_to_a_commit() -> None:
     assert external_uses
     for action in external_uses:
         assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
+
+
+# Synthetic, credentialless artifact fixtures exercise the actual completion
+# validator. No remote operations or staging records are used by this suite.
+def _attempt_bundle_fixture():
+    module = runpy.run_path(str(ROOT / "scripts/staging_release_contract.py"))
+    runtime = dict.fromkeys(module["FLAGS"], "true")
+    runtime.update(
+        SCRIBE_SERVICE_BASE_URL="https://cosmaneura-staging-scribe-api.internal.politesmoke-7989878f.northcentralus.azurecontainerapps.io",
+        SCRIBE_SERVICE_SCOPE="api://57264fe1-6a4a-4946-8412-e0be18805977/.default",
+        SCRIBE_MANAGED_IDENTITY_CLIENT_ID="11111111-1111-1111-1111-111111111111",
+        AGENT_API_SCRIBE_RECEIVER_CLIENT_ID="22222222-2222-2222-2222-222222222222",
+        SCRIBE_SERVICE_TIMEOUT_SECONDS="60",
+        SCRIBE_CAPTURE_UPLOAD_ORIGINS="https://syntheticstaging.blob.core.windows.net",
+    )
+    request = {
+        "workflow_control_sha": "a" * 40,
+        "source_sha": "b" * 40,
+        "image_digest": "sha256:" + "c" * 64,
+        "approval_pr_number": 934,
+        "dispatch": {
+            "actor": "JohnClem",
+            "triggering_actor": "JohnClem",
+            "ref": "refs/heads/master",
+            "ref_protected": True,
+        },
+        "synthetic_only_confirmed": True,
+        "synthetic_evidence_sha256": "sha256:" + "d" * 64,
+        "staging_identity_fingerprints_sha256": "sha256:" + "e" * 64,
+        "staging_effective_configuration_sha256": "sha256:" + "f" * 64,
+        "staging_runtime_public": runtime,
+        "expected_schema_before": "1" * 12,
+        "expected_schema_after": "2" * 12,
+        "expected_recovery_digest": "sha256:" + "3" * 64,
+    }
+    context = {
+        "request": request,
+        "repository": "CosmaNeura/cosmaneura",
+        "repository_id": 881573489,
+        "run_id": 41460178723,
+        "run_attempt": 1,
+        "validation": {"run_id": 41339202271, "run_attempt": 1, "reused": True},
+    }
+    configuration = {
+        "deployment_blockers": [],
+        "effective_configuration_preserved": True,
+        "effective_configuration_sha256": request[
+            "staging_effective_configuration_sha256"
+        ],
+        "identity_fingerprint_set_sha256": request[
+            "staging_identity_fingerprints_sha256"
+        ],
+        "expected_identity_fingerprint_set_sha256": request[
+            "staging_identity_fingerprints_sha256"
+        ],
+        "flags": {"SENTRY_STAGING_ENABLED": "false", "ZOOM_WATCHDOG_ENABLED": "false"},
+    }
+    image = {
+        "digest": request["image_digest"],
+        "reference": module["IMAGE"] + "@" + request["image_digest"],
+    }
+    after = [
+        {
+            "name": name,
+            "readyRevisionImage": image["reference"],
+            "publicConfig": dict(configuration["flags"]),
+        }
+        for name in sorted(module["APPS"])
+    ]
+    identity = {
+        "account": {"environmentName": "AzureCloud"},
+        "identity": {"type": "synthetic"},
+    }
+    release = {
+        key: request[key]
+        for key in (
+            "workflow_control_sha",
+            "source_sha",
+            "approval_pr_number",
+            "synthetic_only_confirmed",
+            "synthetic_evidence_sha256",
+        )
+    }
+    release.update(
+        github={
+            "repository": context["repository"],
+            "run_id": context["run_id"],
+            "run_attempt": 1,
+            **request["dispatch"],
+        },
+        observed_source_sha=request["source_sha"],
+        candidate_validation=context["validation"],
+        candidate_tests=dict.fromkeys(
+            (
+                "backend",
+                "frontend",
+                "public_configuration",
+                "credentialless_image_build",
+            ),
+            "success",
+        ),
+        provenance_checks=dict.fromkeys(
+            (
+                "authorization",
+                "pre_credentials",
+                "publication",
+                "azure_identity",
+                "pre_migration_and_azure_mutation",
+            ),
+            "success",
+        ),
+        image=image,
+        schema={
+            "before": request["expected_schema_before"],
+            "after": request["expected_schema_after"],
+        },
+        recovery_digest=request["expected_recovery_digest"],
+        deployment_outcome="success",
+        release_contract_result="passed",
+        smoke={"healthcheck": {"http_status": 200, "result": "passed"}},
+        staging_identity=identity,
+        observed_configuration=configuration,
+        workloads={"before": copy.deepcopy(after), "after": after},
+    )
+    for key, field in (
+        ("staging_identity_fingerprints", "staging_identity_fingerprints_sha256"),
+        ("staging_effective_configuration", "staging_effective_configuration_sha256"),
+    ):
+        release[key] = {
+            "expected_sha256": request[field],
+            "observed_sha256": request[field],
+        }
+    documents = {
+        "request.json": request,
+        "release.json": release,
+        "azure-identity.json": copy.deepcopy(identity),
+        "workflow-result.json": {
+            "job_status": "success",
+            "workflow_control_sha": request["workflow_control_sha"],
+            "run_id": context["run_id"],
+            "run_attempt": 1,
+        },
+    }
+    metadata = {
+        "id": 13150131392,
+        "expired": False,
+        "name": f"canonical-staging-release-{request['source_sha']}-{context['run_id']}-1",
+        "workflow_run": {
+            "id": context["run_id"],
+            "repository_id": context["repository_id"],
+            "head_repository_id": context["repository_id"],
+            "head_branch": "master",
+            "head_sha": request["workflow_control_sha"],
+        },
+    }
+    return module, context, copy.deepcopy(documents), metadata
+
+
+def _attempt_zip(documents, metadata, extra=None):
+    files = {
+        name: json.dumps(value, sort_keys=True).encode()
+        for name, value in documents.items()
+    }
+    files["SHA256SUMS"] = "".join(
+        f"{hashlib.sha256(raw).hexdigest()}  {name}\n"
+        for name, raw in sorted(files.items())
+    ).encode()
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for name, raw in files.items():
+            bundle.writestr(name, raw)
+        if extra:
+            bundle.writestr(extra, b"synthetic")
+    raw = archive.getvalue()
+    metadata.update(
+        size_in_bytes=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest()
+    )
+    return raw
+
+
+def test_same_run_completion_artifact_accepts_verified_full_configuration():
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    raw = _attempt_zip(documents, metadata)
+    listing = {"total_count": 1, "artifacts": [metadata]}
+    assert module["select_attempt_artifact"](listing, context) == metadata
+    verified = module["validate_attempt_bundle"](metadata, raw, context)
+    assert (
+        verified["configuration"] == documents["release.json"]["observed_configuration"]
+    )
+    assert len(verified["workloads_after"]) == 3
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("request.json", "source_sha"), "0" * 40),
+        (
+            ("request.json", "staging_runtime_public", "SCRIBE_WORKFLOW_ENABLED"),
+            "false",
+        ),
+        (("request.json", "unknown"), "synthetic"),
+        (("release.json", "github", "run_id"), 99),
+        (("release.json", "github", "run_attempt"), True),
+        (("release.json", "observed_source_sha"), "0" * 40),
+        (("release.json", "schema", "after"), "0" * 12),
+        (("release.json", "recovery_digest"), "sha256:" + "0" * 64),
+        (("release.json", "candidate_validation", "run_id"), 99),
+        (("release.json", "candidate_tests", "backend"), "failure"),
+        (("release.json", "provenance_checks", "azure_identity"), "failure"),
+        (
+            ("release.json", "observed_configuration", "deployment_blockers"),
+            ["synthetic-blocker"],
+        ),
+        (
+            (
+                "release.json",
+                "observed_configuration",
+                "effective_configuration_preserved",
+            ),
+            False,
+        ),
+        (
+            (
+                "release.json",
+                "observed_configuration",
+                "effective_configuration_sha256",
+            ),
+            "sha256:" + "0" * 64,
+        ),
+        (
+            (
+                "release.json",
+                "observed_configuration",
+                "identity_fingerprint_set_sha256",
+            ),
+            "sha256:" + "0" * 64,
+        ),
+        (
+            (
+                "release.json",
+                "observed_configuration",
+                "flags",
+                "SENTRY_STAGING_ENABLED",
+            ),
+            "true",
+        ),
+        (
+            (
+                "release.json",
+                "observed_configuration",
+                "flags",
+                "ZOOM_WATCHDOG_ENABLED",
+            ),
+            "true",
+        ),
+        (
+            ("release.json", "staging_identity", "account", "environmentName"),
+            "elsewhere",
+        ),
+        (("release.json", "smoke", "healthcheck", "result"), "failed"),
+        (("release.json", "deployment_outcome"), "failed"),
+        (("release.json", "release_contract_result"), "failed"),
+        (("workflow-result.json", "job_status"), "failure"),
+        (("workflow-result.json", "run_attempt"), True),
+    ],
+)
+def test_completion_artifact_rejects_tampered_release_or_partial_context(path, value):
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    target = documents
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    raw = _attempt_zip(documents, metadata)
+    with pytest.raises(ValueError):
+        module["validate_attempt_bundle"](metadata, raw, context)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", True),
+        ("name", "canonical-staging-release-wrong-run"),
+        ("expired", True),
+        ("digest", "sha256:" + "0" * 64),
+        ("size_in_bytes", 0),
+        ("workflow_run", {"id": 99}),
+    ],
+)
+def test_completion_artifact_rejects_bad_metadata_and_custody(field, value):
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    raw = _attempt_zip(documents, metadata)
+    metadata[field] = value
+    with pytest.raises((ValueError, KeyError)):
+        module["validate_attempt_bundle"](metadata, raw, context)
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["missing", "duplicate", "partial", "extra", "traversal", "digest", "truncated"],
+)
+def test_completion_artifact_rejects_incomplete_or_changed_archives(change):
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    if change == "missing":
+        del documents["azure-identity.json"]
+    extra = (
+        "../release.json"
+        if change == "traversal"
+        else "unexpected.json"
+        if change == "extra"
+        else "release.json"
+        if change == "duplicate"
+        else None
+    )
+    raw = _attempt_zip(documents, metadata, extra)
+    if change == "partial":
+        with pytest.raises(ValueError):
+            module["select_attempt_artifact"](
+                {"total_count": 2, "artifacts": [metadata]}, context
+            )
+        return
+    if change in {"digest", "truncated"}:
+        raw = raw[:-1]
+    with pytest.raises(ValueError):
+        module["validate_attempt_bundle"](metadata, raw, context)
+
+
+def test_attempt_footer_uses_read_only_same_run_artifact_without_changing_producer():
+    footer = _job(_source(), "attempt_evidence")
+    assert "contents: read" in footer and "actions: read" in footer
+    assert "id-token:" not in footer and "secrets." not in footer
+    loader = _step(footer, "Load authenticated same-run staging deployment evidence")
+    assert "needs.deploy.result == 'success'" in loader
+    assert "actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" in loader
+    assert (
+        "--complete-attempt-select" in loader
+        and "--complete-attempt-validate" in loader
+    )
+    assert "$GITHUB_OUTPUT" not in loader
+    assert "overwrite: false" in _step(
+        _job(_source(), "deploy"), "Upload non-secret staging release evidence"
+    )
+    terminal = _step(footer, "Require a complete successful staging attempt")
+    assert '[[ "$DEPLOYMENT_EVIDENCE_RESULT" == "success" ]]' in terminal
+    assert "staging-attempt-deployment/verified.json" in terminal
+    assert terminal.index("verified.json") < terminal.index(
+        '<<< "$OBSERVED_CONFIGURATION"'
+    )
+
+
+def _attempt_fixture_environment(context):
+    request = context["request"]
+    result = {
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
+        "WORKFLOW_SHA": request["workflow_control_sha"],
+        "GITHUB_REPOSITORY": context["repository"],
+        "GITHUB_REPOSITORY_ID": str(context["repository_id"]),
+        "GITHUB_RUN_ID": str(context["run_id"]),
+        "GITHUB_RUN_ATTEMPT": str(context["run_attempt"]),
+        "GITHUB_ACTOR": request["dispatch"]["actor"],
+        "GITHUB_TRIGGERING_ACTOR": request["dispatch"]["triggering_actor"],
+        "GITHUB_REF": request["dispatch"]["ref"],
+        "GITHUB_REF_PROTECTED": "true",
+        "CANDIDATE_SHA_INPUT": request["source_sha"],
+        "APPROVAL_PR_NUMBER_INPUT": str(request["approval_pr_number"]),
+        "IMAGE_DIGEST": request["image_digest"],
+        "SYNTHETIC_ONLY_CONFIRMED_INPUT": "true",
+        "SYNTHETIC_EVIDENCE_SHA256_INPUT": request["synthetic_evidence_sha256"],
+        "STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT": request[
+            "staging_identity_fingerprints_sha256"
+        ],
+        "STAGING_EFFECTIVE_CONFIGURATION_SHA256_INPUT": request[
+            "staging_effective_configuration_sha256"
+        ],
+        "STAGING_RUNTIME_PUBLIC_JSON": json.dumps(request["staging_runtime_public"]),
+        "EXPECTED_SCHEMA_BEFORE_INPUT": request["expected_schema_before"],
+        "EXPECTED_SCHEMA_AFTER_INPUT": request["expected_schema_after"],
+        "RECOVERY_DIGEST_INPUT": request["expected_recovery_digest"],
+        "VALIDATION_RUN_ID": str(context["validation"]["run_id"]),
+        "VALIDATION_RUN_ATTEMPT": str(context["validation"]["run_attempt"]),
+        "RECOVERY_RUN_ID": str(context["validation"]["run_id"])
+        if context["validation"]["reused"]
+        else "",
+    }
+    return result
+
+
+@pytest.mark.parametrize("artifact_result", ["success", "failure"])
+def test_actual_completion_shell_recovers_screened_json_and_refuses_unverified_artifact(
+    tmp_path, artifact_result
+):
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    archive = _attempt_zip(documents, metadata)
+    workspace = tmp_path / "staging-attempt-deployment"
+    workspace.mkdir()
+    (workspace / "artifacts.json").write_text(
+        json.dumps({"total_count": 1, "artifacts": [metadata]})
+    )
+    (workspace / "release.zip").write_bytes(archive)
+    env = _attempt_fixture_environment(context)
+    script = ROOT / "scripts/staging_release_contract.py"
+    for args in (
+        ["--complete-attempt-select", "artifacts.json", "metadata.json"],
+        [
+            "--complete-attempt-validate",
+            "metadata.json",
+            "release.zip",
+            "verified.json",
+        ],
+    ):
+        result = subprocess.run(
+            [sys.executable, str(script), *args],
+            cwd=workspace,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""  # No raw artifact/configuration logging.
+    env.update(
+        dict.fromkeys(
+            (
+                "AUTHORIZATION_RESULT",
+                "BACKEND_TEST_RESULT",
+                "FRONTEND_TEST_RESULT",
+                "CONFIG_RESULT",
+                "BUILD_RESULT",
+                "PUBLICATION_RESULT",
+                "DEPLOYMENT_RESULT",
+            ),
+            "success",
+        )
+    )
+    env.update(
+        DEPLOYMENT_EVIDENCE_RESULT=artifact_result,
+        BUILD_ARCHIVE_SHA256="sha256:" + "4" * 64,
+        BUILD_IMAGE_ID="sha256:" + "5" * 64,
+        FRONTEND_CONFIG_SHA256="sha256:" + "6" * 64,
+        IMAGE_REFERENCE=module["IMAGE"] + "@" + env["IMAGE_DIGEST"],
+        RECOVERY_DIGEST=env["RECOVERY_DIGEST_INPUT"],
+        SOURCE_SHA=env["CANDIDATE_SHA_INPUT"],
+        SCHEMA_BEFORE=env["EXPECTED_SCHEMA_BEFORE_INPUT"],
+        SCHEMA_AFTER=env["EXPECTED_SCHEMA_AFTER_INPUT"],
+        OBSERVED_CONFIGURATION="",
+        WORKLOADS_BEFORE="",
+        WORKLOADS_AFTER="",
+        HEALTHCHECK_HTTP_STATUS="200",
+        SMOKE_RESULT="passed",
+        DEPLOYMENT_CONTRACT_RESULT="passed",
+    )
+    terminal = _step(
+        _job(_source(), "attempt_evidence"),
+        "Require a complete successful staging attempt",
+    )
+    shell = textwrap.dedent(terminal.split("        run: |\n", 1)[1])
+    result = subprocess.run(
+        ["/bin/bash", "-c", shell],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert (result.returncode == 0) is (artifact_result == "success")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "duplicate_name",
+        "wrong_run",
+        "wrong_repository",
+        "wrong_controller",
+        "fork",
+        "unknown",
+        "unprotected",
+        "actor",
+    ],
+)
+def test_completion_artifact_selection_rejects_wrong_producer(change):
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    _attempt_zip(documents, metadata)
+    listing = {"total_count": 1, "artifacts": [metadata]}
+    if change == "duplicate_name":
+        other = dict(metadata, id=999)
+        listing = {"total_count": 2, "artifacts": [metadata, other]}
+    elif change == "wrong_run":
+        metadata["workflow_run"]["id"] += 1
+    elif change == "wrong_repository":
+        metadata["workflow_run"]["repository_id"] += 1
+    elif change == "wrong_controller":
+        metadata["workflow_run"]["head_sha"] = "0" * 40
+    elif change == "fork":
+        metadata["workflow_run"]["head_repository_id"] += 1
+    elif change == "unknown":
+        metadata["name"] = "canonical-staging-release-unknown"
+    elif change == "unprotected":
+        context["request"]["dispatch"]["ref_protected"] = False
+    elif change == "actor":
+        context["request"]["dispatch"]["triggering_actor"] = "other"
+    with pytest.raises(ValueError):
+        module["select_attempt_artifact"](listing, context)
+
+
+@pytest.mark.parametrize(
+    "change", ["checksum", "duplicate_json", "symlink", "oversized", "bad_zip"]
+)
+def test_completion_artifact_rejects_malformed_closed_zip_content(change):
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    original = _attempt_zip(documents, metadata)
+    with zipfile.ZipFile(io.BytesIO(original)) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    if change == "checksum":
+        files["SHA256SUMS"] = b"0" * 64 + b"  release.json\n"
+    elif change == "duplicate_json":
+        files["request.json"] = (
+            files["request.json"][:-1] + b', "source_sha": "synthetic-duplicate"}'
+        )
+        files["SHA256SUMS"] = "".join(
+            f"{hashlib.sha256(raw).hexdigest()}  {name}\n"
+            for name, raw in sorted(files.items())
+            if name != "SHA256SUMS"
+        ).encode()
+    elif change == "oversized":
+        files["release.json"] = b" " * 131073
+    target = io.BytesIO()
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, raw in files.items():
+            entry = zipfile.ZipInfo(name)
+            if change == "symlink" and name == "release.json":
+                entry.create_system = 3
+                entry.external_attr = 0o120777 << 16
+            archive.writestr(entry, raw)
+    raw = b"not a ZIP" if change == "bad_zip" else target.getvalue()
+    metadata.update(
+        size_in_bytes=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest()
+    )
+    with pytest.raises((ValueError, zipfile.BadZipFile)):
+        module["validate_attempt_bundle"](metadata, raw, context)
+
+
+def test_completion_artifact_accepts_current_full_runtime_and_ordinary_validation():
+    module, context, documents, metadata = _attempt_bundle_fixture()
+    runtime = context["request"]["staging_runtime_public"]
+    runtime.update(
+        dict.fromkeys(
+            module["COMPANION_FLAGS"]
+            | module["PRESERVED_WORKFLOW_FLAGS"]
+            | module["PRESERVED_PREPARATION_FLAGS"],
+            "true",
+        )
+    )
+    runtime["AGENT_API_COMPANION_CLIENT_ID"] = "33333333-3333-3333-3333-333333333333"
+    assert len(runtime) == 26
+    documents["request.json"]["staging_runtime_public"] = copy.deepcopy(runtime)
+    context["validation"] = {
+        "run_id": context["run_id"],
+        "run_attempt": context["run_attempt"],
+        "reused": False,
+    }
+    documents["release.json"]["candidate_validation"] = dict(context["validation"])
+    raw = _attempt_zip(documents, metadata)
+    verified = module["validate_attempt_bundle"](metadata, raw, context)
+    assert verified["artifact_id"] == metadata["id"]

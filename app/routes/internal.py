@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
@@ -43,6 +43,7 @@ from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration import session_prep as session_prep_configuration
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+from app.configuration.medication import held_medication_writes_enabled
 from app.configuration.redis import get_redis
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
 from app.configuration.stripe import (
@@ -123,6 +124,7 @@ from app.services.reference_links import (
     resource_links_for,
 )
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
+from app.services.scribe_cancellation_access import doctor_cancellation_denial
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
     RecordGrantConfigurationError,
@@ -450,6 +452,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     engagement_role: EngagementRole | None = None
     billing_header_sources: dict[str, BillingHeaderSource] = Field(default_factory=dict)
     session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
+    session_prep_editable_note_ids: list[str] = Field(default_factory=list)
     session_prep_prior_notes: PriorNoteOverview | None = None
     canonical_patient: Patient | None = None
     patient_identity_state: Literal["provisional", "matched", "confirmed"] | None = None
@@ -582,6 +585,11 @@ def note_detail(
                     identity_state = cast(
                         Literal["provisional", "matched", "confirmed"], identity.state
                     )
+    prep_reviews = (
+        note_review_statuses(doctor, visit_notes)
+        if getattr(request.state, "view_as", None) is None
+        else None
+    )
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
@@ -605,10 +613,11 @@ def note_detail(
         ),
         note_status=note_status,
         billing_header_sources=note_billing_sources(request, visit_notes),
-        session_prep_reviews=(
-            note_review_statuses(doctor, visit_notes)
-            if getattr(request.state, "view_as", None) is None
-            else None
+        session_prep_reviews=prep_reviews,
+        session_prep_editable_note_ids=(
+            list(prep_reviews or {})
+            if uploaded_audio is not None and not capture_workflow_required
+            else []
         ),
         session_prep_prior_notes=(
             prior_notes_for_session_prep(doctor, appointment.id)
@@ -1088,8 +1097,8 @@ class SessionPrepSettingsData(BaseModel, extra="forbid"):
     """PHI-free discovery state for the current provider context.
 
     This is intentionally narrower than an execution authorization.
-    ``can_review_sources`` reflects the same current provider/practice/BAA/
-    entitlement gate as review execution. Session Prep read and review routes
+    ``can_review_sources`` reflects the same current active-account decision
+    as review execution. Session Prep read and review routes
     still re-resolve record and note ownership at request time.
     """
 
@@ -1159,7 +1168,9 @@ def _platform_admin_capability_active(request: Request) -> bool:
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     view_as_active = getattr(request.state, "view_as", None) is not None
-    access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    access_decision = resolve_doctor_access(
+        doctor, require_entitlement=False, purpose="read"
+    )
     session_prep_access_decision = (
         session_prep_provider_access.resolve_session_prep_provider_access(doctor)
     )
@@ -1223,6 +1234,7 @@ def settings_data(request: Request) -> SettingsData:
         practice_ready=_practice_ready(doctor, decision=access_decision),
         billing_recovery_required=(
             access_decision.allowed
+            and doctor_cancellation_denial(doctor) is None
             and access_decision.authorization_basis != "pilot_grant"
             and not access_decision.entitlement_in_force
         ),
@@ -3331,6 +3343,8 @@ class MedicationData(BaseModel, extra="forbid"):
     confirmed: bool
     appointment_id: str | None = None
     source_appointment_date: datetime | None = None
+    confirmed_at: datetime | None = None
+    list_updated_at: datetime | None = None
 
 
 def _medication_data(row: PatientMedication) -> MedicationData:
@@ -3357,6 +3371,8 @@ def _medication_data(row: PatientMedication) -> MedicationData:
         source=row.source,
         dosage=row.dosage,
         confirmed=row.confirmed,
+        confirmed_at=row.confirmed_at,
+        list_updated_at=row.updated_at,
         appointment_id=str(source.id) if source is not None else None,
         source_appointment_date=source.appointment_date if source is not None else None,
     )
@@ -3379,11 +3395,56 @@ def _owned_medication_or_404(doctor: Doctor, medication_id: str) -> PatientMedic
     if not reference_toolkit_enabled_for(doctor.email):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    row = PatientMedication.get(id=medication_id, doctor_id=doctor.id)
-    if row is None or row.deleted_at is not None:
+    # The request-wide session holds this owner-scoped lock through save/delete.
+    # Refresh a cached identity before checking representation compatibility so
+    # an old active snapshot cannot overwrite a concurrently committed hold.
+    with get_session() as session:
+        row = session.exec(
+            select(PatientMedication)
+            .where(
+                PatientMedication.id == medication_id,
+                PatientMedication.doctor_id == doctor.id,
+                col(PatientMedication.deleted_at).is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     return row
+
+
+MEDICATION_READER_HEADER = "X-Cosmaneura-Medication-Reader"
+MEDICATION_READER_CAPABILITY = "held-v1"
+
+
+def _require_new_medication_hold(new_status: MedicationStatus | None) -> None:
+    if new_status == MedicationStatus.held and not held_medication_writes_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "HELD_MEDICATION_WRITES_DISABLED",
+                "message": "New medication holds are not available.",
+            },
+        )
+
+
+def _require_medication_reader(
+    request: Request, statuses: Iterable[MedicationStatus | None]
+) -> None:
+    """A representation declaration, never a substitute for owner/access checks."""
+    if (
+        request.headers.get(MEDICATION_READER_HEADER) != MEDICATION_READER_CAPABILITY
+        and MedicationStatus.held in statuses
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "MEDICATION_READER_UPGRADE_REQUIRED",
+                "message": "This medication list requires an updated reader.",
+            },
+        )
 
 
 @internal_api_app.get("/patients/{patient_id}/medications", name="medication_list")
@@ -3403,7 +3464,9 @@ def medication_list(
         .all()
     )
 
-    return [_medication_data(r) for r in cast(list[PatientMedication], rows)]
+    owned_rows = cast(list[PatientMedication], list(rows))
+    _require_medication_reader(request, (row.status for row in owned_rows))
+    return [_medication_data(r) for r in owned_rows]
 
 
 class CreateMedication(BaseModel, extra="forbid"):
@@ -3419,6 +3482,8 @@ def medication_create(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     patient = _reference_patient_or_404(doctor, patient_id)
+    _require_medication_reader(request, (data.status,))
+    _require_new_medication_hold(data.status)
 
     row = PatientMedication(
         doctor_id=doctor.id,
@@ -3456,6 +3521,9 @@ def medication_update(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
+    _require_medication_reader(request, (row.status, data.status))
+    if row.status != MedicationStatus.held:
+        _require_new_medication_hold(data.status)
 
     if data.name is not None:
         row.name = data.name.strip()
@@ -3488,6 +3556,7 @@ def medication_update(
 def medication_delete(request: Request, medication_id: Annotated[str, Path()]) -> None:
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
+    _require_medication_reader(request, (row.status,))
     row.delete()
 
 
@@ -3525,6 +3594,7 @@ class MedicationResources(BaseModel, extra="forbid"):
 
 class PatientResourcePanel(BaseModel, extra="forbid"):
     has_natmed_subscription: bool
+    held_medication_writes_enabled: bool
     directory: list[ResourceLink]
     medications: list[MedicationResources]
 
@@ -3553,6 +3623,7 @@ def patient_reference_resources(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed))
     medications = [
         MedicationResources(
             medication=_medication_data(row),
@@ -3567,6 +3638,7 @@ def patient_reference_resources(
 
     return PatientResourcePanel(
         has_natmed_subscription=doctor.has_natmed_subscription,
+        held_medication_writes_enabled=held_medication_writes_enabled(),
         directory=PROVIDER_RESOURCE_DIRECTORY,
         medications=medications,
     )
@@ -3621,6 +3693,7 @@ def medication_drug_reference(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed_drugs))
     entries: list[MedicationDrugReference] = []
     for med in confirmed_drugs:
         key = (med.normalized_name or med.name).strip().lower()
@@ -3701,6 +3774,7 @@ def medication_nutrient_depletions(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed_drugs))
     medications: list[MedicationDepletions] = []
     for med in confirmed_drugs:
         found = depletions_for(med.normalized_name or med.name)

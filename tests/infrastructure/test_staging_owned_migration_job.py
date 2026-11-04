@@ -152,6 +152,7 @@ def _run(
     functions = "\n".join(
         _function(name)
         for name in (
+            "verify_staging_release_source",
             "initialize_migration_job",
             "az",
             "cleanup_migration_job",

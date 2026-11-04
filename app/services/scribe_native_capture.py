@@ -20,11 +20,15 @@ from pydantic import (
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
+from app.configuration.scribe_native import native_existing_patient_visits_enabled
 from app.services import authority, scribe_capture_scope, scribe_encounters
+from app.services import scribe_capture_note_edits as note_edits
+from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_protocol as protocol
 from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
 from app.services.scribe_capture_admission import (
+    AdmissionUnconfirmed,
     CaptureCaller,
     ConsentAttestation,
     admit_capture,
@@ -34,6 +38,7 @@ from app.services.scribe_capture_deadline import (
     check_capture_deadline,
 )
 from app.services.scribe_capture_gateway import execute_capture_operation
+from app.services.scribe_capture_note_request import NoteRequest
 from app.services.scribe_capture_protocol import CaptureOperation, ReadOperation
 from app.services.scribe_configured_capture_contract import (
     ConfiguredCaptureSelection,
@@ -61,6 +66,40 @@ NATIVE_READ_OPERATIONS = frozenset(
 )
 
 
+# Existing native renderer/queue and note workflow only. Ordinary `operation`
+# remains read-only, and the generic Agent/Session Prep API is untouched.
+NATIVE_WORKFLOW_OPERATIONS = NATIVE_READ_OPERATIONS | frozenset(
+    {
+        "prepare_recording_window",
+        "prepare_continuation_window",
+        "bind_key",
+        "issue_lease",
+        "renew_lease",
+        "reserve_chunks",
+        "authorize_upload",
+        "chunk_receipt",
+        "register_chunk",
+        "complete",
+        "decide_translation",
+        "edit_transcript",
+        "source_start",
+        "source_start_sequence",
+    }
+)
+WORKFLOW_ACTIONS = frozenset(
+    {"workflow_operation", "workflow_admission", "workflow_notes"}
+)
+
+
+class NativeWorkflowCaller(CaptureCaller):
+    def authorize(self, session, binding_ref, workspace_id):
+        # Existing services call this again inside their locked commit boundary.
+        # A global capture setting cannot replace the dedicated native gate.
+        if not native_existing_patient_visits_enabled():
+            raise authority.AuthorityKernelDisabledError
+        return super().authorize(session, binding_ref, workspace_id)
+
+
 class PreparedWindowContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
     context_token: SecretStr = Field(repr=False)
@@ -85,6 +124,9 @@ class NativeCaptureRequest(BaseModel):
         "fresh_admission",
         "prepared_native_read",
         "prepared_source",
+        "workflow_operation",
+        "workflow_admission",
+        "workflow_notes",
     ]
     workspace_id: UUID
     request_nonce: UUID
@@ -98,6 +140,7 @@ class NativeCaptureRequest(BaseModel):
         default=None, pattern=r"^scribe_capture_binding_[0-7][0-9a-hjkmnp-tv-z]{25}$"
     )
     operation: CaptureOperation | None = None
+    note_request: NoteRequest | None = Field(default=None, repr=False)
     opening_nonce: UUID | None = None
     preparation: Literal["admission", "recording_window"] | None = None
     prepared_context: PreparedWindowContext | None = Field(default=None, repr=False)
@@ -116,6 +159,52 @@ class NativeCaptureRequest(BaseModel):
 
     @model_validator(mode="after")
     def action_fields(self):
+        if self.action in WORKFLOW_ACTIONS:
+            if (
+                any(
+                    value is not None
+                    for value in (
+                        self.opening_nonce,
+                        self.preparation,
+                        self.prepared_context,
+                        self.retain_preparation_context,
+                        self.include_native_preparation,
+                        self.include_preparation_metadata,
+                    )
+                )
+                or self.binding_ref is None
+            ):
+                raise ValueError("invalid_native_workflow")
+            if self.action == "workflow_admission":
+                if (
+                    self.operation is not None
+                    or self.note_request is not None
+                    or self.configured_capture is None
+                ):
+                    raise ValueError("invalid_native_workflow_admission")
+            elif self.attestation is not None or self.configured_capture is not None:
+                raise ValueError("unexpected_native_workflow_admission")
+            elif self.action == "workflow_operation":
+                if (
+                    self.note_request is not None
+                    or self.operation is None
+                    or self.operation.kind not in NATIVE_WORKFLOW_OPERATIONS
+                ):
+                    raise ValueError("invalid_native_workflow_operation")
+            elif (
+                self.operation is not None
+                or self.note_request is None
+                or (
+                    self.note_request.workspace_id,
+                    self.note_request.binding_ref,
+                    self.note_request.request_nonce,
+                )
+                != (self.workspace_id, self.binding_ref, self.request_nonce)
+            ):
+                raise ValueError("invalid_native_workflow_note")
+            return self
+        if self.note_request is not None:
+            raise ValueError("unexpected_native_workflow_note")
         if self.retain_preparation_context is not None and self.action not in {
             "mount",
             "fresh_admission",
@@ -232,6 +321,17 @@ class NativeCaptureRequest(BaseModel):
         return self
 
 
+def _native_access_purpose(data: NativeCaptureRequest) -> Literal["process", "read"]:
+    if (
+        data.action == "workflow_notes"
+        and data.note_request is not None
+        and data.note_request.action
+        in {"read", "templates", "template_preference", "save_status"}
+    ):
+        return "read"
+    return "process"
+
+
 async def execute_native_capture(
     *,
     issuer: str,
@@ -258,6 +358,11 @@ async def execute_native_capture(
         raise authority.AuthorityKernelDisabledError
 
     def lookup(*, include_status=False):
+        if (
+            data.action in WORKFLOW_ACTIONS
+            and not native_existing_patient_visits_enabled()
+        ):
+            raise authority.AuthorityKernelDisabledError
         check_async_capture_deadline()
         remaining = check_capture_deadline()
         if remaining is None:
@@ -332,6 +437,11 @@ async def execute_native_capture(
 
         class SameProviderCaller(CaptureCaller):
             def authorize(self, session, binding_ref, workspace_id):
+                if (
+                    data.action in WORKFLOW_ACTIONS
+                    and not native_existing_patient_visits_enabled()
+                ):
+                    raise authority.AuthorityKernelDisabledError
                 binding = super().authorize(session, binding_ref, workspace_id)
                 if (
                     str(binding.actor_id) != data.expected_actor_ref
@@ -365,7 +475,11 @@ async def execute_native_capture(
             settings=authority_settings,
             capture_settings=capture_settings,
         )
-        if data.action in {"prepared_admission", "fresh_admission"}:
+        if data.action in {
+            "prepared_admission",
+            "fresh_admission",
+            "workflow_admission",
+        }:
             combined_metadata: protocol.PreparationMetadata | None = None
             prepared_session = None
             if (
@@ -584,15 +698,19 @@ async def execute_native_capture(
     ):
         raise authority.AuthorityRequestDeniedError
     last = current()
-    caller = CaptureCaller(
+    caller_type = (
+        NativeWorkflowCaller if data.action in WORKFLOW_ACTIONS else CaptureCaller
+    )
+    caller = caller_type(
         workload_client_id=workload_client_id,
         mount_context_token=issued.context_token,
         interaction_ref=resolved.interaction_ref,
         client_turn_id=turn,
         settings=authority_settings,
         capture_settings=capture_settings,
+        access_purpose=_native_access_purpose(data),
     )
-    if data.action == "fresh_admission":
+    if data.action in {"fresh_admission", "workflow_admission"}:
         # Only the server-to-server receiver sends this action. Keep issuance,
         # mount resolution and every fresh selection boundary above; share the
         # exact prepared admission/metadata implementation rather than memoizing
@@ -604,6 +722,8 @@ async def execute_native_capture(
         )
         answer = await execute_prepared(context)
         check_async_capture_deadline()
+        if data.action == "workflow_admission":
+            return answer
         if not 0 <= time.monotonic() - preparation_started < 30:
             raise authority.ContextTokenExpiredError
         # Private credential is stripped by the receiver before native output.
@@ -627,26 +747,103 @@ async def execute_native_capture(
                 workspace_id=data.workspace_id,
                 appointment_ref=first["appointment_ref"],
                 request_nonce=data.request_nonce,
+                purpose="read",
             )
         binding = snapshot.binding_ref
         last = current()
     if binding is None:
         raise authority.AuthorityRequestDeniedError
+    if data.action == "workflow_notes":
+        assert data.note_request is not None
+        note = data.note_request
+        if not capture_settings.notes_enabled:
+            raise notes.CaptureNoteDisabled
+        current()
+        if note.action == "templates":
+            receipt = await notes.capture_note_templates(
+                caller=caller,
+                binding_ref=binding,
+                workspace_id=data.workspace_id,
+                expected_session_id=note.expected_session_id,
+                client=client,
+            )
+        elif note.action == "template_preference":
+            receipt = await notes.capture_template_preference(
+                caller=caller,
+                binding_ref=binding,
+                workspace_id=data.workspace_id,
+                expected_session_id=note.expected_session_id,
+                client=client,
+            )
+        elif note.action in {"save", "resolve", "save_status"}:
+            assert note.schema_ref is not None and note.edit is not None
+            method = {
+                "save": note_edits.save_capture_note,
+                "resolve": note_edits.resolve_capture_note_save,
+                "save_status": note_edits.check_capture_note_save,
+            }[note.action]
+            receipt = await method(
+                caller=caller,
+                binding_ref=binding,
+                workspace_id=data.workspace_id,
+                expected_session_id=note.expected_session_id,
+                client=client,
+                schema_ref=note.schema_ref,
+                edit=note.edit,
+            )
+        else:
+            assert note.schema_ref is not None
+            receipt = await notes.capture_note(
+                caller=caller,
+                binding_ref=binding,
+                workspace_id=data.workspace_id,
+                expected_session_id=note.expected_session_id,
+                client=client,
+                schema_ref=note.schema_ref,
+                prepare=note.action == "prepare",
+                scratch_notes=note.scratch_notes,
+            )
+        check_async_capture_deadline()
+        current()
+        return {
+            "version": "1",
+            "action": data.action,
+            "actor_ref": data.expected_actor_ref,
+            "tenant_ref": data.expected_tenant_ref,
+            "result": {
+                "contract_version": "1",
+                "workspace_id": str(data.workspace_id),
+                "binding_ref": binding,
+                "request_nonce": str(data.request_nonce),
+                "checked_at": datetime.now(UTC).isoformat(),
+                "action": note.action,
+                "receipt": receipt.model_dump(mode="json"),
+            },
+        }
     operation = data.operation or (
         ReadOperation(kind="provider_encounter") if data.opening_nonce else None
     )
     receipt = None
+    opening_recovery = False
     if operation is not None:
-        with phase("operation"):
-            receipt = await execute_capture_operation(
-                caller=caller,
-                binding_ref=binding,
-                workspace_id=data.workspace_id,
-                operation=operation,
-                client_request_key=key,
-                client=client,
-                upload_origins=capture_settings.upload_origins,
-            )
+        try:
+            with phase("operation"):
+                receipt = await execute_capture_operation(
+                    caller=caller,
+                    binding_ref=binding,
+                    workspace_id=data.workspace_id,
+                    operation=operation,
+                    client_request_key=key,
+                    client=client,
+                    upload_origins=capture_settings.upload_origins,
+                )
+        except AdmissionUnconfirmed:
+            if data.action != "mount" or data.opening_nonce is None:
+                raise
+            # The existing admission remains uncertain. Opening is read-only:
+            # publish recovery only after the final current encounter check,
+            # never a fresh/ready receipt or an admission/source replay.
+            opening_recovery = True
         check_async_capture_deadline()
     # Only the final mount row is published. All other lookups still execute
     # their full fresh authority checks without unused saved-note display reads.
@@ -678,7 +875,7 @@ async def execute_native_capture(
             "interaction_ref": resolved.interaction_ref,
             "client_turn_id": str(turn),
         }
-    elif data.action == "operation":
+    elif data.action in {"operation", "workflow_operation"}:
         assert operation is not None and receipt is not None
         result = {
             **envelope,
@@ -697,6 +894,14 @@ async def execute_native_capture(
                 "request_nonce": str(data.opening_nonce),
                 "operation": "provider_encounter",
                 "receipt": receipt.model_dump(mode="json"),
+            }
+        if opening_recovery:
+            result["opening_recovery"] = {
+                "contract_version": "1",
+                "workspace_id": str(data.workspace_id),
+                "binding_ref": binding,
+                "request_nonce": str(data.opening_nonce),
+                "disposition": "provider_operation_conflict",
             }
         if data.retain_preparation_context:
             # Private server-to-server field, stripped before native publication.

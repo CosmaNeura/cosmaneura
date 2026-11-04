@@ -11,13 +11,17 @@ import {
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import {
   SovereignPanelHost,
   resolveSovereignProviderConfig,
 } from "./SovereignPanelHost"
 import { act, render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  useBrowserPrincipal: () => syntheticClerk.principal(getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 const inactiveViewAs = {
@@ -49,6 +53,7 @@ function signedInClerk() {
     load: async () => {},
     user: { id: "user_provider_test" },
     session: {
+      id: "session_provider_test",
       getToken: vi.fn(
         async (options?: { template?: string }): Promise<string> =>
           options?.template ? "provider-oidc-token" : "platform-session-token",
@@ -93,6 +98,7 @@ describe("SovereignPanelHost", () => {
     mountImplementation = null
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
+    syntheticClerk.bind(null)
     vi.clearAllMocks()
     vi.restoreAllMocks()
   })
@@ -101,7 +107,133 @@ describe("SovereignPanelHost", () => {
     delete window.CosmaNeuraPanel
   })
 
+  it("keeps dated Prep accessible while a newer prior note awaits review and clears the warning after review without sending display data", async () => {
+    // This authenticated Host fixture declares its normal Clerk principal.
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
+
+    const setRecord = vi.fn(async () => 1)
+    const openSessionPrep = vi.fn()
+    const invalidateSessionPrep = vi.fn()
+    const target = document.createElement("div")
+    document.body.appendChild(target)
+    mountImplementation = () => ({
+      setRecord,
+      openSessionPrep,
+      invalidateSessionPrep,
+      recordPresentationTarget: target,
+      destroy: vi.fn(),
+    })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+    const priorNotes = {
+      notes: [
+        {
+          note_id: "note_synthetic",
+          appointment_id: "visit_prior",
+          appointment_date: "2026-10-01T12:00:00Z",
+          note_type: "SOAP",
+          status: "included" as const,
+        },
+        {
+          note_id: "note_synthetic_newer",
+          appointment_id: "visit_prior_newer",
+          appointment_date: "2026-10-10T12:00:00Z",
+          note_type: "SOAP",
+          status: "needs_review" as const,
+        },
+      ],
+      included_count: 1,
+      more_notes: false,
+      selection_limited: false,
+      selected_source_fingerprint: "sha256_" + "a".repeat(64),
+      newer_prior_note_awaiting_review: true,
+    }
+    const props = {
+      appointmentId: "appointment_source_refresh",
+      patientName: "Synthetic Morgan",
+      appointmentDate: "2026-10-20T12:00:00Z",
+      priorNotes,
+    }
+    const view = render(
+      <SovereignPanelHost
+        {...props}
+        priorNotes={{
+          ...priorNotes,
+          notes: [priorNotes.notes[0]],
+          newer_prior_note_awaiting_review: false,
+        }}
+      />,
+    )
+    await waitFor(() => expect(target).toHaveTextContent("Synthetic Morgan"))
+    expect(target.querySelector("a")).toHaveAttribute(
+      "href",
+      "/notes/visit_prior?reviewNote=note_synthetic#note-note_synthetic",
+    )
+    expect(invalidateSessionPrep).not.toHaveBeenCalled()
+    expect(target.querySelector('[role="status"]')).toBeNull()
+    // A new unreviewed source changes the warning without invalidating useful
+    // reviewed history whose server-owned selected fingerprint is unchanged.
+    view.rerender(<SovereignPanelHost {...props} />)
+    expect(target.querySelector('[role="status"]')).toHaveTextContent(
+      "A newer prior-visit note is awaiting your review",
+    )
+    expect(target).toHaveTextContent(
+      "Session Prep still shows earlier reviewed history",
+    )
+    expect(target).toHaveTextContent("Reviewed sources available · 1")
+    expect(invalidateSessionPrep).not.toHaveBeenCalled()
+    view.rerender(<SovereignPanelHost {...props} patientName={undefined} />)
+    expect(target.querySelector('[role="status"]')).toBeInTheDocument()
+    view.rerender(<SovereignPanelHost {...props} openRequest={1} />)
+    await waitFor(() => expect(openSessionPrep).toHaveBeenCalledTimes(1))
+    expect(target.querySelector('[role="status"]')).toBeInTheDocument()
+    view.rerender(
+      <SovereignPanelHost
+        {...props}
+        openRequest={1}
+        priorNotes={{
+          ...priorNotes,
+          selected_source_fingerprint: "sha256_" + "b".repeat(64),
+          newer_prior_note_awaiting_review: false,
+          included_count: 2,
+          notes: priorNotes.notes.map((note) => ({
+            ...note,
+            status: "included" as const,
+          })),
+        }}
+      />,
+    )
+    expect(invalidateSessionPrep).toHaveBeenCalledExactlyOnceWith(
+      "appointment_source_refresh",
+    )
+    expect(mount).toHaveBeenCalledTimes(1)
+    expect(openSessionPrep).toHaveBeenCalledTimes(1)
+    expect(target.querySelector('[role="status"]')).toBeNull()
+    expect(target).toHaveTextContent("Reviewed sources available · 2")
+    expect(mount.mock.calls[0][0]).not.toHaveProperty("patientName")
+    expect(mount.mock.calls[0][0]).not.toHaveProperty("priorNotes")
+    expect(await mount.mock.calls[0][0].getContext()).toEqual({
+      clientId: "appointment_source_refresh",
+    })
+    view.unmount()
+    target.remove()
+  })
+
   it("opens prep directly and invalidates a same-note source revision without remounting or sending display data", async () => {
+    // This authenticated Host fixture declares its normal Clerk principal.
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
+
     const setRecord = vi.fn(async () => 1)
     const openSessionPrep = vi.fn()
     const invalidateSessionPrep = vi.fn()
@@ -178,6 +310,11 @@ describe("SovereignPanelHost", () => {
   })
 
   it("accepts only an enabled, origin-only HTTPS authority target", () => {
+    // This authenticated Host fixture declares its normal Clerk principal.
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
+
     expect(
       resolveSovereignProviderConfig({
         VITE_SOVEREIGN_PROVIDER_URL: "https://sovereign.example/",
@@ -211,6 +348,11 @@ describe("SovereignPanelHost", () => {
   })
 
   it("never loads or mounts Sovereign while view-as is active", async () => {
+    // This authenticated Host fixture declares its normal Clerk principal.
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
+
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
     vi.mocked(getViewAsStatus).mockResolvedValue({
       ...inactiveViewAs,
@@ -247,7 +389,7 @@ describe("SovereignPanelHost", () => {
     let now = Date.UTC(2026, 7, 20, 12, 0, 0)
     vi.spyOn(Date, "now").mockImplementation(() => now)
     const clerk = signedInClerk()
-    vi.mocked(getClient).mockResolvedValue(clerk)
+    vi.mocked(getClient).mockResolvedValue(syntheticClerk.bindResource(clerk))
     const mountContext = `mctx_${"a".repeat(48)}`
     const rotatedContext = `mctx_${"b".repeat(48)}`
     const scheduledContext = `mctx_${"e".repeat(48)}`
@@ -423,7 +565,9 @@ describe("SovereignPanelHost", () => {
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
     const now = Date.UTC(2026, 7, 20, 12, 0, 0)
     vi.spyOn(Date, "now").mockImplementation(() => now)
-    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
     const mountContext = `mctx_${"c".repeat(48)}`
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -474,7 +618,9 @@ describe("SovereignPanelHost", () => {
   })
 
   it("remounts synchronously and exposes only the record binding", async () => {
-    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
     const firstDestroy = vi.fn()
     const secondDestroy = vi.fn()
     const firstSetRecord = vi.fn(async () => 1)
@@ -531,7 +677,7 @@ describe("SovereignPanelHost", () => {
     const clerkToken = `eyJ.${"a".repeat(48)}.${"b".repeat(48)}`
     const clerk = signedInClerk()
     clerk.session.getToken.mockResolvedValue(clerkToken)
-    vi.mocked(getClient).mockResolvedValue(clerk)
+    vi.mocked(getClient).mockResolvedValue(syntheticClerk.bindResource(clerk))
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => json(mountContextResponse(clerkToken))),
@@ -562,7 +708,7 @@ describe("SovereignPanelHost", () => {
   it("does not load or mount the panel when platform authority is disabled", async () => {
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "false")
     const clerk = signedInClerk()
-    vi.mocked(getClient).mockResolvedValue(clerk)
+    vi.mocked(getClient).mockResolvedValue(syntheticClerk.bindResource(clerk))
     const fetchMock = vi.fn()
     vi.stubGlobal("fetch", fetchMock)
 
@@ -584,7 +730,9 @@ describe("SovereignPanelHost", () => {
   })
 
   it("destroys and detaches the panel when the initial record bind fails", async () => {
-    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
     const destroy = vi.fn()
     const setRecord = vi.fn(async (recordId: string | null) => {
       if (recordId === null) return 1
@@ -608,7 +756,9 @@ describe("SovereignPanelHost", () => {
   })
 
   it("destroys an obsolete panel exactly once when its initial bind resolves late", async () => {
-    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    vi.mocked(getClient).mockResolvedValue(
+      syntheticClerk.bindResource(signedInClerk()),
+    )
 
     let finishFirstBind: () => void = () => {
       throw new Error("first bind was not started")
