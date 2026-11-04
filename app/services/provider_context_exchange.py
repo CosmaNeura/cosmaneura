@@ -3,7 +3,11 @@
 import app.configuration.session_prep as session_prep_configuration
 import app.services.session_prep_scope as session_prep_scope
 from app.configuration.authority import AuthorityKernelSettings
-from app.services.provider_record_authority import lock_provider_record_owner
+from app.services.provider_record_authority import (
+    SessionPrepProviderScopeUnavailable,
+    lock_provider_record_owner,
+    lock_session_prep_record_owner,
+)
 from app.services.superadmin_capability import (
     configured_superadmin_capability_environment,
 )
@@ -21,7 +25,7 @@ def provider_exchange_blocked(
     record_ref: str | None,
     settings: AuthorityKernelSettings,
 ) -> bool:
-    """Preserve the exchange route's view-as and Practice-before-Doctor locks."""
+    """Check the current account before the exchange route's view-as locks."""
     if not settings.enabled:
         return False
     environment = configured_superadmin_capability_environment()
@@ -43,7 +47,13 @@ def provider_exchange_blocked(
                 subject
             )
         ):
-            lock_provider_record_owner(session=session, clerk_subject=subject)
+            try:
+                lock_session_prep_record_owner(session=session, clerk_subject=subject)
+            except SessionPrepProviderScopeUnavailable:
+                # A cancelled account may retain generic Scribe read/export
+                # authority. This fallback grants no Session Prep capability;
+                # generic access and all later record/identity fences still run.
+                lock_provider_record_owner(session=session, clerk_subject=subject)
         return context_token_exchange_blocked_by_view_as(
             session,
             issuer=issuer,

@@ -55,6 +55,12 @@ def test_every_tracked_workflow_requires_approved_compute() -> None:
                 if path.name in HOSTED_PR_WORKFLOWS:
                     assert labels == "ubuntu-24.04", path
                     continue
+                if path.name == "deploy_staging_candidate.yml":
+                    assert labels == "ubuntu-24.04", path
+                    assert set(workflow.get("on", workflow.get(True, {}))) == {
+                        "workflow_dispatch"
+                    }
+                    continue
                 if path.name in {
                     "build_and_publish_local.yml",
                     "production_release_verified.yml",
@@ -108,8 +114,9 @@ def test_hosted_pr_checks_preserve_unprivileged_event_boundary(
         ("inputs.github_hosted_fallback_authorized", False, False),
     ],
 )
+@pytest.mark.parametrize("release_action", ["prepare", "promote"])
 def test_hosted_release_never_starts_without_full_owner_opt_in(
-    field, value, expected
+    field, value, expected, release_action
 ) -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/build_and_publish_local.yml").read_text()
@@ -119,14 +126,18 @@ def test_hosted_release_never_starts_without_full_owner_opt_in(
         "github.ref": "refs/heads/master",
         "github.actor": "JohnClem",
         "github.triggering_actor": "JohnClem",
+        "github.repository": "CosmaNeura/cosmaneura",
         "inputs.github_hosted_fallback_authorized": True,
+        "inputs.release_action": release_action,
         "needs.authorize-production.result": "success",
+        "needs.release-gates.result": "success",
     }
     if field is not None:
         context[field] = value
     inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
     assert inputs["github_hosted_fallback_authorized"]["default"] is False
-    for job in workflow["jobs"].values():
+    modes = {"production-candidate": "prepare", "deploy": "promote"}
+    for name, job in workflow["jobs"].items():
         expression = job["if"].strip().removeprefix("${{").removesuffix("}}")
         for key, actual in context.items():
             expression = expression.replace(key, repr(actual))
@@ -146,10 +157,9 @@ def test_hosted_release_never_starts_without_full_owner_opt_in(
             )
             for node in ast.walk(parsed)
         )
-        assert (
-            eval(compile(parsed, "<hosted-admission>", "eval"), {"__builtins__": {}})
-            is expected
-        )
+        assert eval(
+            compile(parsed, "<hosted-admission>", "eval"), {"__builtins__": {}}
+        ) is (expected and modes.get(name, release_action) == release_action)
 
 
 def test_dependabot_schedule_is_preserved_but_cannot_start_hosted_jobs() -> None:

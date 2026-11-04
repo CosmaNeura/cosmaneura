@@ -273,6 +273,34 @@ describe("schedule loader note availability", () => {
     } as Parameters<typeof clientLoader>[0])
   }
 
+  it("treats a missing meeting in a successful schedule as deliberate unavailability", async () => {
+    scheduleList.mockResolvedValue({
+      data: { meetings: [] },
+      response: new Response(null, { status: 200 }),
+    })
+    await expect(load()).rejects.toMatchObject({
+      data: { scheduleLoadFailure: "unavailable" },
+      init: { status: 404 },
+    })
+    expect(noteList).not.toHaveBeenCalled()
+    expect(patientList).not.toHaveBeenCalled()
+    expect(noteDetail).not.toHaveBeenCalled()
+  })
+
+  it("does not read patient or note options when the schedule request fails", async () => {
+    scheduleList.mockResolvedValue({
+      error: { detail: "Do not show this diagnostic" },
+      response: new Response(null, { status: 503 }),
+    })
+    await expect(load()).rejects.toMatchObject({
+      data: { scheduleLoadFailure: "temporary" },
+      init: { status: 503 },
+    })
+    expect(noteList).not.toHaveBeenCalled()
+    expect(patientList).not.toHaveBeenCalled()
+    expect(noteDetail).not.toHaveBeenCalled()
+  })
+
   it("checks exactly the ended linked visit and discards its content", async () => {
     scheduleList.mockResolvedValue({
       data: {
@@ -457,5 +485,40 @@ describe("terminal meeting bot status", () => {
     expect(
       await screen.findByText("Zoom recording permission denied"),
     ).toBeInTheDocument()
+  })
+
+  it.each(["permission_denied", "failed", "ended"] as const)(
+    "opens the linked visit immediately after %s while Zoom is still active",
+    async (capture_status) => {
+      renderMeeting({
+        ...meeting,
+        status: "started",
+        appointment_id: appointment.id,
+        capture_authorized: true,
+        capture_status,
+      })
+
+      expect(
+        await screen.findByRole("link", { name: "Open linked visit" }),
+      ).toHaveAttribute("href", `/notes/${appointment.id}`)
+      expect(authorizeZoomCapture).not.toHaveBeenCalled()
+    },
+  )
+
+  it("does not offer a visit link when the failed capture has no linked visit", async () => {
+    renderMeeting({
+      ...meeting,
+      status: "started",
+      appointment_id: null,
+      capture_authorized: true,
+      capture_status: "failed",
+    })
+
+    expect(
+      await screen.findByText("Meeting bot could not continue"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("link", { name: "Open linked visit" }),
+    ).not.toBeInTheDocument()
   })
 })

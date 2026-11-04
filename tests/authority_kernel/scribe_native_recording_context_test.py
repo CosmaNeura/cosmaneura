@@ -165,7 +165,7 @@ async def exercise(
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
     result = await gateway.execute_capture_operation(
-        caller=cast(CaptureCaller, None),
+        caller=CaptureCaller("synthetic", "synthetic", "synthetic", uuid4()),
         binding_ref="synthetic-binding",
         workspace_id=workspace,
         operation=protocol.ReadOperation.model_validate({"kind": kind}),

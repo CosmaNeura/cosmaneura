@@ -98,6 +98,53 @@ def test_runtime_rejects_unbounded_or_wrong_target_values(key, value):
         m["validate_runtime"](candidate)
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        "missing",
+        "production",
+        "credential",
+        "ambiguous",
+        "duplicate",
+        "oversized",
+    ],
+)
+def test_canonical_public_runtime_input_reuses_bounded_staging_contract(change):
+    candidate: dict[str, object] = dict(runtime())
+    if change == "missing":
+        del candidate["SCRIBE_WORKFLOW_ENABLED"]
+    elif change == "production":
+        candidate["SCRIBE_SERVICE_BASE_URL"] = "https://production.example"
+    elif change == "credential":
+        candidate["DATABASE_URL"] = "synthetic-do-not-emit"
+    elif change == "ambiguous":
+        candidate["SCRIBE_WORKFLOW_ENABLED"] = True
+    payload = json.dumps(candidate)
+    if change == "duplicate":
+        payload = payload[:-1] + ', "SCRIBE_WORKFLOW_ENABLED": "true"}'
+    elif change == "oversized":
+        payload = " " * 65537 + payload
+    script = Path(__file__).resolve().parents[2] / "scripts/staging_release_contract.py"
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", str(script), "--validate-runtime-public"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+        env={},
+    )
+    if change is None:
+        assert result.returncode == 0
+        assert json.loads(result.stdout) == candidate
+        assert "\n" not in result.stdout.rstrip("\n")
+    else:
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert result.stderr == "staging_release_contract_refused\n"
+
+
 def companion_runtime():
     return runtime() | {
         "AGENT_API_COMPANION_CLIENT_ID": "33333333-3333-3333-3333-333333333333",
@@ -145,6 +192,98 @@ def test_runtime_refuses_ambiguous_preserved_workflow_flag_values(key, value):
     candidate[key] = value
     with pytest.raises(ValueError):
         m["validate_runtime"](candidate)
+
+
+PREPARATION_KEYS = (
+    "SCRIBE_ENCOUNTER_CREATION_ENABLED",
+    "COMPANION_SESSION_PREP_ENABLED",
+)
+
+
+def preservation_baseline(companion, workflow):
+    baseline = companion_runtime() if companion else runtime()
+    if workflow:
+        baseline |= dict.fromkeys(m["PRESERVED_WORKFLOW_FLAGS"], "true")
+    return baseline
+
+
+def public_runtime_cli(payload):
+    script = Path(__file__).resolve().parents[2] / "scripts/staging_release_contract.py"
+    return subprocess.run(
+        [sys.executable, "-I", "-S", "-B", str(script), "--validate-runtime-public"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+        env={},
+    )
+
+
+@pytest.mark.parametrize("companion", [False, True])
+@pytest.mark.parametrize("workflow", [False, True])
+@pytest.mark.parametrize("creation", ["true", "false"])
+@pytest.mark.parametrize("preparation", ["true", "false"])
+def test_complete_preparation_group_preserves_exact_cli_output_and_legacy_shapes(
+    companion, workflow, creation, preparation
+):
+    baseline = preservation_baseline(companion, workflow)
+    before = dict(baseline)
+    m["validate_runtime"](baseline)
+    assert baseline == before
+    candidate = baseline | dict(zip(PREPARATION_KEYS, (creation, preparation)))
+    before = dict(candidate)
+    m["validate_runtime"](candidate)
+    assert candidate == before
+    result = public_runtime_cli(json.dumps(candidate))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == candidate
+    assert result.stderr == ""
+    assert "\n" not in result.stdout.rstrip("\n")
+
+
+@pytest.mark.parametrize("companion", [False, True])
+@pytest.mark.parametrize("workflow", [False, True])
+@pytest.mark.parametrize("missing", PREPARATION_KEYS)
+def test_partial_preparation_group_refuses_without_changing_existing_shapes(
+    companion, workflow, missing
+):
+    candidate = preservation_baseline(companion, workflow) | dict.fromkeys(
+        PREPARATION_KEYS, "true"
+    )
+    del candidate[missing]
+    with pytest.raises(ValueError):
+        m["validate_runtime"](candidate)
+
+
+@pytest.mark.parametrize("key", PREPARATION_KEYS)
+@pytest.mark.parametrize("value", [True, None, 1, "", "TRUE", "1"])
+def test_preparation_group_refuses_noncanonical_boolean_values(key, value):
+    candidate = companion_runtime() | dict.fromkeys(PREPARATION_KEYS, "true")
+    candidate[key] = value
+    with pytest.raises(ValueError):
+        m["validate_runtime"](candidate)
+
+
+@pytest.mark.parametrize("key", PREPARATION_KEYS)
+@pytest.mark.parametrize("failure", ["partial", "duplicate", "ambiguous", "unrelated"])
+def test_preparation_cli_refuses_partial_duplicate_or_unbounded_input(key, failure):
+    candidate = dict[str, object](runtime() | dict.fromkeys(PREPARATION_KEYS, "true"))
+    if failure == "partial":
+        del candidate[key]
+    elif failure == "ambiguous":
+        candidate[key] = True
+    elif failure == "unrelated":
+        candidate["UNREVIEWED_PREPARATION_CONTROL"] = "true"
+    payload = json.dumps(candidate)
+    if failure == "duplicate":
+        payload = payload[:-1] + f', "{key}": "true"}}'
+    result = public_runtime_cli(payload)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        1,
+        "",
+        "staging_release_contract_refused\n",
+    )
 
 
 @pytest.mark.parametrize(

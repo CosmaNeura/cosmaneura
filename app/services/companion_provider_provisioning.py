@@ -157,23 +157,42 @@ def provision_companion_provider(
     if not doctor_access_in_force(doctor):
         _fail("existing_processing_access_required")
 
-    # Reuse Core's immutable practice mapping so its verified record exchange
-    # cannot classify the companion's provider membership as a foreign import.
-    mappings = list(
-        session.exec(
-            select(ProviderPracticeAuthority)
-            .where(
-                or_(
-                    ProviderPracticeAuthority.practice_id == practice_id,
-                    ProviderPracticeAuthority.tenant_id == tenant_id,
+    # Session Prep may have provisioned this account's immutable namespace before
+    # Scribe onboarding. Preserve it rather than replacing its membership. Scribe
+    # itself still requires the real practice above and only creates practice rows.
+    account_mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(
+            ProviderPracticeAuthority.doctor_id == doctor.id,
+            col(ProviderPracticeAuthority.practice_id).is_(None),
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    ).one_or_none()
+    mappings = (
+        [account_mapping]
+        if account_mapping is not None
+        else list(
+            session.exec(
+                select(ProviderPracticeAuthority)
+                .where(
+                    or_(
+                        ProviderPracticeAuthority.practice_id == practice_id,
+                        ProviderPracticeAuthority.tenant_id == tenant_id,
+                    )
                 )
-            )
-            .execution_options(populate_existing=True)
-            .with_for_update()
-        ).all()
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            ).all()
+        )
     )
     if len(mappings) > 1 or any(
-        (row.practice_id, row.tenant_id) != (practice_id, tenant_id) for row in mappings
+        row.tenant_id != tenant_id
+        or not (
+            (row.practice_id == practice_id and row.doctor_id is None)
+            or (row.practice_id is None and row.doctor_id == doctor.id)
+        )
+        for row in mappings
     ):
         _fail("existing_core_practice_correspondence_required")
     mapping = mappings[0] if mappings else None
@@ -207,12 +226,49 @@ def provision_companion_provider(
             .with_for_update()
         ).all()
     )
-    if any(
-        (row.tenant_id, row.practice_id, row.scribe_tenant_id)
-        != (tenant_id, practice_id, scribe_tenant_id)
-        for row in related
-    ):
-        _fail("practice_correspondence_review_required")
+    for row in related:
+        if (row.tenant_id, row.practice_id, row.scribe_tenant_id) == (
+            tenant_id,
+            practice_id,
+            scribe_tenant_id,
+        ):
+            if (
+                mapping is not None
+                and mapping.doctor_id is not None
+                and row.doctor_id != doctor.id
+            ):
+                _fail("practice_correspondence_review_required")
+            continue
+        # Personal Core namespaces remain separate when providers join the same
+        # real Scribe practice. Only a different Doctor's exact existing mapping
+        # can coexist here; no guessed tenant, same-owner rebind or practice move.
+        if (
+            mapping is None
+            or row.doctor_id == doctor.id
+            or row.practice_id != practice_id
+            or row.scribe_tenant_id != scribe_tenant_id
+        ):
+            _fail("practice_correspondence_review_required")
+        other_mapping = session.exec(
+            select(ProviderPracticeAuthority)
+            .where(ProviderPracticeAuthority.tenant_id == row.tenant_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        ).one_or_none()
+        if other_mapping is None or not (
+            (
+                other_mapping.practice_id == practice_id
+                and other_mapping.doctor_id is None
+            )
+            or (
+                other_mapping.practice_id is None
+                and other_mapping.doctor_id == row.doctor_id
+            )
+        ):
+            _fail("practice_correspondence_review_required")
+        if mapping.doctor_id is None and other_mapping.doctor_id is None:
+            # Entirely legacy practice links keep their original Core tenant.
+            _fail("practice_correspondence_review_required")
     own = [row for row in related if row.doctor_id == doctor_id]
     if len(own) > 1 or any(row.revoked_at is not None for row in own):
         _fail("revoked_or_ambiguous_provider_link")
@@ -284,6 +340,8 @@ def provision_companion_provider(
         for tenant_member in tenant_members:
             if actor is not None and tenant_member.actor_id == actor.id:
                 continue
+            if mapping is not None and mapping.doctor_id is not None:
+                _fail("account_tenant_owner_correspondence_required")
             providers = session.exec(
                 select(col(PracticeMember.practice_id))
                 .join(

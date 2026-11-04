@@ -27,6 +27,7 @@ from app.models.authority import (
     AuthorityActorExternalIdentity,
     AuthorityPerson,
     AuthorityPersonBinding,
+    AuthorityPersonOrigin,
     AuthorityTenant,
     AuthorityTenantMembership,
     MountContextSession,
@@ -70,7 +71,13 @@ EXTRA_MODELS = (
 )
 
 
-def make_scope_case(session, *, existing_tenant=None, existing_practice=None):
+def make_scope_case(
+    session,
+    *,
+    existing_tenant=None,
+    existing_practice=None,
+    normal_provider_record=False,
+):
     now = datetime.now(UTC)
     actor = AuthorityActor(actor_kind="human")
     tenant = existing_tenant or AuthorityTenant()
@@ -125,6 +132,10 @@ def make_scope_case(session, *, existing_tenant=None, existing_practice=None):
         role="owner",
         attested_at=now,
     )
+    if normal_provider_record:
+        doctor.onboarding_completed_at = now
+        person_binding.actor_id = actor.id
+        session.add(doctor)
     assert lock_practice_seats(session, practice.id) is not None
     session.add_all([identity, membership, person_binding, practice_member])
     session.flush()
@@ -139,6 +150,34 @@ def make_scope_case(session, *, existing_tenant=None, existing_practice=None):
         review_ref=f"synthetic_review_{uuid4().hex}",
     )
     session.add(link)
+    if normal_provider_record:
+        from app.models.provider_record_authority import (
+            ProviderPracticeAuthority,
+            ProviderRecordAuthority,
+        )
+
+        practice_scope = ProviderPracticeAuthority(
+            practice_id=practice.id, tenant_id=tenant.id
+        )
+        session.add(practice_scope)
+        session.flush()
+        session.add_all(
+            [
+                AuthorityPersonOrigin(
+                    person_id=person.id,
+                    origin="provider_entry",
+                    source_ref=str(patient.id),
+                ),
+                ProviderRecordAuthority(
+                    binding_id=person_binding.id,
+                    practice_authority_id=practice_scope.id,
+                    doctor_id=doctor.id,
+                    appointment_id=appointment.id,
+                    patient_id=patient.id,
+                    context_snapshot_ref="synthetic-capture-context-" + uuid4().hex,
+                ),
+            ]
+        )
     session.commit()
     token = authority.exchange_context_token(
         clerk_issuer=identity.issuer,

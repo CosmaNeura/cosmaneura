@@ -569,6 +569,72 @@ def rebind_doctor_clerk_identity_command(
     )
 
 
+@app.command("bind-null-pilot-practice")
+def bind_null_pilot_practice_command(
+    doctor_id: str = typer.Option(...),
+    practice_id: str = typer.Option(...),
+    predecessor_grant_id: str = typer.Option(...),
+    identity_sha256: str = typer.Option(...),
+    email_sha256: str = typer.Option(...),
+    before_state_sha256: str = typer.Option(...),
+    source_commit_sha: str = typer.Option(...),
+    observed_at: str = typer.Option(
+        ..., help="Exact timezone-aware observation; expires after 15 minutes."
+    ),
+    operator_ref: str = typer.Option(...),
+    reason: str = typer.Option(...),
+    confirm_plan_sha256: str | None = typer.Option(None),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Preview one NULL legacy binding; --apply requires the exact reviewed digest."""
+    from datetime import datetime
+
+    from app.services.pilot_practice_snapshot_binding import (
+        BindingRequest,
+        PilotPracticeBindingError,
+        apply_pilot_practice_binding,
+        plan_pilot_practice_binding,
+    )
+
+    try:
+        request = BindingRequest(
+            doctor_id=_typeid(doctor_id, "doctor"),
+            practice_id=_typeid(practice_id, "practice"),
+            predecessor_grant_id=_typeid(predecessor_grant_id, "pilot_access_grant"),
+            identity_sha256=identity_sha256,
+            email_sha256=email_sha256,
+            before_state_sha256=before_state_sha256,
+            source_commit_sha=source_commit_sha,
+            observed_at=datetime.fromisoformat(observed_at),
+            operator_ref=operator_ref,
+            reason=reason,
+        )
+        if apply and confirm_plan_sha256 is None:
+            raise PilotPracticeBindingError("explicit digest required")
+        with global_session():
+            result = (
+                apply_pilot_practice_binding(
+                    request, confirmed_plan_sha256=confirm_plan_sha256
+                )
+                if apply and confirm_plan_sha256 is not None
+                else plan_pilot_practice_binding(request)
+            )
+    except (ValueError, PilotPracticeBindingError):
+        raise typer.BadParameter(
+            "pilot practice binding refused; verify the exact plan and current state"
+        ) from None
+    state = (
+        "already applied"
+        if result.already_applied
+        else "applied"
+        if apply
+        else "dry run"
+    )
+    typer.echo(
+        f"Pilot practice binding {state}; environment={result.environment}; plan_sha256={result.plan_sha256}."
+    )
+
+
 @app.command("close-provider-account")
 def close_provider_account_command(
     doctor_id: str = typer.Option(

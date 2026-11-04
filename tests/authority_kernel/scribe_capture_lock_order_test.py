@@ -210,7 +210,9 @@ def case(monkeypatch):
     monkeypatch.setattr(
         view_as, "mount_context_session_blocked_by_view_as", REAL_VIEW_AS_GUARD
     )
-    monkeypatch.setattr(capture, "doctor_access_in_force", lambda _: True)
+    monkeypatch.setattr(
+        capture, "doctor_access_in_force", lambda _doctor, **_kwargs: True
+    )
     monkeypatch.setattr(
         provider_record_authority,
         "doctor_access_in_force",
@@ -292,17 +294,17 @@ def test_invalid_token_never_chooses_a_doctor_from_request_input(case):
     assert case.transaction.locks == []
 
 
-@pytest.mark.parametrize("allowed", [False, True])
-def test_exchange_requires_allowed_access_with_a_current_practice(
-    case, monkeypatch, allowed
+@pytest.mark.parametrize("has_practice", [False, True])
+def test_exchange_denied_access_cannot_lock_with_or_without_a_practice(
+    case, monkeypatch, has_practice
 ):
     monkeypatch.setattr(
         provider_record_authority,
         "resolve_session_prep_provider_access",
         lambda _doctor, **_kwargs: SessionPrepProviderAccessDecision(
-            allowed=allowed,
-            denial_reason=None if allowed else "practice_membership_inactive",
-            practice=None,
+            allowed=False,
+            denial_reason="provider_unavailable",
+            practice=cast(Practice, case.practice) if has_practice else None,
         ),
     )
     exchange = Transaction(case.transaction.rows)

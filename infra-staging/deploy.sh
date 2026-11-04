@@ -19,6 +19,7 @@ EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
 STAGING_PRESERVE_EFFECTIVE_CONFIGURATION="${STAGING_PRESERVE_EFFECTIVE_CONFIGURATION:-false}"
 EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256="${EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256:-}"
+STAGING_RUNTIME_PUBLIC_JSON="${STAGING_RUNTIME_PUBLIC_JSON:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
@@ -241,8 +242,46 @@ verify_founder_release_source() {
 	fi
 }
 
+verify_staging_release_source() {
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
+		verify_founder_release_source
+		return $?
+	fi
+	local source_result
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" != "service-principal" || \
+		"$GIT_SHA" != "${CANDIDATE_SHA:-}" || "$STAGING_IMAGE_DIGEST" != "${IMAGE_DIGEST:-}" || \
+		! "$GIT_SHA" =~ ^[0-9a-f]{40}$ || ! "$STAGING_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ || \
+		! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ || \
+		! "${WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ || \
+		! "$EXPECTED_SCHEMA_BEFORE" =~ ^[0-9a-f]{12}$ || ! "$EXPECTED_SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]; then
+		echo "Hosted staging requires the exact canonical candidate, published digest, PR and schema inputs."
+		return 1
+	fi
+	if ! source_result=$(cd "$REPOSITORY_ROOT" && "$PYTHON_BIN" -I -S -B \
+		scripts/verify_staging_candidate.py --reverify --candidate-sha "$GIT_SHA" \
+		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" --expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
+		--workflow-sha "$WORKFLOW_SHA"); then
+		echo "Hosted staging candidate provenance reverification failed."
+		return 1
+	fi
+	if ! printf '%s' "$source_result" | jq -e --arg candidate "$GIT_SHA" \
+		--argjson approval_pr "$STAGING_APPROVAL_PR_NUMBER" --arg schema "$EXPECTED_SCHEMA_AFTER" '
+		type == "object" and keys == ["approval_pr_number","candidate_sha","master_sha","schema_head"] and
+		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and .schema_head == $schema and
+		(.master_sha | test("^[0-9a-f]{40}$"))' >/dev/null; then
+		echo "Hosted staging candidate source evidence is invalid."
+		return 1
+	fi
+	# Bind the existing migration selectors only after the canonical founder
+	# dispatch, protected-master/PR/schema verifier and published digest agree.
+	FOUNDER_CANDIDATE_SHA=$GIT_SHA
+	FOUNDER_CANDIDATE_IMAGE_DIGEST=$STAGING_IMAGE_DIGEST
+	FOUNDER_APPROVAL_PR_NUMBER=$STAGING_APPROVAL_PR_NUMBER
+	FOUNDER_EXPECTED_SCHEMA_AFTER=$EXPECTED_SCHEMA_AFTER
+}
+
 case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
-service-principal) ;;
+service-principal) verify_staging_release_source || exit 1 ;;
 founder-user) verify_founder_release_source || exit 1 ;;
 *) echo "Unsupported staging deployment identity mode."; exit 1 ;;
 esac
@@ -275,7 +314,7 @@ fi
 CONFIGURATION_STATUS=0
 ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend 2>/dev/null) || \
 	CONFIGURATION_STATUS=$?
-unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
+unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET RECALL_API_KEY_INPUT
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	echo "Failed to load staging deployment configuration."
 	exit 1
@@ -387,6 +426,14 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 fi
 if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
 	ENV_JSON=$(jq -c --argjson release "$RELEASE_V2_JSON" '. + $release.runtime_public' <<<"$ENV_JSON") || exit 1
+elif [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+	# Canonical service-principal preservation receives only the reviewed public
+	# group. The complete hash and live comparisons still bind every owned value.
+	STAGING_RUNTIME_PUBLIC_JSON=$(printf '%s' "$STAGING_RUNTIME_PUBLIC_JSON" |
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+			--validate-runtime-public) || exit 1
+	ENV_JSON=$(jq -c --argjson runtime "$STAGING_RUNTIME_PUBLIC_JSON" \
+		'. + $runtime' <<<"$ENV_JSON") || exit 1
 fi
 if ! jq -e '
 	.SOVEREIGN_RECORD_GRANT_SECRET |
@@ -431,7 +478,7 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
 forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
-if sys.argv[2] == "v2":
+if sys.argv[2] == "v2" or sys.argv[3] == "true":
     forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
     if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
         fail()
@@ -485,7 +532,7 @@ evidence = {
     "deployment_blockers": blockers,
 }
 print(json.dumps(evidence, separators=(",", ":"), sort_keys=True))
-' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" <<<"$ENV_JSON"
+' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" <<<"$ENV_JSON"
 }
 
 if ! CONFIGURATION_EVIDENCE_JSON=$(build_configuration_evidence); then
@@ -657,6 +704,11 @@ RUNTIME_CONTRACTS_JSON=""
 if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
 	RUNTIME_CONTRACTS_JSON=$(runtime_contracts_json) || exit 1
 	verify_effective_configuration_fingerprint || exit 1
+	CONFIGURATION_EVIDENCE_JSON=$(jq -c \
+		--arg fingerprint "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" \
+		'. + {effective_configuration_sha256: $fingerprint, effective_configuration_preserved: true}' \
+		<<<"$CONFIGURATION_EVIDENCE_JSON") || exit 1
+	emit_github_output configuration_evidence "$CONFIGURATION_EVIDENCE_JSON" || exit 1
 fi
 
 if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
@@ -1149,7 +1201,7 @@ verify_migration_job_template() {
 	local compatibility_args=()
 	# Version-2 candidates already escape the URL in migrations/env.py.
 	# Keep the old bootstrap only for the historical pinned release.
-	if [[ -z "${RELEASE_V2_JSON:-}" ]]; then
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && -z "${RELEASE_V2_JSON:-}" ]]; then
 		compatibility_args+=(--staging-alembic-compatibility)
 	fi
 	if ! migration_template=$(az containerapp job show \
@@ -1313,9 +1365,9 @@ run_migrations() {
 	fi
 
 	# Build secrets and env var args from the same source as the app containers.
-	local migration_command command_flag=--staging-alembic-command
-	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
-		command_flag=--alembic-command
+	local migration_command command_flag=--alembic-command
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && -z "${RELEASE_V2_JSON:-}" ]]; then
+		command_flag=--staging-alembic-command
 	fi
 	migration_command=$("$PYTHON_BIN" -I -S -B \
 		"$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
@@ -1818,7 +1870,7 @@ wait_for_incompatible_worker_replicas_to_drain() {
 }
 
 # Run migrations before deploying new containers
-verify_founder_release_source || exit 1
+verify_staging_release_source || exit 1
 verify_azure_deployment_identity || exit 1
 verify_preserved_runtime || exit 1
 run_migrations

@@ -207,6 +207,121 @@
         ]
       }
     },
+    "/internal/v1/session-prep/citations/{final_ref}/{ordinal}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Retained Session Prep Citation",
+        "operationId": "retained_session_prep_citation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "final_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Final Ref"
+            }
+          },
+          {
+            "name": "ordinal",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 64,
+              "minimum": 1,
+              "title": "Ordinal"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetainedCitationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/notes/revisions/{note_id}/source-correction": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Correct Session Prep Source Note",
+        "operationId": "correct_session_prep_source_note",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectSessionPrepSourceNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectSessionPrepSourceNoteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/notes/revisions/{note_id}/session-prep-review": {
       "post": {
         "tags": [
@@ -4385,6 +4500,51 @@
         ],
         "title": "ConfirmedBillingVisit"
       },
+      "CorrectSessionPrepSourceNoteRequest": {
+        "properties": {
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Content Sha256"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "maxProperties": 64,
+            "minProperties": 1,
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_content_sha256",
+          "fields"
+        ],
+        "title": "CorrectSessionPrepSourceNoteRequest"
+      },
+      "CorrectSessionPrepSourceNoteResponse": {
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "title": "Note Id"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "note_id",
+          "content_sha256"
+        ],
+        "title": "CorrectSessionPrepSourceNoteResponse"
+      },
       "CreateLabPanel": {
         "properties": {
           "collected_on": {
@@ -4607,6 +4767,47 @@
           "doctor_count"
         ],
         "title": "DailyVolumeRow"
+      },
+      "DisplayCitation": {
+        "properties": {
+          "citation_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._~-]{8,160}$",
+            "title": "Citation Ref"
+          },
+          "ordinal": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Ordinal"
+          },
+          "source_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Source At"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "section": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Section"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "citation_ref",
+          "ordinal",
+          "source_at",
+          "reviewed_at",
+          "section"
+        ],
+        "title": "DisplayCitation"
       },
       "DoctorNoteSchema": {
         "properties": {
@@ -5889,6 +6090,30 @@
               }
             ],
             "title": "Source Appointment Date"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "list_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List Updated At"
           }
         },
         "additionalProperties": false,
@@ -6010,7 +6235,8 @@
         "type": "string",
         "enum": [
           "active",
-          "stopped"
+          "stopped",
+          "held"
         ],
         "title": "MedicationStatus"
       },
@@ -6085,6 +6311,13 @@
               }
             ],
             "title": "Session Prep Reviews"
+          },
+          "session_prep_editable_note_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Session Prep Editable Note Ids"
           },
           "session_prep_prior_notes": {
             "anyOf": [
@@ -6397,6 +6630,10 @@
             "type": "boolean",
             "title": "Has Natmed Subscription"
           },
+          "held_medication_writes_enabled": {
+            "type": "boolean",
+            "title": "Held Medication Writes Enabled"
+          },
           "directory": {
             "items": {
               "$ref": "#/components/schemas/ResourceLink"
@@ -6416,6 +6653,7 @@
         "type": "object",
         "required": [
           "has_natmed_subscription",
+          "held_medication_writes_enabled",
           "directory",
           "medications"
         ],
@@ -7039,6 +7277,11 @@
               }
             ],
             "title": "Selected Source Fingerprint"
+          },
+          "newer_prior_note_awaiting_review": {
+            "type": "boolean",
+            "title": "Newer Prior Note Awaiting Review",
+            "default": false
           }
         },
         "type": "object",
@@ -7247,6 +7490,63 @@
         ],
         "title": "ResourceLink"
       },
+      "RetainedCitationResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0.0",
+            "title": "Schema Version"
+          },
+          "citation": {
+            "$ref": "#/components/schemas/DisplayCitation"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Sha256"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/RetainedCitationSection"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Sections"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "citation",
+          "content_sha256",
+          "sections"
+        ],
+        "title": "RetainedCitationResponse"
+      },
+      "RetainedCitationSection": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 18000,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "text"
+        ],
+        "title": "RetainedCitationSection"
+      },
       "ReviewNoteForSessionPrepRequest": {
         "properties": {
           "expected_content_sha256": {
@@ -7334,7 +7634,7 @@
           "can_review_sources"
         ],
         "title": "SessionPrepSettingsData",
-        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current provider/practice/BAA/\nentitlement gate as review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
+        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current active-account decision\nas review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
       },
       "SettingsData": {
         "properties": {

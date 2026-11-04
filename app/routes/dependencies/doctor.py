@@ -6,7 +6,11 @@ import sentry_sdk
 from fastapi import HTTPException, Request, status
 from starlette_context import context
 
+import app.configuration.session_prep as session_prep_configuration
 from app import log
+from app.routes.dependencies.session_prep_account import (
+    is_session_prep_active_account_route,
+)
 from app.services.clerk_identity import verified_primary_email
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.pilot_access_grandfather import (
@@ -119,15 +123,28 @@ def inject_doctor_record(request: Request):
     """
 
     clerk_id = request.state.auth_state.payload["sub"]
-    # Check the durable offboarding tombstone before upsert. This prevents a
-    # revoked pre-login grant from recreating a Doctor merely by signing in.
-    if revoked_pilot_access_grant(clerk_id) is not None:
+    session_prep_account_path = is_session_prep_active_account_route(
+        request,
+        rollout_enabled=(
+            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
+        ),
+    )
+    # A retained Doctor is the account identity for Session Prep. Historic
+    # enrollment metadata cannot disable that active account, while a revoked
+    # pre-login identity still cannot manufacture a new Doctor row.
+    doctor = Doctor.get(clerk_id=clerk_id) if session_prep_account_path else None
+    if doctor is None and revoked_pilot_access_grant(clerk_id) is not None:
         raise HTTPException(
             status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
     current = datetime.now(timezone.utc)
-    grant = _active_grant_for_clerk(clerk_id, at=current)
-    doctor = Doctor.upsert(data={"clerk_id": clerk_id}, unique_by="clerk_id")
+    grant = (
+        None
+        if session_prep_account_path
+        else _active_grant_for_clerk(clerk_id, at=current)
+    )
+    if doctor is None:
+        doctor = Doctor.upsert(data={"clerk_id": clerk_id}, unique_by="clerk_id")
 
     if doctor.deleted_at:
         raise HTTPException(
@@ -138,7 +155,9 @@ def inject_doctor_record(request: Request):
     # its reviewed, verified primary email. Revalidate that live identity on
     # every request carrying an active grant; ordinary accounts avoid this
     # remote call.
-    managed_identity_required = _requires_live_managed_identity(doctor)
+    managed_identity_required = (
+        not session_prep_account_path and _requires_live_managed_identity(doctor)
+    )
     live_verified_email = (
         _fetch_clerk_email(clerk_id)
         if grant is not None or managed_identity_required

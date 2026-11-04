@@ -164,13 +164,14 @@ def _run_deployment_check(
     expected_image = (
         f"registry.example/cosmaneura@{DIGEST}"
         if deploy_path == "infra-staging/deploy.sh"
-        else f"registry.example/cosmaneura:{SHA}"
+        else f"registry.example/cosmaneura@{DIGEST}"
     )
     script = f"""
 RESOURCE_GROUP=test-resource-group
 REVISION_STRING={suffix}
 {image_variable}=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+PRODUCTION_IMAGE_REF=registry.example/cosmaneura@{DIGEST}
 SCHEDULER_CONTAINER=test-scheduler
 sleep() {{ :; }}
 az() {{
@@ -522,6 +523,7 @@ WORKER_WORKLOAD_CONTAINER_NAME=app-worker
 SCHEDULER_WORKLOAD_CONTAINER_NAME=app-scheduler
 STAGING_IMAGE=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+PRODUCTION_IMAGE_REF=registry.example/cosmaneura@{DIGEST}
 STAGING_API_COMMAND='python main.py'
 STAGING_WORKER_COMMAND='worker command'
 SCHEDULER_COMMAND='scheduler command'
@@ -968,10 +970,19 @@ def test_configuration_blockers_stop_before_any_azure_call(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     az_log = tmp_path / "az.log"
+    canonical_log = tmp_path / "canonical.log"
     commands = {
         "just": "#!/bin/sh\nprintf '%s' \"$FAKE_CONFIG\"\n",
         "python": (
             "#!/bin/sh\n"
+            # Establish only the canonical source precondition so these cases
+            # still exercise the real configuration refusal before Azure.
+            'if [ "$1 $2 $3 $4" = "-I -S -B scripts/verify_staging_candidate.py" ]; then\n'
+            '  [ "$*" = "-I -S -B scripts/verify_staging_candidate.py --reverify --candidate-sha $FAKE_SHA --approval-pr-number 931 --expected-schema-after bbbbbbbbbbbb --workflow-sha $FAKE_SHA" ] || exit 98\n'
+            '  printf \'%s\\n\' "$@" >>"$FAKE_CANONICAL_LOG"\n'
+            '  printf \'{"approval_pr_number":931,"candidate_sha":"%s","master_sha":"%s","schema_head":"bbbbbbbbbbbb"}\\n\' "$FAKE_SHA" "$FAKE_SHA"\n'
+            "  exit 0\n"
+            "fi\n"
             # Keep the real OS-random job allocation; this fixture only stubs
             # the unrelated deployment capability check that consumes stdin.
             'if [ "$1 $2 $3 $4" = "-I -S -B -c" ]; then\n'
@@ -1003,6 +1014,12 @@ def test_configuration_blockers_stop_before_any_azure_call(
             "FAKE_CONFIG": json.dumps(config),
             "FAKE_SHA": SHA,
             "FAKE_AZ_LOG": str(az_log),
+            "FAKE_CANONICAL_LOG": str(canonical_log),
+            "CANDIDATE_SHA": SHA,
+            "IMAGE_DIGEST": DIGEST,
+            "STAGING_APPROVAL_PR_NUMBER": "931",
+            "STAGING_DEPLOYMENT_IDENTITY_MODE": "service-principal",
+            "WORKFLOW_SHA": SHA,
             "EXPECTED_SCHEMA_BEFORE": "a" * 12,
             "EXPECTED_SCHEMA_AFTER": "b" * 12,
             "EXPECTED_RECOVERY_DIGEST": DIGEST,
@@ -1014,6 +1031,21 @@ def test_configuration_blockers_stop_before_any_azure_call(
         capture_output=True,
         text=True,
     )
+    assert canonical_log.read_text().splitlines() == [
+        "-I",
+        "-S",
+        "-B",
+        "scripts/verify_staging_candidate.py",
+        "--reverify",
+        "--candidate-sha",
+        SHA,
+        "--approval-pr-number",
+        "931",
+        "--expected-schema-after",
+        "b" * 12,
+        "--workflow-sha",
+        SHA,
+    ]
     assert result.returncode != 0
     assert expected_message in result.stdout
     assert all(

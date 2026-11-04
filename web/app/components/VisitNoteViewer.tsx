@@ -22,6 +22,7 @@ import type {
 import { usableBillingSource } from "~/lib/cab-billing-header"
 
 import { SessionPrepNoteReviewButton } from "./SessionPrepNoteReviewButton"
+import { SessionPrepSourceNoteEditor } from "./SessionPrepSourceNoteEditor"
 
 // Build clipboard HTML from the rendered section rather than the surrounding
 // markup, so per-section copy controls never end up in a pasted note.
@@ -43,6 +44,7 @@ export default function VisitNoteViewer({
   transcript,
   focusOnMount = false,
   billingSource,
+  sourceEditable = false,
 }: {
   note: AiVisitNote
   defaultOpen: boolean
@@ -50,8 +52,10 @@ export default function VisitNoteViewer({
   transcript?: AiVisitTranscript | null
   focusOnMount?: boolean
   billingSource?: BillingHeaderSource
+  sourceEditable?: boolean
 }) {
   const [isOpen, setOpen] = useState(defaultOpen)
+  const [sourceEditing, setSourceEditing] = useState(false)
   const sectionRefs = useRef(new Map<string, HTMLDivElement | null>())
   const noteRef = useRef<HTMLDivElement>(null)
   const retainedBillingSource = useRef<BillingHeaderSource | null>(null)
@@ -109,6 +113,14 @@ export default function VisitNoteViewer({
         )}
       </div>
 
+      {review && !(sourceEditable && sourceEditing) && (
+        <SessionPrepNoteReviewButton
+          key={`${note.id}:${review.content_sha256}`}
+          noteId={note.id}
+          review={review}
+        />
+      )}
+
       <CollapsibleContent className="mt-3">
         <div>
           {Object.entries(note.note).map(([sectionTitle, noteContent]) => (
@@ -139,11 +151,13 @@ export default function VisitNoteViewer({
             </div>
           ))}
         </div>
-        {review && (
-          <SessionPrepNoteReviewButton
-            key={`${note.id}:${review.content_sha256}`}
+        {review && sourceEditable && (
+          <SessionPrepSourceNoteEditor
+            key={`source-editor:${note.id}:${review.content_sha256}`}
             noteId={note.id}
-            review={review}
+            digest={review.content_sha256}
+            fields={note.note}
+            onEditingChange={setSourceEditing}
           />
         )}
         {transcript !== undefined && (

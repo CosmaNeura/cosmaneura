@@ -1,9 +1,11 @@
 locals {
-  # One reviewed switch drives every Core Session Prep receiver/runtime gate.
-  # The provider frontend and Sovereign deployment remain separate release
-  # artifacts and cannot be enabled by this object.
+  # Shared receiver and owned-migration runtime settings. The Session Prep
+  # switch does not control schema migration; only the dedicated job may
+  # upgrade production before the separately admitted images are deployed.
+  # The provider frontend and Sovereign remain separate release artifacts.
   session_prep_shared_public_values = {
     SESSION_PREP_PROVIDER_ENABLED = tostring(var.session_prep_production_rollout.enabled)
+    AUTO_MIGRATE_ON_STARTUP       = "false"
   }
 
   # The worker calls current_source_state(), which enforces the same Authority

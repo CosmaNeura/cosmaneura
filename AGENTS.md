@@ -23,6 +23,8 @@ that work; it does not replace decomposition or deployed-state reconciliation.
   a hosted release fallback after local Docker image-pull readiness failed.
   `Build & Publish (manual)` may use hosted Ubuntu only with explicit founder
   opt-in on exact master; its acceptance and promotion gates remain mandatory.
+  Canonical staging uses standard hosted Ubuntu 24.04 with its founder-only,
+  protected-master, immutable-candidate and protected-credential gates intact.
   Other tracked workflows retain their existing compute controls.
   Never rerun retired hosted deployment snapshots.
 - Focused test: `uv run pytest <path>`.
@@ -78,7 +80,14 @@ highest tier and should be split when concerns can deploy independently.
   including documentation-only pushes, cannot enter that job. The run records
   founder self-authorization; it is not independent review.
 - Canonical staging deployment is founder-only and manual. Its control-plane
-  workflow runs from the exact current protected `master`. The legacy
+  workflow runs from the exact current protected `master` at initial dispatch
+  authorization. Initial and later checks require the fixed audited canonical
+  controller dependency manifest. Later provenance rechecks may accept a
+  descendant protected `master` only when the complete protected deployment/
+  control dependency inventory is unchanged from the dispatched controller.
+  Manifest-declared dependencies remain protected within business trees. Changed controls,
+  rewritten ancestry, lost branch protection, candidate/PR drift and schema
+  drift require a new reviewed dispatch. The legacy
   `staging`-ref deployment path has been removed, so `Deploy Staging Candidate`
   is the only staging deployment path; the `staging` branch itself is retired
   separately and carries no deploy path either way. Each
