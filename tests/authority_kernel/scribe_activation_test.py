@@ -656,3 +656,26 @@ def test_default_off_event_never_opens_a_database_session(monkeypatch):
             enabled=False, practice_refs=frozenset(), authority=SETTINGS
         ),
     )
+
+
+def test_revoked_identity_is_denied_even_before_doctor_creation(engine):
+    args = case(engine)
+    subject = "user_synthetic_revoked_fresh_" + uuid4().hex
+    with session_for(engine) as session:
+        actor = AuthorityActor()
+        session.add(actor)
+        session.flush()
+        session.add(
+            AuthorityActorExternalIdentity(
+                actor_id=actor.id,
+                issuer=SETTINGS.clerk_issuer,
+                subject=subject,
+                verified_at=datetime.now(UTC),
+                revoked_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    before = snapshot(engine)
+    with pytest.raises(ActivationDenied):
+        activate(engine, args, subject=subject)
+    assert snapshot(engine) == before

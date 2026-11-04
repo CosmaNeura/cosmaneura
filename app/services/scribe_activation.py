@@ -145,7 +145,20 @@ def activation_provider(
                 col(PilotAccessGrandfatherGrant.revoked_at).is_not(None),
             )
         ).first()
-        if revoked is not None:
+        identities = session.exec(
+            select(AuthorityActorExternalIdentity).where(
+                AuthorityActorExternalIdentity.issuer == issuer,
+                AuthorityActorExternalIdentity.subject == subject,
+            )
+        ).all()
+        if (
+            revoked is not None
+            or len(identities) > 1
+            or any(
+                identity.revoked_at is not None or identity.verified_at is None
+                for identity in identities
+            )
+        ):
             raise ActivationDenied("scribe_activation_denied")
         raise ActivationSetupRequired("practice")
     if len(doctors) != 1:
