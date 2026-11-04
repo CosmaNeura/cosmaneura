@@ -770,7 +770,7 @@ def test_main_migration_reconcile_never_prints_secret_values(
     credential = (
         f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
         "cosmaneura-prod-postgres.postgres.database.azure.com/"
-        "production?sslmode=require"
+        f"production?{VERIFIED_TLS_OPTIONS}"
     )
     arm = FakeArm()
     monkeypatch.setattr(cutover, "azure_account_subscription", lambda: subscription)
