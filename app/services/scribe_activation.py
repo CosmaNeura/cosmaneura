@@ -5,10 +5,11 @@ Successful activation commits once; the caller owns rollback on any exception.
 No email matching, account adoption, membership grant or billing change occurs.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from typeid import TypeID
 
@@ -21,6 +22,7 @@ from app.services.companion_provider_provisioning import (
 )
 from app.services.doctor_access import resolve_doctor_access
 from app.services.organization_access import member_authorization_basis
+from app.services.scribe_cancellation import digest
 from app.services.scribe_cancellation_access import cancellation_denial
 
 from app.models.authority import (
@@ -34,6 +36,7 @@ from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGran
 from app.models.practice import Practice, PracticeMember
 from app.models.practice_scribe_tenant import PracticeScribeTenant
 from app.models.provider_record_authority import ProviderPracticeAuthority
+from app.models.scribe_cancellation import scribe_cancellation_operation
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from app.models.view_as import ViewAsSession
 from sqlalchemy import text
@@ -149,6 +152,13 @@ def activation_provider(
         or len(subject) > 255
     ):
         raise ActivationDenied("scribe_activation_denied")
+    recorded = session.execute(
+        select(scribe_cancellation_operation.c.id).where(
+            scribe_cancellation_operation.c.caller_sha256 == digest([issuer, subject])
+        )
+    ).first()
+    if recorded is not None:
+        raise ActivationDenied("scribe_activation_denied")
     doctors = session.exec(select(Doctor).where(Doctor.clerk_id == subject)).all()
     if not doctors:
         revoked = session.exec(
@@ -163,6 +173,20 @@ def activation_provider(
                 AuthorityActorExternalIdentity.subject == subject,
             )
         ).all()
+        historical_link = session.exec(
+            select(ScribeCaptureProviderLink)
+            .join(
+                AuthorityActorExternalIdentity,
+                col(AuthorityActorExternalIdentity.id)
+                == col(ScribeCaptureProviderLink.source_identity_id),
+            )
+            .where(
+                AuthorityActorExternalIdentity.issuer == issuer,
+                AuthorityActorExternalIdentity.subject == subject,
+            )
+        ).first()
+        if historical_link is not None:
+            raise ActivationDenied("scribe_activation_denied")
         if (
             revoked is not None
             or len(identities) > 1
@@ -243,6 +267,8 @@ def activate_scribe(
     subject: str,
     trigger: ActivationTrigger,
     settings: ScribeActivationSettings,
+    request_key: UUID | None = None,
+    before_commit: Callable[[], None] | None = None,
 ) -> ActivationResult:
     """Create only the missing exact correspondence; no operator plan is needed."""
     if trigger not in _TRIGGERS or session.get_bind().dialect.name != "postgresql":
@@ -313,6 +339,8 @@ def activate_scribe(
         {"kind": "doctor", "ref": str(doctor.id)},
         {"kind": "practice", "ref": str(practice.id)},
     ]
+    if request_key is not None:
+        refs.append({"kind": "request", "ref": _digest(str(request_key))})
     digest = _digest({"version": 1, "action": "scribe.activate", "refs": refs})
     if stable is None:
         stable = PracticeScribeTenant(
@@ -351,5 +379,7 @@ def activate_scribe(
             platform_refs=refs,
         )
         result = ActivationResult("active", str(link.id))
+    if before_commit is not None:
+        before_commit()
     session.commit()
     return result

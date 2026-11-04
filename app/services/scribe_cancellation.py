@@ -54,35 +54,118 @@ def resolve_self(
         raise CancellationDenied
     doctor, identity, actor = tables.doctor, tables.identity, tables.actor
     rows = connection.execute(
-        select(doctor.c.id)
+        select(doctor.c.id, doctor.c.deleted_at)
         .where(
             doctor.c.clerk_id == subject,
-            doctor.c.deleted_at.is_(None),
         )
         .limit(2)
         .with_for_update()
     ).all()
-    if len(rows) != 1:
+    if len(rows) != 1 or rows[0][1] is not None:
         raise CancellationDenied
     actors = connection.execute(
-        select(identity.c.actor_id)
-        .join(actor, actor.c.id == identity.c.actor_id)
+        select(
+            identity.c.actor_id,
+            identity.c.revoked_at,
+            identity.c.verified_at,
+            actor.c.actor_kind,
+            actor.c.status,
+        )
+        .outerjoin(actor, actor.c.id == identity.c.actor_id)
         .where(
             identity.c.issuer == issuer,
             identity.c.subject == subject,
-            identity.c.revoked_at.is_(None),
-            actor.c.actor_kind == "human",
-            actor.c.status == "active",
         )
         .limit(2)
     ).all()
-    if len(actors) > 1:
+    if len(actors) > 1 or any(
+        revoked is not None or verified is None or kind != "human" or state != "active"
+        for _, revoked, verified, kind, state in actors
+    ):
         raise CancellationDenied
     return SelfIdentity(
         digest([issuer, subject]),
         str(rows[0][0]),
         str(actors[0][0]) if actors else None,
     )
+
+
+def never_activated_subject(
+    connection: Connection, *, issuer: str, subject: str, tables
+) -> bool:
+    """Count all Doctor rows, including deleted rows; only true first use is 404."""
+    rows = connection.execute(
+        select(tables.doctor.c.id).where(tables.doctor.c.clerk_id == subject).limit(2)
+    ).all()
+    if rows:
+        return False
+    recorded = connection.execute(
+        select(operations.c.id).where(
+            operations.c.caller_sha256 == digest([issuer, subject])
+        )
+    ).first()
+    historical_link = connection.execute(
+        select(tables.link.c.id)
+        .join(tables.identity, tables.identity.c.id == tables.link.c.source_identity_id)
+        .where(tables.identity.c.issuer == issuer, tables.identity.c.subject == subject)
+        .limit(1)
+    ).first()
+    if recorded is not None or historical_link is not None:
+        raise CancellationDenied
+    grant = tables.grant
+    revoked = connection.execute(
+        select(grant.c.id)
+        .where(grant.c.clerk_id == subject, grant.c.revoked_at.is_not(None))
+        .limit(1)
+    ).first()
+    if revoked is not None:
+        raise CancellationDenied
+    identity = tables.identity
+    revoked_identity = connection.execute(
+        select(identity.c.id)
+        .where(
+            identity.c.issuer == issuer,
+            identity.c.subject == subject,
+            identity.c.revoked_at.is_not(None),
+        )
+        .limit(1)
+    ).first()
+    if revoked_identity is not None:
+        raise CancellationDenied
+    return True
+
+
+def deny_account_tombstones(
+    connection: Connection, *, identity: SelfIdentity, subject: str, tables
+) -> None:
+    grant, member, link = tables.grant, tables.member, tables.link
+    revoked_grant = connection.execute(
+        select(grant.c.id)
+        .where(grant.c.clerk_id == subject, grant.c.revoked_at.is_not(None))
+        .limit(1)
+    ).first()
+    members = connection.execute(
+        select(member.c.seat_state, member.c.access_revoked_at)
+        .where(member.c.doctor_id == identity.doctor_ref)
+        .limit(2)
+    ).all()
+    if (
+        revoked_grant is not None
+        or len(members) > 1
+        or any(seat != "active" or revoked is not None for seat, revoked in members)
+    ):
+        raise CancellationDenied
+    cancelled = connection.execute(
+        select(operations.c.id).where(operations.c.doctor_ref == identity.doctor_ref)
+    ).first()
+    revoked_link = connection.execute(
+        select(link.c.id)
+        .where(link.c.doctor_id == identity.doctor_ref, link.c.revoked_at.is_not(None))
+        .limit(1)
+    ).first()
+    # Own cancellation status deliberately survives its Scribe-only link fence.
+    if revoked_link is not None and cancelled is None:
+        raise CancellationDenied
 
 
 def owned_inventory(
@@ -328,6 +411,8 @@ def execute_cancellation(
     from activemodel.session_manager import global_session
     from app.models.authority import AuthorityActor, AuthorityActorExternalIdentity
     from app.models.doctor import Doctor
+    from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+    from app.models.practice import PracticeMember
     from app.models.scribe_capture_admission import ScribeCaptureAdmission
     from app.models.scribe_capture_binding import (
         ScribeCaptureBinding,
@@ -342,6 +427,8 @@ def execute_cancellation(
         doctor=cast(Any, Doctor).__table__,
         identity=cast(Any, AuthorityActorExternalIdentity).__table__,
         actor=cast(Any, AuthorityActor).__table__,
+        grant=cast(Any, PilotAccessGrandfatherGrant).__table__,
+        member=cast(Any, PracticeMember).__table__,
         link=cast(Any, ScribeCaptureProviderLink).__table__,
         binding=cast(Any, ScribeCaptureBinding).__table__,
         admission=cast(Any, ScribeCaptureAdmission).__table__,
@@ -350,6 +437,10 @@ def execute_cancellation(
         try:
             with transaction_budget(session, deadline):
                 db = session.connection()
+                if isinstance(request, StatusRequest) and never_activated_subject(
+                    db, issuer=issuer, subject=subject, tables=tables
+                ):
+                    raise CancellationNotFound
                 identity = resolve_self(
                     db,
                     issuer=issuer,
@@ -358,9 +449,18 @@ def execute_cancellation(
                     tables=tables,
                 )
                 if not isinstance(request, PreviewRequest):
-                    old = existing_receipt(db, identity, request, request_key)
+                    try:
+                        old = existing_receipt(db, identity, request, request_key)
+                    except CancellationNotFound:
+                        deny_account_tombstones(
+                            db, identity=identity, subject=subject, tables=tables
+                        )
+                        raise
                     if old:
-                        return old  # Own status survives Scribe-only link revocation.
+                        return old  # Own receipt grants no renewed processing access.
+                deny_account_tombstones(
+                    db, identity=identity, subject=subject, tables=tables
+                )
                 settings.require_policy()
                 current = resolve_self(
                     db,

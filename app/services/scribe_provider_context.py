@@ -19,6 +19,7 @@ from app.services.companion_records import (
     check_deadline,
     transaction_budget,
 )
+from app.services.scribe_account_setup import require_account_setup
 from app.services.scribe_encounter_contract import CatalogRequest
 
 from activemodel.session_manager import global_session
@@ -101,7 +102,13 @@ def _connection(
         session = cast(Session, managed)
         try:
             with session.no_autoflush, transaction_budget(session, deadline):
-                tenant = _discovered_tenant(session, issuer=issuer, subject=subject)
+                try:
+                    tenant = _discovered_tenant(session, issuer=issuer, subject=subject)
+                except authority.AuthorityRequestDeniedError:
+                    require_account_setup(
+                        session, issuer=issuer, subject=subject, auth=authority_settings
+                    )
+                    raise
                 args = dict(
                     issuer=issuer,
                     subject=subject,

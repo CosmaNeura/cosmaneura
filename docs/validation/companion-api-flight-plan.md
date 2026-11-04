@@ -6,6 +6,12 @@ frontend, recording implementation, or database schema to the platform.
 
 ## Receiver-first patch stack
 
+The subsequent Scribe-only ADR 0029 activation stack is documented in
+`scribe-activation-flight-plan.md`. Its private dual-authenticated activation
+facade and closed, non-mutating setup response do not broaden companion caller
+admission. Receiver support must precede the native client. Source inclusion
+does not enable activation, change a practice cohort or authorize deployment.
+
 1. Add the saved-record contract and bounded read service. These reuse the
    existing verified human/context and Scribe capture-binding authority.
 2. Add bounded record and connection/encounter discovery receivers, plus the
