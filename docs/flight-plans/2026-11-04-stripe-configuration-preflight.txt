@@ -1,0 +1,45 @@
+Stripe read-only configuration preflight — Tier 2
+
+Problem: release qualification has a guarded Checkout drain tool but no single
+read-only inventory check for the pinned portal, account default, no-code portal
+entry points and required webhook configuration. These can otherwise bypass
+Core seat management or prevent subscription maintenance after release.
+
+This standalone command imports no application code and opens no database.
+It uses GET only on fixed Stripe API paths, system HTTPS verification, no proxy
+or redirects, response bounds and paginated inventory limits. Credentials come
+only from STRIPE_SECRET_KEY; no credential or provider object is emitted.
+The account, price and portal expected IDs are supplied privately through
+STRIPE_ACCOUNT_ID, STRIPE_PRICE_ID and STRIPE_PORTAL_CONFIGURATION_ID.
+
+First qualify against a test account:
+  python scripts/stripe_configuration_preflight.py
+The operator may separately run the same read-only audit against the reviewed
+live account with --live-mode. No live provider call was made during source
+preparation. Restricted keys need read permissions for account, price, portal
+configuration and webhook endpoints; missing rights fail closed.
+
+The price and API version are read from candidate source literals without
+executing that source. The portal audit requires maintenance features, disabled
+customer/plan/quantity updates, no enabled pause, no-code login disabled and
+period-end cancellation without proration if cancellation is enabled. Unknown
+features are refused. All default configurations must be safe; no saved default
+is compatible. The pinned configuration must match its paginated inventory.
+One exact deployment webhook must be enabled with explicit supported events
+and the candidate API version. A wildcard alone does not establish coverage.
+
+Exit 0 means configuration_verified only. It DOES NOT authorize acquisition,
+payment, promotion, schema, cohort or environment changes. The report explicitly
+leaves webhook-secret validity and delivery, inbox/worker reconciliation,
+customer-email links, legacy subscriptions, checkout drain and actual payment
+acceptance unverified. The existing 24h5m drain and activation gates remain.
+
+Validation: synthetic read-only transport and inventory regressions, wrong
+account/mode/price, unsafe portal/default/login/feature variants, webhook
+version/event/uniqueness, pagination drift, credential-safe failure, and static
+lint/type checks. Review the final pushed SHA independently before merge.
+
+Recovery: remove the new command, tests and this plan or stop invoking it.
+There is no runtime behavior, database, provider setting or installed scheduler
+to reverse. No feature flag, schema rung or migration rehearsal applies to this
+standalone read-only source outcome. Production promotion remains founder-only.

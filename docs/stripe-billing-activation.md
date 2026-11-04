@@ -15,6 +15,18 @@ hosted sessions remain usable until they complete or expire.
 
 ## Customer portal configuration
 
+Before preparing an activation decision, run the standalone read-only
+`python scripts/stripe_configuration_preflight.py` against the test account.
+Supply `STRIPE_SECRET_KEY`, `STRIPE_ACCOUNT_ID`, `STRIPE_PRICE_ID` and
+`STRIPE_PORTAL_CONFIGURATION_ID` privately. A separately reviewed live-account
+audit adds `--live-mode`. It checks the candidate's account/price contract,
+pinned/default portal configurations, no-code login and exact webhook event/API
+version configuration. It prints fixed aggregate JSON and performs GETs only.
+Exit zero verifies configuration only; the report names the remaining delivery,
+worker, email-link, legacy-subscription, drain and payment-acceptance gates.
+It does not replace any activation step below. See the
+[source flight plan](flight-plans/2026-11-04-stripe-configuration-preflight.txt).
+
 Every customer portal session Core creates names a pinned portal
 configuration, `STRIPE_PORTAL_CONFIGURATION_ID` (`bpc_...`, the
 `portal-configuration-id` field of the Stripe 1Password item). The pin covers
