@@ -11,6 +11,7 @@ from typing import Any, TypeVar
 from uuid import uuid4
 
 import pytest
+from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from typeid import TypeID
@@ -38,7 +39,7 @@ from app.models.scribe_cancellation import scribe_cancellation_operation
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, select
+from sqlmodel import Session, SQLModel, col, select
 
 from tests.authority_kernel.companion_provider_provisioning_test import (
     SETTINGS,
@@ -554,6 +555,21 @@ def test_expand_backfill_is_exact_immutable_and_retained_on_recovery(engine, con
                     )
                 else:
                     migration.upgrade()
+                    # Exercise Alembic's real schema comparison, rather than
+                    # checking only that the backfill data can be selected.
+                    comparison = MigrationContext.configure(
+                        connection,
+                        opts={
+                            "include_object": lambda _obj,
+                            name,
+                            kind,
+                            _reflected,
+                            _other: (
+                                kind != "table" or name == "practice_scribe_tenant"
+                            )
+                        },
+                    )
+                    assert compare_metadata(comparison, SQLModel.metadata) == []
                     assert connection.execute(
                         text(
                             "SELECT practice_id, scribe_tenant_id FROM practice_scribe_tenant"

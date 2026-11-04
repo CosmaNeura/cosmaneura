@@ -44,9 +44,14 @@ def upgrade():
     """)
     op.create_table(
         "practice_scribe_tenant",
-        sa.Column("id", TypeIDType("practice_scribe_tenant"), primary_key=True),
+        sa.Column(
+            "id",
+            TypeIDType("practice_scribe_tenant"),
+            primary_key=True,
+            comment="TypeID with prefix: practice_scribe_tenant",
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("practice_id", TypeIDType("practice"), nullable=False),
         sa.Column("scribe_tenant_id", sa.Uuid, nullable=False),
         sa.ForeignKeyConstraint(["practice_id"], ["practice.id"]),
