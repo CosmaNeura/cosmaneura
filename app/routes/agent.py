@@ -28,6 +28,7 @@ import app.services.authority_audit
 import app.services.authority_conversation
 import app.services.authority_conversation_display as retained_history
 import app.services.authority_conversation_read as history
+import app.services.authority_conversation_timed_display as timed_history
 import app.services.authority_usage
 import app.services.provider_chat_admission as admission
 import app.services.provider_question_context as provider_question
@@ -1806,6 +1807,10 @@ async def report_model_usage_event(
 
 
 @agent_api_app.post(
+    "/conversation-turns/read-display-timed",
+    response_model=timed_history.TimedConversationReadResponse,
+)
+@agent_api_app.post(
     "/conversation-turns/read-retained",
     response_model=retained_history.RetainedConversationReadResponse,
 )
@@ -1857,7 +1862,9 @@ async def read_conversation_turns(
                 return problem("VALIDATION_FAILED", 422)
             raw.extend(chunk)
         request_model = (
-            retained_history.RetainedConversationReadRequest
+            timed_history.TimedConversationReadRequest
+            if request.url.path.endswith("/conversation-turns/read-display-timed")
+            else retained_history.RetainedConversationReadRequest
             if request.url.path.endswith("/conversation-turns/read-retained")
             else retained_history.ConversationCitationReadRequest
             if request.url.path.endswith("/conversation-turns/read-with-citations")
@@ -1871,6 +1878,14 @@ async def read_conversation_turns(
 
     def read_in_session():
         with get_session() as managed:
+            if isinstance(body, timed_history.TimedConversationReadRequest):
+                return timed_history.read_timed_conversation(
+                    session=cast(Session, managed),
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    request=body,
+                    settings=settings,
+                )
             if isinstance(body, retained_history.RetainedConversationReadRequest):
                 return retained_history.read_retained_conversation(
                     session=cast(Session, managed),

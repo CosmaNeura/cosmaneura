@@ -610,8 +610,9 @@ resource "azurerm_container_app" "app" {
       }
 
       startup_probe {
-        port      = 80
-        transport = "TCP"
+        failure_count_threshold = 10
+        port                    = 80
+        transport               = "TCP"
       }
 
       liveness_probe {

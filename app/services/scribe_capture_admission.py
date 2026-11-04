@@ -126,6 +126,8 @@ class CaptureCaller:
     capture_settings: ScribeCaptureSettings = SCRIBE_CAPTURE_SETTINGS
     # Selection only: ordinary creator/tenant/visit authorization still runs.
     selected_session_id: UUID | None = None
+    # Only existing closed read dispatchers set this; default admission is processing.
+    access_purpose: str = "process"
 
     def authorize(
         self, session: Session, binding_ref: str, workspace_id: UUID
@@ -140,6 +142,7 @@ class CaptureCaller:
             client_turn_id=self.client_turn_id,
             settings=self.settings,
             capture_settings=self.capture_settings,
+            purpose=self.access_purpose,
         )
 
 

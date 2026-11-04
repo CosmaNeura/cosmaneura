@@ -108,6 +108,7 @@ def _connection(
                     session_id=session_id,
                     tenant_ref=tenant,
                     settings=authority_settings,
+                    purpose="read",
                 )
                 connection, doctor_id, link = _current_provider(session, args)
                 if session.new or session.dirty or session.deleted:

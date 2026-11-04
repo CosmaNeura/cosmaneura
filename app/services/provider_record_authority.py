@@ -70,7 +70,9 @@ class SessionPrepProviderScopeUnavailable(ProviderRecordScopeDenied):
 def _current_practice(session: Session, doctor: Doctor) -> Practice:
     """Resolve the existing provider-product policy used by Scribe capture."""
     now = datetime.now(UTC)
-    if doctor.deleted_at is not None or not doctor_access_in_force(doctor, at=now):
+    if doctor.deleted_at is not None or not doctor_access_in_force(
+        doctor, at=now, purpose="read"
+    ):
         raise ProviderRecordScopeDenied
     rows = session.exec(
         select(PracticeMember, Practice)
@@ -88,14 +90,240 @@ def _current_practice(session: Session, doctor: Doctor) -> Practice:
     return practice
 
 
-def _current_session_prep_practice(session: Session, doctor: Doctor) -> Practice:
-    """Apply the stronger Session Prep policy without changing provider access."""
+def _current_session_prep_practice(
+    session: Session, doctor: Doctor
+) -> Practice | Doctor:
+    """Resolve a provider namespace without inventing practice or legal state.
+
+    Existing practices retain their immutable provider namespace. An active
+    account without a practice owns a separate private namespace keyed by its
+    Doctor ID. Neither path changes Scribe's practice policy.
+    """
     if not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id):
         raise SessionPrepProviderScopeUnavailable
     decision = resolve_session_prep_provider_access(doctor, session=session)
-    if not decision.allowed or decision.practice is None:
+    if not decision.allowed:
         raise SessionPrepProviderScopeUnavailable
-    return decision.practice
+    return decision.practice if decision.practice is not None else doctor
+
+
+def _namespace_mapping_predicate(namespace: Practice | Doctor):
+    if isinstance(namespace, Doctor):
+        return (col(ProviderPracticeAuthority.doctor_id) == namespace.id) & col(
+            ProviderPracticeAuthority.practice_id
+        ).is_(None)
+    return (col(ProviderPracticeAuthority.practice_id) == namespace.id) & col(
+        ProviderPracticeAuthority.doctor_id
+    ).is_(None)
+
+
+def _scribe_mapping_owner_predicate(*, practice_id, doctor_id):
+    """An existing Scribe practice or this exact account's retained namespace.
+
+    Callers still require the real current practice and unchanged Scribe access.
+    This predicate does not provision an account namespace or confer access.
+    """
+    return (
+        (col(ProviderPracticeAuthority.practice_id) == practice_id)
+        & col(ProviderPracticeAuthority.doctor_id).is_(None)
+    ) | (
+        (col(ProviderPracticeAuthority.doctor_id) == doctor_id)
+        & col(ProviderPracticeAuthority.practice_id).is_(None)
+    )
+
+
+def _mapping_matches_namespace(
+    mapping, namespace: Practice | Doctor, *, doctor: Doctor | None = None
+) -> bool:
+    if isinstance(namespace, Doctor):
+        return (
+            mapping.practice_id is None
+            and getattr(mapping, "doctor_id", None) == namespace.id
+        )
+    if getattr(mapping, "doctor_id", None) is not None:
+        # Scribe may reuse an account namespace created by Session Prep, but
+        # its caller must already have passed the unchanged practice policy.
+        return (
+            doctor is not None
+            and mapping.practice_id is None
+            and mapping.doctor_id == doctor.id
+        )
+    return (
+        mapping.practice_id == namespace.id
+        and getattr(mapping, "doctor_id", None) is None
+    )
+
+
+def _mapping_allows_owned_session_prep(mapping, doctor: Doctor) -> bool:
+    """Retain exact old record bindings without relying on practice eligibility.
+
+    A practice namespace can contain records for multiple providers, so this
+    check is never authority by itself. Its caller also verifies the immutable
+    record's Doctor, patient, appointment, actor and person provenance. Private
+    account namespaces additionally require the exact Doctor owner.
+    """
+    owner = getattr(mapping, "doctor_id", None)
+    if owner is not None:
+        return mapping.practice_id is None and owner == doctor.id
+    return mapping.practice_id is not None
+
+
+def _namespace_mapping_fields(namespace: Practice | Doctor) -> dict[str, Any]:
+    if isinstance(namespace, Doctor):
+        return {"doctor_id": namespace.id, "practice_id": None}
+    return {"practice_id": namespace.id, "doctor_id": None}
+
+
+def _mapping_has_owned_session_prep_lineage(
+    *, session: Session, mapping, namespace: Practice | Doctor, doctor: Doctor, actor
+) -> bool:
+    """New exchanges may reuse only a verified account/current/retained namespace."""
+    if mapping.doctor_id is not None:
+        return mapping.practice_id is None and mapping.doctor_id == doctor.id
+    if isinstance(namespace, Practice) and mapping.practice_id == namespace.id:
+        return True
+    # A retained practice namespace survives later roster changes only when this
+    # exact account already has a real owned, live record in it. A guessed active
+    # provider membership alone cannot enroll a foreign practice or import scope.
+    owned = session.exec(
+        select(ProviderRecordAuthority, AuthorityPersonBinding)
+        .join(
+            AuthorityPersonBinding,
+            col(AuthorityPersonBinding.id) == ProviderRecordAuthority.binding_id,
+        )
+        .where(
+            ProviderRecordAuthority.practice_authority_id == mapping.id,
+            ProviderRecordAuthority.doctor_id == doctor.id,
+            AuthorityPersonBinding.actor_id == actor.id,
+            AuthorityPersonBinding.tenant_id == mapping.tenant_id,
+            AuthorityPersonBinding.status == "active",
+            col(AuthorityPersonBinding.revoked_at).is_(None),
+            col(AuthorityPersonBinding.verified_at).is_not(None),
+        )
+        .limit(1)
+        .execution_options(populate_existing=True)
+    ).first()
+    if owned is None:
+        return False
+    _scope, binding = owned
+    return (
+        validate_provider_record_scope(
+            session=session,
+            binding=binding,
+            actor_id=actor.id,
+            clerk_subject=doctor.clerk_id,
+        )
+        is not None
+    )
+
+
+def _session_prep_namespace_mapping(
+    *, session: Session, doctor: Doctor, namespace: Practice | Doctor, actor
+):
+    """Reuse verified provider tenancy; never replace a Scribe membership.
+
+    The exact account and owned patient are already locked by the exchange.
+    A single active provider membership can be reused only when its immutable
+    mapping is a provider namespace belonging to this account's record scope.
+    Fixture/import and ambiguous memberships are never auto-promoted.
+    """
+    active = session.exec(
+        select(AuthorityTenantMembership)
+        .where(
+            AuthorityTenantMembership.actor_id == actor.id,
+            AuthorityTenantMembership.status == "active",
+        )
+        .with_for_update()
+        .limit(2)
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(active) > 1 or any(row.membership_kind != "provider" for row in active):
+        raise ProviderRecordScopeDenied
+    if active:
+        member = active[0]
+        mapping = session.exec(
+            select(ProviderPracticeAuthority)
+            .where(ProviderPracticeAuthority.tenant_id == member.tenant_id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        tenant = session.get(AuthorityTenant, member.tenant_id, populate_existing=True)
+        if (
+            mapping is None
+            or not _mapping_allows_owned_session_prep(mapping, doctor)
+            or not _mapping_has_owned_session_prep_lineage(
+                session=session,
+                mapping=mapping,
+                namespace=namespace,
+                doctor=doctor,
+                actor=actor,
+            )
+            or tenant is None
+            or tenant.status != "active"
+        ):
+            raise ProviderRecordScopeDenied
+        return mapping, tenant, member, active
+
+    mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(_namespace_mapping_predicate(namespace))
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if mapping is None:
+        tenant = AuthorityTenant(status="active")
+        session.add(tenant)
+        session.flush()
+        mapping = ProviderPracticeAuthority(
+            **_namespace_mapping_fields(namespace), tenant_id=tenant.id
+        )
+        session.add(mapping)
+        session.flush()
+        return mapping, tenant, None, active
+    tenant = session.get(AuthorityTenant, mapping.tenant_id, populate_existing=True)
+    member = session.exec(
+        select(AuthorityTenantMembership)
+        .where(
+            AuthorityTenantMembership.actor_id == actor.id,
+            AuthorityTenantMembership.tenant_id == mapping.tenant_id,
+        )
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if tenant is None or tenant.status != "active" or member is not None:
+        # An inactive membership is an explicit authority tombstone, not a
+        # missing feature entitlement; the global policy must not revive it.
+        raise ProviderRecordScopeDenied
+    return mapping, tenant, None, active
+
+
+def _require_existing_session_prep_membership(
+    *, session: Session, doctor: Doctor, actor, binding
+) -> None:
+    """Existing records retain their original live authority, not just lineage."""
+    members = session.exec(
+        select(AuthorityTenantMembership)
+        .where(
+            AuthorityTenantMembership.actor_id == actor.id,
+            AuthorityTenantMembership.status == "active",
+        )
+        .with_for_update()
+        .limit(2)
+        .execution_options(populate_existing=True)
+    ).all()
+    tenant = session.get(AuthorityTenant, binding.tenant_id, populate_existing=True)
+    mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(ProviderPracticeAuthority.tenant_id == binding.tenant_id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if (
+        len(members) != 1
+        or members[0].membership_kind != "provider"
+        or members[0].tenant_id != binding.tenant_id
+        or tenant is None
+        or tenant.status != "active"
+        or mapping is None
+        or not _mapping_allows_owned_session_prep(mapping, doctor)
+    ):
+        raise ProviderRecordScopeDenied
 
 
 @dataclass(frozen=True)
@@ -202,6 +430,7 @@ def _validate_provider_record_scope(
         binding=binding,
         actor_id=actor_id,
         current=current,
+        session_prep=session_prep,
     )
 
 
@@ -240,14 +469,26 @@ def validate_provider_record_scope(
 
 
 def _validate_record_lineage(
-    *, session, scope, doctor, practice, binding, actor_id, current
+    *,
+    session,
+    scope,
+    doctor,
+    practice,
+    binding,
+    actor_id,
+    current,
+    session_prep: bool = False,
 ):
     """Exact-row checks shared by ordinary reads and bounded catalog inputs."""
     mapping, appointment, patient, person = current
     if (
         mapping is None
         or mapping.id != scope.practice_authority_id
-        or mapping.practice_id != practice.id
+        or not (
+            _mapping_allows_owned_session_prep(mapping, doctor)
+            if session_prep
+            else _mapping_matches_namespace(mapping, practice, doctor=doctor)
+        )
         or mapping.tenant_id != binding.tenant_id
         or binding.actor_id != actor_id
         or binding.binding_kind != "provider_record"
@@ -372,13 +613,20 @@ def _validate_unmapped_provider_record_scope(
     )
     mapping = session.exec(
         select(ProviderPracticeAuthority)
-        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .where(ProviderPracticeAuthority.tenant_id == binding.tenant_id)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if (
         appointment is None
         or patient is None
         or mapping is None
+        or (
+            not (
+                _mapping_allows_owned_session_prep(mapping, doctor)
+                if session_prep
+                else _mapping_matches_namespace(mapping, practice, doctor=doctor)
+            )
+        )
         or person is None
         or origin is None
         or appointment.doctor_id != doctor.id
@@ -411,17 +659,20 @@ def lock_provider_record_owner(
     *, session: Session, clerk_subject: str
 ) -> tuple[Doctor, Practice]:
     """Take generic provider locks before any request view-as lock."""
-    return _lock_provider_record_owner(
-        session=session,
-        clerk_subject=clerk_subject,
-        session_prep=False,
+    return cast(
+        tuple[Doctor, Practice],
+        _lock_provider_record_owner(
+            session=session,
+            clerk_subject=clerk_subject,
+            session_prep=False,
+        ),
     )
 
 
 def lock_session_prep_record_owner(
     *, session: Session, clerk_subject: str
-) -> tuple[Doctor, Practice]:
-    """Take the same locks while enforcing the stronger Session Prep policy."""
+) -> tuple[Doctor, Practice | Doctor]:
+    """Lock the active account and any existing practice namespace."""
     return _lock_provider_record_owner(
         session=session,
         clerk_subject=clerk_subject,
@@ -431,7 +682,7 @@ def lock_session_prep_record_owner(
 
 def _lock_provider_record_owner(
     *, session: Session, clerk_subject: str, session_prep: bool
-) -> tuple[Doctor, Practice]:
+) -> tuple[Doctor, Practice | Doctor]:
     """Share the Practice -> Doctor lock order across provider products."""
     # Organization roster/offboarding takes Practice before Doctor. Discover
     # the practice without a lock, acquire that same order, then recheck the
@@ -447,6 +698,19 @@ def _lock_provider_record_owner(
         _current_session_prep_practice if session_prep else _current_practice
     )
     practice = current_practice(session, doctor)
+    if session_prep and isinstance(practice, Doctor):
+        # Accounts with no practice have no Practice row to lock. Recheck the
+        # exact account after its row lock so activation/deletion or a newly
+        # assigned namespace cannot race provision of a private tenant.
+        locked = session.exec(
+            select(Doctor)
+            .where(Doctor.clerk_id == clerk_subject)
+            .with_for_update(of=Doctor)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if locked is None or current_practice(session, locked).id != practice.id:
+            raise ProviderRecordScopeDenied
+        return locked, locked
     with provider_record_owner_rows(
         session, practice_id=practice.id, subject=clerk_subject
     ) as doctor:
@@ -537,7 +801,7 @@ def _reconcile_ordinary_session_prep_scope(
     )
     mapping = session.exec(
         select(ProviderPracticeAuthority)
-        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .where(ProviderPracticeAuthority.tenant_id == binding.tenant_id)
         .with_for_update(read=True)
         .execution_options(populate_existing=True)
     ).one_or_none()
@@ -597,6 +861,7 @@ def _reconcile_ordinary_session_prep_scope(
         or appointment.doctor_id != doctor.id
         or patient.doctor_id != doctor.id
         or mapping is None
+        or not _mapping_allows_owned_session_prep(mapping, doctor)
         or mapping.tenant_id != binding.tenant_id
         or tenant is None
         or tenant.status != "active"
@@ -720,78 +985,138 @@ def _ensure_provider_record_scope(
         ):
             raise ProviderRecordScopeDenied
 
-    mapping = session.exec(
-        select(ProviderPracticeAuthority).where(
-            ProviderPracticeAuthority.practice_id == practice.id
+    if session_prep:
+        existing_binding = session.exec(
+            select(AuthorityPersonBinding)
+            .where(AuthorityPersonBinding.binding_ref == record_ref)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if existing_binding is not None:
+            _require_existing_session_prep_membership(
+                session=session, doctor=doctor, actor=actor, binding=existing_binding
+            )
+            existing_scope = session.exec(
+                select(ProviderRecordAuthority)
+                .where(ProviderRecordAuthority.binding_id == existing_binding.id)
+                .execution_options(populate_existing=True)
+            ).one_or_none()
+            if existing_scope is not None:
+                scope = validate_provider_record_scope(
+                    session=session,
+                    binding=existing_binding,
+                    actor_id=actor.id,
+                    clerk_subject=clerk_subject,
+                )
+                if scope is None:
+                    raise SessionPrepProviderScopeUnavailable
+                return scope
+            return _reconcile_ordinary_session_prep_scope(
+                session=session,
+                binding=existing_binding,
+                doctor=doctor,
+                practice=practice,
+                actor=actor,
+                appointment_id=appointment.id,
+                clerk_issuer=clerk_issuer,
+                clerk_subject=clerk_subject,
+            )
+        mapping, tenant, membership, active_memberships = (
+            _session_prep_namespace_mapping(
+                session=session, doctor=doctor, namespace=practice, actor=actor
+            )
         )
-    ).one_or_none()
-    if mapping is None:
-        tenant = AuthorityTenant(status="active")
-        session.add(tenant)
-        session.flush()
-        mapping = ProviderPracticeAuthority(
-            practice_id=practice.id, tenant_id=tenant.id
-        )
-        session.add(mapping)
-        session.flush()
     else:
-        tenant = session.get(AuthorityTenant, mapping.tenant_id)
-        if tenant is None or tenant.status != "active":
-            raise ProviderRecordScopeDenied
-    membership = session.exec(
-        select(AuthorityTenantMembership).where(
-            AuthorityTenantMembership.actor_id == actor.id,
-            AuthorityTenantMembership.tenant_id == tenant.id,
-        )
-    ).one_or_none()
-    if membership is not None and (
-        membership.status != "active" or membership.membership_kind != "provider"
-    ):
-        raise ProviderRecordScopeDenied
-    active_memberships = session.exec(
-        select(AuthorityTenantMembership)
-        .where(
-            AuthorityTenantMembership.actor_id == actor.id,
-            AuthorityTenantMembership.status == "active",
-        )
-        .with_for_update()
-    ).all()
-    # The platform's closure and identity-recovery contracts require one active
-    # provider tenant. A verified current practice replaces stale provider
-    # memberships; it never revives a revoked target or moves a staff identity.
-    if any(row.membership_kind != "provider" for row in active_memberships):
-        raise ProviderRecordScopeDenied
-    # A fixture/import tenant is outside this practice-move mechanism. Deny
-    # the exchange rather than revoking it or mixing it into a real cohort.
-    for row in active_memberships:
-        if (
-            row.tenant_id != tenant.id
-            and session.exec(
+        # A real-practice Scribe caller may already own a private namespace
+        # provisioned by Session Prep before onboarding. Reuse it unchanged;
+        # otherwise preserve the established practice-backed Scribe path.
+        mapping = session.exec(
+            select(ProviderPracticeAuthority).where(
+                col(ProviderPracticeAuthority.doctor_id) == doctor.id,
+                col(ProviderPracticeAuthority.practice_id).is_(None),
+            )
+        ).one_or_none()
+        if mapping is None:
+            mapping = session.exec(
                 select(ProviderPracticeAuthority).where(
-                    ProviderPracticeAuthority.tenant_id == row.tenant_id
+                    _namespace_mapping_predicate(practice)
                 )
             ).one_or_none()
-            is None
+        if mapping is None:
+            tenant = AuthorityTenant(status="active")
+            session.add(tenant)
+            session.flush()
+            mapping = ProviderPracticeAuthority(
+                **_namespace_mapping_fields(practice), tenant_id=tenant.id
+            )
+            session.add(mapping)
+            session.flush()
+        else:
+            tenant = session.get(AuthorityTenant, mapping.tenant_id)
+            if tenant is None or tenant.status != "active":
+                raise ProviderRecordScopeDenied
+        membership = session.exec(
+            select(AuthorityTenantMembership).where(
+                AuthorityTenantMembership.actor_id == actor.id,
+                AuthorityTenantMembership.tenant_id == tenant.id,
+            )
+        ).one_or_none()
+        if membership is not None and (
+            membership.status != "active" or membership.membership_kind != "provider"
         ):
             raise ProviderRecordScopeDenied
-    for stale in active_memberships:
-        if stale.tenant_id != tenant.id:
-            stale.status = "revoked"
-            session.add(stale)
-            session.add(
-                AuthorityAuditEvent(
-                    event_type="authority.provider_membership.replaced",
-                    outcome="accepted",
-                    occurred_at=now,
-                    tenant_id=stale.tenant_id,
-                    actor_id=actor.id,
-                    resource_type="tenant_membership",
-                    resource_ref=str(stale.id),
-                    request_digest=hashlib.sha256(
-                        f"{doctor.id}:{practice.id}:{tenant.id}".encode()
-                    ).hexdigest(),
-                )
+        active_memberships = session.exec(
+            select(AuthorityTenantMembership)
+            .where(
+                AuthorityTenantMembership.actor_id == actor.id,
+                AuthorityTenantMembership.status == "active",
             )
+            .with_for_update()
+        ).all()
+        if mapping.doctor_id is not None and (
+            membership is None
+            or len(active_memberships) != 1
+            or active_memberships[0].id != membership.id
+        ):
+            # Scribe only preserves a fully provisioned personal namespace. It
+            # cannot create/repair one or revoke a competing provider membership
+            # to make the account-owned path usable.
+            raise ProviderRecordScopeDenied
+        # The platform's closure and identity-recovery contracts require one active
+        # provider tenant. A verified current practice replaces stale provider
+        # memberships; it never revives a revoked target or moves a staff identity.
+        if any(row.membership_kind != "provider" for row in active_memberships):
+            raise ProviderRecordScopeDenied
+        # A fixture/import tenant is outside this practice-move mechanism. Deny
+        # the exchange rather than revoking it or mixing it into a real cohort.
+        for row in active_memberships:
+            if (
+                row.tenant_id != tenant.id
+                and session.exec(
+                    select(ProviderPracticeAuthority).where(
+                        ProviderPracticeAuthority.tenant_id == row.tenant_id
+                    )
+                ).one_or_none()
+                is None
+            ):
+                raise ProviderRecordScopeDenied
+        for stale in active_memberships:
+            if stale.tenant_id != tenant.id:
+                stale.status = "revoked"
+                session.add(stale)
+                session.add(
+                    AuthorityAuditEvent(
+                        event_type="authority.provider_membership.replaced",
+                        outcome="accepted",
+                        occurred_at=now,
+                        tenant_id=stale.tenant_id,
+                        actor_id=actor.id,
+                        resource_type="tenant_membership",
+                        resource_ref=str(stale.id),
+                        request_digest=hashlib.sha256(
+                            f"{doctor.id}:{practice.id}:{tenant.id}".encode()
+                        ).hexdigest(),
+                    )
+                )
     if session_prep:
         legacy_binding = session.exec(
             select(AuthorityPersonBinding)

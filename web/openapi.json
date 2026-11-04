@@ -6630,6 +6630,10 @@
             "type": "boolean",
             "title": "Has Natmed Subscription"
           },
+          "held_medication_writes_enabled": {
+            "type": "boolean",
+            "title": "Held Medication Writes Enabled"
+          },
           "directory": {
             "items": {
               "$ref": "#/components/schemas/ResourceLink"
@@ -6649,6 +6653,7 @@
         "type": "object",
         "required": [
           "has_natmed_subscription",
+          "held_medication_writes_enabled",
           "directory",
           "medications"
         ],
@@ -7629,7 +7634,7 @@
           "can_review_sources"
         ],
         "title": "SessionPrepSettingsData",
-        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current provider/practice/BAA/\nentitlement gate as review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
+        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current active-account decision\nas review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
       },
       "SettingsData": {
         "properties": {

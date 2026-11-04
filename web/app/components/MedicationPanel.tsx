@@ -66,6 +66,7 @@ export function MedicationPanel({
   const [loadError, setLoadError] = useState(false)
   const [busy, setBusy] = useState(false)
   const [newName, setNewName] = useState("")
+  const canCreateHold = resources?.held_medication_writes_enabled === true
 
   const refresh = useCallback(async () => {
     const generation = scopeGeneration.current
@@ -193,6 +194,7 @@ export function MedicationPanel({
     const medication = medications.find((row) => row.id === id)
     if (
       !medication ||
+      (status === "held" && medication.status !== "held" && !canCreateHold) ||
       (!medication.confirmed &&
         (!appointmentId || medication.appointment_id !== appointmentId))
     )
@@ -318,7 +320,9 @@ export function MedicationPanel({
                 className="rounded border p-1 text-xs"
               >
                 <option value="active">Active</option>
-                <option value="held">Held temporarily</option>
+                {(canCreateHold || medication.status === "held") && (
+                  <option value="held">Held temporarily</option>
+                )}
                 <option value="stopped">Stopped</option>
               </select>
               <Button
@@ -502,7 +506,7 @@ export function MedicationPanel({
                     <span className="text-muted-foreground"> (stopped)</span>
                   )}
                 </span>
-                {m.status === "active" && (
+                {m.status === "active" && canCreateHold && (
                   <Button
                     size="sm"
                     variant="ghost"

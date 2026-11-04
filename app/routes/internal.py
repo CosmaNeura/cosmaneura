@@ -43,6 +43,7 @@ from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration import session_prep as session_prep_configuration
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+from app.configuration.medication import held_medication_writes_enabled
 from app.configuration.redis import get_redis
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
 from app.configuration.stripe import (
@@ -123,6 +124,7 @@ from app.services.reference_links import (
     resource_links_for,
 )
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
+from app.services.scribe_cancellation_access import doctor_cancellation_denial
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
     RecordGrantConfigurationError,
@@ -1095,8 +1097,8 @@ class SessionPrepSettingsData(BaseModel, extra="forbid"):
     """PHI-free discovery state for the current provider context.
 
     This is intentionally narrower than an execution authorization.
-    ``can_review_sources`` reflects the same current provider/practice/BAA/
-    entitlement gate as review execution. Session Prep read and review routes
+    ``can_review_sources`` reflects the same current active-account decision
+    as review execution. Session Prep read and review routes
     still re-resolve record and note ownership at request time.
     """
 
@@ -1166,7 +1168,9 @@ def _platform_admin_capability_active(request: Request) -> bool:
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     view_as_active = getattr(request.state, "view_as", None) is not None
-    access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    access_decision = resolve_doctor_access(
+        doctor, require_entitlement=False, purpose="read"
+    )
     session_prep_access_decision = (
         session_prep_provider_access.resolve_session_prep_provider_access(doctor)
     )
@@ -1230,6 +1234,7 @@ def settings_data(request: Request) -> SettingsData:
         practice_ready=_practice_ready(doctor, decision=access_decision),
         billing_recovery_required=(
             access_decision.allowed
+            and doctor_cancellation_denial(doctor) is None
             and access_decision.authorization_basis != "pilot_grant"
             and not access_decision.entitlement_in_force
         ),
@@ -3414,6 +3419,17 @@ MEDICATION_READER_HEADER = "X-Cosmaneura-Medication-Reader"
 MEDICATION_READER_CAPABILITY = "held-v1"
 
 
+def _require_new_medication_hold(new_status: MedicationStatus | None) -> None:
+    if new_status == MedicationStatus.held and not held_medication_writes_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "HELD_MEDICATION_WRITES_DISABLED",
+                "message": "New medication holds are not available.",
+            },
+        )
+
+
 def _require_medication_reader(
     request: Request, statuses: Iterable[MedicationStatus | None]
 ) -> None:
@@ -3467,6 +3483,7 @@ def medication_create(
     doctor: Doctor = request.state.doctor
     patient = _reference_patient_or_404(doctor, patient_id)
     _require_medication_reader(request, (data.status,))
+    _require_new_medication_hold(data.status)
 
     row = PatientMedication(
         doctor_id=doctor.id,
@@ -3505,6 +3522,8 @@ def medication_update(
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
     _require_medication_reader(request, (row.status, data.status))
+    if row.status != MedicationStatus.held:
+        _require_new_medication_hold(data.status)
 
     if data.name is not None:
         row.name = data.name.strip()
@@ -3575,6 +3594,7 @@ class MedicationResources(BaseModel, extra="forbid"):
 
 class PatientResourcePanel(BaseModel, extra="forbid"):
     has_natmed_subscription: bool
+    held_medication_writes_enabled: bool
     directory: list[ResourceLink]
     medications: list[MedicationResources]
 
@@ -3618,6 +3638,7 @@ def patient_reference_resources(
 
     return PatientResourcePanel(
         has_natmed_subscription=doctor.has_natmed_subscription,
+        held_medication_writes_enabled=held_medication_writes_enabled(),
         directory=PROVIDER_RESOURCE_DIRECTORY,
         medications=medications,
     )

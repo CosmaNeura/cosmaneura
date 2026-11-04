@@ -1,22 +1,27 @@
 """Fail-closed practice gate for the internal API.
 
-CLAUDE_BAA_IMPLEMENTATION guardrail 5 and ARCHITECTURE.md §8: no PHI-bearing
-feature is reachable by an account without a recorded BAA acceptance for its
-practice (or the negotiated-BAA-on-file fallback), an authorized membership,
-and entitlement (trial, subscription, or exemption — ADR 0017). Routes are
-gated by default so a future endpoint cannot ship ungated; the allowlist is
-the onboarding surface that must work before the BAA exists, and the
-internal-admin surface is governed by ``require_admin`` rather than by any
-customer's BAA.
+Ordinary PHI-bearing platform features require current practice access and
+entitlement. Routes are gated by default so a future endpoint cannot ship
+ungated. A closed list of Doctor-owned Session Prep reads and actions instead
+uses Session Prep's current active-account decision; those routes independently
+enforce exact record ownership and reject view-as. The onboarding allowlist must
+work before a practice exists, and the internal-admin surface is governed by
+``require_admin`` rather than by any customer's practice.
 
-Doctors predating practices are not exempt: on their next login the frontend
-routes them through practice creation and BAA acceptance (or an internal
-admin sets ``negotiated_baa_on_file``).
+No other Scribe, upload, billing, practice or clinical route inherits the
+Session Prep exception.
 """
 
 from fastapi import HTTPException, Request, status
 
+import app.configuration.session_prep as session_prep_configuration
+from app.routes.dependencies.session_prep_account import (
+    is_session_prep_active_account_route,
+)
 from app.services.doctor_access import resolve_doctor_access
+from app.services.session_prep_provider_access import (
+    resolve_session_prep_provider_access,
+)
 
 from app.models.doctor import Doctor
 
@@ -59,6 +64,37 @@ ENTITLEMENT_EXEMPT_ROUTE_NAMES = {
 
 ADMIN_PATH_PREFIX = "/internal/v1/admin"
 
+# Reviewed own-record reads only. GET alone is not read authority: new GET
+# endpoints remain processing-gated until their effects have been reviewed.
+CANCELLATION_READ_ROUTE_NAMES = {
+    "intake_list",
+    "intake_detail",
+    "note_list",
+    "note_detail",
+    "patient_list",
+    "schedule_list",
+    "medication_list",
+    "patient_reference_resources",
+    "lab_panel_list",
+    "lab_range_list",
+}
+
+
+def _session_prep_active_account_route(
+    request: Request,
+    doctor: Doctor,
+) -> bool:
+    if getattr(
+        request.state, "view_as", None
+    ) is not None or not is_session_prep_active_account_route(
+        request,
+        rollout_enabled=(
+            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
+        ),
+    ):
+        return False
+    return resolve_session_prep_provider_access(doctor).allowed
+
 
 def require_practice_in_force(request: Request) -> None:
     route = request.scope.get("route")
@@ -72,12 +108,29 @@ def require_practice_in_force(request: Request) -> None:
         return
 
     doctor: Doctor = request.state.doctor
+    if _session_prep_active_account_route(request, doctor):
+        return
     decision = resolve_doctor_access(
         doctor,
         require_entitlement=route_name not in ENTITLEMENT_EXEMPT_ROUTE_NAMES,
+        purpose="read"
+        if request.method == "GET" and route_name in CANCELLATION_READ_ROUTE_NAMES
+        else "process",
     )
     if decision.allowed:
         return
+
+    if decision.denial_reason in {
+        "scribe_cancelled_read_only",
+        "scribe_export_period_expired",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Scribe is canceled. This account is read-only during its export period."
+            if decision.denial_reason == "scribe_cancelled_read_only"
+            else "This account's export period has ended. Contact support for the retained-record status.",
+            headers={"Cache-Control": "no-store"},
+        )
 
     if decision.denial_reason == "entitlement_not_in_force":
         raise HTTPException(
