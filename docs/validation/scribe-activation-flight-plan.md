@@ -30,9 +30,26 @@ Implementation does not authorize promotion, migration, billing changes or rollo
 `SCRIBE_AUTOMATIC_ACTIVATION_ENABLED` defaults to false.
 `SCRIBE_ACTIVATION_PRACTICE_REFS` defaults to an empty comma-separated list of
 Core practice TypeIDs. Both the capability and an exact practice selection are
-required. Native workload authority must also be enabled. A disabled capability,
-authority or cohort returns a denial (403), never a setup invitation.
+required. Native workload authority must also be enabled. A disabled private
+activation facade returns 503. A disabled authority or an unselected practice
+returns a denial (403), never an activation invitation.
 The capture processor's separate tenant admission gates still apply.
+
+The private native POST `/service/v1/agent/scribe/activation` accepts only
+`action: "activate"` and a canonical, nonzero UUID `request_nonce`, with a
+canonical nonzero UUID `Idempotency-Key`. Both verified Clerk human and admitted
+native workload authentication are required. Browser cookies, view-as state,
+mount headers and body-supplied identities are rejected. A successful response
+contains only version, action, nonce and `state: "active"`; it grants no recording
+authority. A fresh provider-context read must succeed before opening the app.
+
+Provider-context and activation setup responses are bounded 409 problem JSON:
+exactly `type: "scribe_account_setup_required"`, `status: 409`, `setup` (practice
+or activation) and the request nonce. The facade preserves no-store and record
+version 1. This private route remains excluded from public OpenAPI generation.
+Cancellation status returns 404 only for a verified, never-activated principal;
+preview/request remain denied. Deleted, revoked, ambiguous, rebound historical
+and cancelled principals remain denied, rather than receiving setup invitations.
 
 Existing grants, BAA records, membership, Stripe state and capture admission
 are neither granted nor rewritten. An active grant supplies entitlement only

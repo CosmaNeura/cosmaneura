@@ -6,7 +6,7 @@ from contextvars import Context
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_native import (
@@ -23,6 +23,7 @@ from app.routes.embed_context import (
 )
 from app.routes.scribe_native_capture import authenticate_native_workload
 from app.services import authority, companion_records, scribe_provider_context
+from app.services.scribe_account_setup import ScribeAccountSetupRequired
 from app.services.scribe_provider_context import ProviderContextRequest
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
@@ -122,6 +123,18 @@ async def provider_context(
                 "Cache-Control": "no-store",
                 "X-Cosmaneura-Record-Version": "1",
             },
+        )
+    except ScribeAccountSetupRequired as error:
+        return JSONResponse(
+            {
+                "type": "scribe_account_setup_required",
+                "status": 409,
+                "setup": error.setup,
+                "request_nonce": str(data.request_nonce),
+            },
+            status_code=409,
+            media_type="application/problem+json",
+            headers={"Cache-Control": "no-store", "X-Cosmaneura-Record-Version": "1"},
         )
     except companion_records.RecordDeadline:
         return problem(504)

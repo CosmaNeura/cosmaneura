@@ -31,6 +31,114 @@ SUBJECT = "user_synthetic_a"
 NOW = datetime(2026, 10, 31, 12, tzinfo=UTC)
 
 
+def table_counts(f):
+    with f.engine.connect() as db:
+        return tuple(
+            db.execute(sa.select(sa.func.count()).select_from(table)).scalar_one()
+            for table in (*f.metadata.tables.values(), f.operation)
+        )
+
+
+def test_fresh_status_is_not_found_and_mutations_stay_denied(fixture):
+    f = fixture
+    subject = "user_synthetic_never_activated"
+    before = table_counts(f)
+    requests = [
+        f.contract.StatusRequest(action="status", request_nonce=uuid4()),
+        f.contract.PreviewRequest(action="preview", request_nonce=uuid4()),
+        f.contract.AcceptRequest(
+            action="request",
+            request_nonce=uuid4(),
+            preview_sha256="a" * 64,
+            confirmation="CANCEL",
+        ),
+    ]
+    for request in requests:
+        error = (
+            f.contract.CancellationNotFound
+            if request.action == "status"
+            else f.contract.CancellationDenied
+        )
+        with pytest.raises(error):
+            f.service.execute_cancellation(
+                issuer=ISSUER,
+                subject=subject,
+                session_id="sess_synthetic",
+                request=request,
+                request_key=uuid4() if request.action == "request" else None,
+                settings=f.settings,
+                authority_settings=f.auth,
+                deadline=f.budget(),
+            )
+    assert table_counts(f) == before
+
+
+def test_fresh_revoked_grant_is_denied_not_setup(fixture):
+    f = fixture
+    subject = "user_synthetic_revoked_fresh"
+    with f.engine.begin() as db:
+        db.execute(
+            f.tables.grant.insert().values(
+                id="synthetic_revoked", clerk_id=subject, revoked_at=NOW
+            )
+        )
+    before = table_counts(f)
+    with pytest.raises(f.contract.CancellationDenied):
+        f.service.execute_cancellation(
+            issuer=ISSUER,
+            subject=subject,
+            session_id="sess_synthetic",
+            request=f.contract.StatusRequest(action="status", request_nonce=uuid4()),
+            request_key=None,
+            settings=f.settings,
+            authority_settings=f.auth,
+            deadline=f.budget(),
+        )
+    assert table_counts(f) == before
+
+
+@pytest.mark.parametrize(
+    "tombstone", ["deleted", "identity", "grant", "member", "link"]
+)
+def test_existing_status_tombstones_are_denials_and_do_not_write(fixture, tombstone):
+    f = fixture
+    with f.engine.begin() as db:
+        if tombstone == "deleted":
+            db.execute(
+                f.tables.doctor.update()
+                .where(f.tables.doctor.c.clerk_id == SUBJECT)
+                .values(deleted_at=NOW)
+            )
+        if tombstone == "identity":
+            db.execute(
+                f.tables.identity.update()
+                .where(f.tables.identity.c.subject == SUBJECT)
+                .values(revoked_at=NOW)
+            )
+        if tombstone == "grant":
+            db.execute(
+                f.tables.grant.insert().values(
+                    id="synthetic_revoked", clerk_id=SUBJECT, revoked_at=NOW
+                )
+            )
+        if tombstone == "member":
+            db.execute(
+                f.tables.member.insert().values(
+                    id="synthetic_member", doctor_id="doctor_a", seat_state="inactive"
+                )
+            )
+        if tombstone == "link":
+            db.execute(
+                f.tables.link.update()
+                .where(f.tables.link.c.doctor_id == "doctor_a")
+                .values(revoked_at=NOW)
+            )
+    before = table_counts(f)
+    with pytest.raises(f.contract.CancellationDenied):
+        f.execute(f.contract.StatusRequest(action="status", request_nonce=uuid4()))
+    assert table_counts(f) == before
+
+
 def package(monkeypatch, name, **values):
     module = ModuleType(name)
     module.__path__ = []
@@ -106,6 +214,23 @@ def fixture(tmp_path, monkeypatch, request):
         sa.Column("issuer", sa.String),
         sa.Column("subject", sa.String),
         sa.Column("revoked_at", sa.DateTime),
+        sa.Column("verified_at", sa.DateTime, default=NOW),
+    )
+
+    grant = sa.Table(
+        "synthetic_grant",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("clerk_id", sa.String),
+        sa.Column("revoked_at", sa.DateTime),
+    )
+    member = sa.Table(
+        "synthetic_member",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("doctor_id", sa.String),
+        sa.Column("seat_state", sa.String),
+        sa.Column("access_revoked_at", sa.DateTime),
     )
 
     def scope_columns():
@@ -196,6 +321,8 @@ def fixture(tmp_path, monkeypatch, request):
         link=link,
         binding=binding,
         admission=admission,
+        grant=grant,
+        member=member,
     )
 
     @contextmanager
@@ -207,6 +334,16 @@ def fixture(tmp_path, monkeypatch, request):
 
     package(monkeypatch, "activemodel.session_manager", global_session=managed)
     package(monkeypatch, "app.models.doctor", Doctor=SimpleNamespace(__table__=doctor))
+    package(
+        monkeypatch,
+        "app.models.pilot_access_grandfather_grant",
+        PilotAccessGrandfatherGrant=SimpleNamespace(__table__=grant),
+    )
+    package(
+        monkeypatch,
+        "app.models.practice",
+        PracticeMember=SimpleNamespace(__table__=member),
+    )
     package(
         monkeypatch,
         "app.models.authority",
