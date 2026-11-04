@@ -3945,6 +3945,10 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
         )
         return False
     assert subscription is not None
+    if practice.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES:
+        from app.services.scribe_activation_events import activate_scribe_after_commit
+
+        activate_scribe_after_commit(trigger="entitlement", practice_ref=practice.id)
     log.info(
         "stripe event mirrored",
         event_type=event_type,
