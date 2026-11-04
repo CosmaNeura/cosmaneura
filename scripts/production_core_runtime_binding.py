@@ -36,6 +36,11 @@ GROUP = "cosmaneura-prod"
 PREFIX = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/{GROUP}/providers/Microsoft.App"
 ENVIRONMENT = PREFIX + "/managedEnvironments/cosmaneura-prod-app-environment"
 HOST = "app.cosmaneura.com"
+SCRIBE_TRANSLATION_IDENTITY = (
+    f"/subscriptions/{SUBSCRIPTION}/resourceGroups/cosmaneura-scribe-production/"
+    "providers/Microsoft.ManagedIdentity/userAssignedIdentities/"
+    "cosmaneura-scribe-production-runtime"
+)
 ROLES = {
     "api": ("cosmaneura-prod-app", "cosmaneura-prod-app-web"),
     "worker": ("cosmaneura-prod-worker", "cosmaneura-prod-app-worker"),
@@ -338,6 +343,11 @@ def config_projection(app: dict[str, Any], role: str, revision: str) -> dict[str
     identities = object_value(app.get("identity", {}))
     identity_ids = sorted(object_value(identities.get("userAssignedIdentities", {})))
     for identity in identity_ids:
+        # The separately reviewed attach-only Core plan retains this existing
+        # worker dependency in Scribe's production resource group. It is not a
+        # general cross-group exception and grants no registry or caller access.
+        if role == "worker" and same_arm_id(identity, SCRIBE_TRANSLATION_IDENTITY):
+            continue
         public_resource(
             identity,
             f"/subscriptions/{SUBSCRIPTION}/resourceGroups/{GROUP}/providers/Microsoft.ManagedIdentity/userAssignedIdentities",
