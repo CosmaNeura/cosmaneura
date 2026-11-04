@@ -1,0 +1,32 @@
+Frontend tooling security and canonical controller binding — Tier 2
+
+The frontend build/lint dependency chains require patched glob14.0.2 and
+minimatch11.0.4. web/pnpm-lock.yaml is one of the canonical staging controller's
+107 audited dependencies. Updating that lock correctly invalidates the old
+controller inventory; hosted infrastructure-general caught 11 refusals in its
+synthetic reverification cases. Current master passes the same13 cases; the
+dependency patch fails11 before rebinding.
+
+Recompute the inventory from actual Git object IDs and executable modes of the
+reviewed dependency commit90c66c7beaffc592822408d0df1648d1a272cc95, retain all
+107 paths and the exact existing two self-exclusions, and bind the resulting
+canonical JSON hash in verify_staging_candidate.py. No audited dependency,
+ancestry/branch protection/candidate/schema/actor check or refusal is removed.
+The only selected dependency object changed by this outcome is the lockfile.
+
+The new controller requires a fresh reviewed canonical dispatch. Do not reuse an
+older controller receipt or treat a dependency update as unchanged control
+source. The source operation runs no workflow, build publication, migration,
+environment mutation or deployment. Production remains founder-only.
+
+Validation: frozen Node22/pnpm9 install, frontend1078 tests, TypeScript and full
+ESLint, synthetic production-mode build, zero-vulnerability audit, independent
+actual Sentry/TypeScript-ESTree consumer checks; exact Git inventory/mode/hash
+derivation; canonical controller/provenance/diagnostic tests; lint/types and
+final substantive-push independent review. Retain hosted checks before merge.
+
+Recovery reverts package, lock, audit manifest and verifier anchor together.
+Restoring the old dependency versions restores their vulnerabilities and needs
+a separate security disposition. The source change has no data/schema effect;
+no feature flag, schema rung or migration rehearsal applies. Keep the founder,
+source/artifact/identity and live-state gates for any actual release.
