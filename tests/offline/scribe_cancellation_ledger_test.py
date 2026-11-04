@@ -139,6 +139,80 @@ def test_existing_status_tombstones_are_denials_and_do_not_write(fixture, tombst
     assert table_counts(f) == before
 
 
+def revoke_entitlement_or_seat(f, tombstone):
+    with f.engine.begin() as db:
+        if tombstone == "grant":
+            db.execute(
+                f.tables.grant.insert().values(
+                    id="synthetic_revoked", clerk_id=SUBJECT, revoked_at=NOW
+                )
+            )
+        else:
+            db.execute(
+                f.tables.member.insert().values(
+                    id="synthetic_member",
+                    doctor_id="doctor_a",
+                    seat_state="inactive" if tombstone == "inactive" else "active",
+                    access_revoked_at=NOW if tombstone == "revoked" else None,
+                )
+            )
+            if tombstone == "multiple":
+                db.execute(
+                    f.tables.member.insert().values(
+                        id="synthetic_member_two",
+                        doctor_id="doctor_a",
+                        seat_state="active",
+                    )
+                )
+
+
+@pytest.mark.parametrize("tombstone", ["grant", "inactive", "revoked", "multiple"])
+def test_own_cancellation_status_and_retry_survive_entitlement_loss(fixture, tombstone):
+    f = fixture
+    request, key, receipt = accept(f)
+    revoke_entitlement_or_seat(f, tombstone)
+    before = table_counts(f)
+    status = f.execute(f.contract.StatusRequest(action="status", request_nonce=uuid4()))
+    assert status.operation_id == receipt.operation_id and status.phase == receipt.phase
+    assert f.execute(request, key) == receipt
+    with pytest.raises(f.contract.CancellationDenied):
+        preview(f)
+    assert table_counts(f) == before
+
+
+@pytest.mark.parametrize("tombstone", ["grant", "inactive", "revoked", "multiple"])
+def test_entitlement_loss_without_receipt_stays_closed(fixture, tombstone):
+    f = fixture
+    revoke_entitlement_or_seat(f, tombstone)
+    before = table_counts(f)
+    for request in [
+        f.contract.StatusRequest(action="status", request_nonce=uuid4()),
+        f.contract.PreviewRequest(action="preview", request_nonce=uuid4()),
+    ]:
+        with pytest.raises(f.contract.CancellationDenied):
+            f.execute(request)
+    assert table_counts(f) == before
+
+
+@pytest.mark.parametrize("tombstone", ["deleted", "identity"])
+def test_existing_receipt_does_not_bypass_identity_tombstones(fixture, tombstone):
+    f = fixture
+    request, key, _receipt = accept(f)
+    with f.engine.begin() as db:
+        table = f.tables.doctor if tombstone == "deleted" else f.tables.identity
+        field = table.c.clerk_id if tombstone == "deleted" else table.c.subject
+        values = {"deleted_at": NOW} if tombstone == "deleted" else {"revoked_at": NOW}
+        db.execute(table.update().where(field == SUBJECT).values(**values))
+    before = table_counts(f)
+    for current, request_key in [
+        (f.contract.StatusRequest(action="status", request_nonce=uuid4()), None),
+        (request, key),
+    ]:
+        with pytest.raises(f.contract.CancellationDenied):
+            f.execute(current, request_key)
+    assert table_counts(f) == before
+
+
 def package(monkeypatch, name, **values):
     module = ModuleType(name)
     module.__path__ = []

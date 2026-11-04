@@ -56,7 +56,7 @@ def require_account_setup(
             issuer=issuer,
             subject=subject,
             settings=replace(SCRIBE_ACTIVATION_SETTINGS, authority=auth),
-            lock=True,
+            lock=False,
         )
     except ActivationSetupRequired:
         raise ScribeAccountSetupRequired("practice") from None

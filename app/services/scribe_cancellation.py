@@ -448,13 +448,19 @@ def execute_cancellation(
                     trusted_issuer=authority_settings.clerk_issuer,
                     tables=tables,
                 )
+                if not isinstance(request, PreviewRequest):
+                    try:
+                        old = existing_receipt(db, identity, request, request_key)
+                    except CancellationNotFound:
+                        deny_account_tombstones(
+                            db, identity=identity, subject=subject, tables=tables
+                        )
+                        raise
+                    if old:
+                        return old  # Own receipt grants no renewed processing access.
                 deny_account_tombstones(
                     db, identity=identity, subject=subject, tables=tables
                 )
-                if not isinstance(request, PreviewRequest):
-                    old = existing_receipt(db, identity, request, request_key)
-                    if old:
-                        return old  # Own status survives Scribe-only link revocation.
                 settings.require_policy()
                 current = resolve_self(
                     db,

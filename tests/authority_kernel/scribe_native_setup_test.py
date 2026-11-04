@@ -31,6 +31,7 @@ from app.models.authority import AuthorityAuditEvent
 from app.models.doctor import Doctor
 from app.models.practice import Practice
 from app.models.scribe_cancellation import scribe_cancellation_operation
+from sqlalchemy import event
 from sqlmodel import select
 
 from tests.authority_kernel.companion_provider_provisioning_test import (
@@ -44,11 +45,58 @@ from tests.authority_kernel.companion_provider_provisioning_test import (
 from tests.authority_kernel.scribe_activation_test import (
     activate,
     grant,
+    rebind_subject_after_link,
     require_row,
     snapshot,
 )
 
 engine = companion_engine
+
+
+@pytest.mark.parametrize("revoked", [False, True])
+def test_historical_subject_cannot_activate_through_private_http(
+    engine, monkeypatch, revoked
+):
+    args = case(engine)
+    rebind_subject_after_link(engine, args, revoked=revoked)
+    http, _ = client(engine, monkeypatch, args)
+    before = snapshot(engine)
+    for path, action in [
+        (context_route.PATH, "connection"),
+        (activation_route.PATH, "activate"),
+    ]:
+        response = http.post(
+            path,
+            json={"action": action, "request_nonce": str(uuid4())},
+            headers=headers(key=action == "activate"),
+        )
+        assert response.status_code == 403
+    assert snapshot(engine) == before
+
+
+def test_unmapped_setup_classification_does_not_take_row_locks(engine, monkeypatch):
+    args = case(engine)
+    http, _ = client(engine, monkeypatch, args)
+    before = snapshot(engine)
+    statements: list[str] = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = http.post(
+            context_route.PATH,
+            json={"action": "connection", "request_nonce": str(uuid4())},
+            headers=headers(),
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 409 and response.json()["setup"] == "activation"
+    assert statements and not any(
+        "FOR UPDATE" in statement.upper() for statement in statements
+    )
+    assert snapshot(engine) == before
 
 
 def test_cancelled_subject_cannot_be_reclassified_after_doctor_rebind(

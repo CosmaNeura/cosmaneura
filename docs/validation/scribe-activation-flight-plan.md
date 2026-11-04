@@ -50,6 +50,9 @@ version 1. This private route remains excluded from public OpenAPI generation.
 Cancellation status returns 404 only for a verified, never-activated principal;
 preview/request remain denied. Deleted, revoked, ambiguous, rebound historical
 and cancelled principals remain denied, rather than receiving setup invitations.
+Existing own cancellation status and idempotent retry receipts remain readable
+after seat or grant loss; this preserves prior receipt behavior and never restores
+processing access. Missing receipts still apply every account tombstone fence.
 
 Existing grants, BAA records, membership, Stripe state and capture admission
 are neither granted nor rewritten. An active grant supplies entitlement only
