@@ -124,6 +124,7 @@ from app.services.reference_links import (
     resource_links_for,
 )
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
+from app.services.scribe_activation_events import activate_scribe_after_commit
 from app.services.scribe_cancellation_access import doctor_cancellation_denial
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
@@ -2866,6 +2867,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         session.refresh(locked_practice)
         session.refresh(member)
         practice = locked_practice
+    activate_scribe_after_commit(trigger="membership", doctor_ref=doctor.id)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -2892,6 +2894,7 @@ def complete_onboarding(request: Request) -> None:
         )
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
+    activate_scribe_after_commit(trigger="onboarding", doctor_ref=doctor.id)
 
 
 class BillingCheckoutBody(BaseModel, extra="forbid"):

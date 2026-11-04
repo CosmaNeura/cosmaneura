@@ -1578,6 +1578,9 @@ def claim_roster_access(
         from app.services import stripe_billing
 
         stripe_billing.mark_quantity_sync_required(practice)
+    from app.services.scribe_activation_events import activate_scribe_after_commit
+
+    activate_scribe_after_commit(trigger="membership", doctor_ref=doctor.id)
     return practice, member
 
 
