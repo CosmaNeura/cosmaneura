@@ -43,8 +43,8 @@ link blocks automatic activation, including a move to another practice.
 ## Expand and recovery
 
 Revision `e78845cecca6` expands from `ddd6261fa36f`. It creates one unique,
-nonzero Scribe UUID per practice with an immutable mapping. Existing active links
-are backfilled only when all links for a practice agree and no UUID is shared
+nonzero Scribe UUID per practice with an immutable mapping. All historical links,
+including revoked links, are backfilled only when the practice's links agree and no UUID is shared
 between practices. Conflict errors contain aggregate counts, never identities.
 The same guard works in online migration execution and generated rollout SQL.
 
