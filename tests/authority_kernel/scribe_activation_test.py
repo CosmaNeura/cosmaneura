@@ -96,6 +96,52 @@ def activate(engine, args, *, subject=None, settings=None):
         )
 
 
+def rebind_subject_after_link(engine, args, *, revoked):
+    prior = activate(engine, args)
+    now = datetime.now(UTC)
+    with session_for(engine) as session:
+        link = require_row(
+            session,
+            ScribeCaptureProviderLink,
+            TypeID.from_string(prior.provider_link_ref),
+        )
+        if revoked:
+            link.revoked_at = now
+        doctor = require_row(session, Doctor, args["doctor_id"])
+        doctor.clerk_id = "user_synthetic_rebound_" + uuid4().hex
+        replacement = Doctor(
+            clerk_id=args["verified_clerk_subject"],
+            email=uuid4().hex + "@synthetic.invalid",
+            last_active_at=now,
+            onboarding_completed_at=now,
+            biography=None,
+        )
+        session.add(replacement)
+        session.flush()
+        lock_practice_seats(session, args["practice_id"])
+        session.add(
+            PracticeMember(
+                practice_id=args["practice_id"],
+                doctor_id=replacement.id,
+                role="owner",
+                attested_at=now,
+            )
+        )
+        session.commit()
+
+
+@pytest.mark.parametrize("revoked", [False, True])
+def test_historical_identity_link_blocks_direct_activation_after_doctor_rebind(
+    engine, revoked
+):
+    args = case(engine)
+    rebind_subject_after_link(engine, args, revoked=revoked)
+    before = snapshot(engine)
+    with pytest.raises(ActivationDenied):
+        activate(engine, args)
+    assert snapshot(engine) == before
+
+
 def grant(session, doctor, practice_id, *, revoked=False):
     now = datetime.now(UTC)
     values = dict(
@@ -316,6 +362,63 @@ def test_second_authorized_member_shares_only_scribe_practice_uuid(engine):
         assert len({link.actor_id for link in links}) == 2
 
 
+def test_revoked_only_legacy_practice_keeps_its_namespace_for_a_new_member(engine):
+    args = case(engine)
+    reviewed = plan(engine, args)
+    apply(engine, args, reviewed.plan_sha256)
+    now = datetime.now(UTC)
+    with session_for(engine) as session:
+        assert (
+            session.exec(
+                select(PracticeScribeTenant).where(
+                    PracticeScribeTenant.practice_id == args["practice_id"]
+                )
+            ).first()
+            is None
+        )
+        prior = session.exec(
+            select(ScribeCaptureProviderLink).where(
+                ScribeCaptureProviderLink.doctor_id == args["doctor_id"]
+            )
+        ).one()
+        prior.revoked_at = now
+        doctor = Doctor(
+            clerk_id="user_synthetic_new_member_" + uuid4().hex,
+            email=uuid4().hex + "@synthetic.invalid",
+            last_active_at=now,
+            onboarding_completed_at=now,
+            biography=None,
+        )
+        session.add(doctor)
+        session.flush()
+        lock_practice_seats(session, args["practice_id"])
+        session.add(
+            PracticeMember(
+                practice_id=args["practice_id"],
+                doctor_id=doctor.id,
+                role="workforce",
+                attested_at=now,
+            )
+        )
+        session.commit()
+        subject = doctor.clerk_id
+    result = activate(engine, args, subject=subject)
+    assert result.state == "active"
+    with session_for(engine) as session:
+        stable = session.exec(
+            select(PracticeScribeTenant).where(
+                PracticeScribeTenant.practice_id == args["practice_id"]
+            )
+        ).one()
+        assert stable.scribe_tenant_id == args["scribe_tenant_id"]
+        current = require_row(
+            session,
+            ScribeCaptureProviderLink,
+            TypeID.from_string(result.provider_link_ref),
+        )
+        assert current.scribe_tenant_id == stable.scribe_tenant_id
+
+
 def test_concurrent_activation_creates_one_complete_set(engine):
     args = case(engine)
     before = snapshot(engine)
@@ -483,7 +586,9 @@ def test_reused_email_never_adopts_another_subjects_actor(engine):
         assert len({link.scribe_tenant_id for link in links}) == 2
 
 
-@pytest.mark.parametrize("conflict", [None, "practice", "shared-uuid", "zero"])
+@pytest.mark.parametrize(
+    "conflict", [None, "practice", "shared-uuid", "zero", "revoked-only"]
+)
 def test_expand_backfill_is_exact_immutable_and_retained_on_recovery(engine, conflict):
     path = (
         Path(__file__).parents[2]
@@ -539,8 +644,14 @@ def test_expand_backfill_is_exact_immutable_and_retained_on_recovery(engine, con
                         "UPDATE scribe_capture_provider_link SET scribe_tenant_id='00000000-0000-0000-0000-000000000000'"
                     )
                 )
+            if conflict == "revoked-only":
+                connection.execute(
+                    text(
+                        "UPDATE scribe_capture_provider_link SET revoked_at = CURRENT_TIMESTAMP"
+                    )
+                )
             with Operations.context(MigrationContext.configure(connection)):
-                if conflict:
+                if conflict in {"practice", "shared-uuid", "zero"}:
                     with pytest.raises(
                         IntegrityError, match="scribe_tenant_backfill_conflict"
                     ):

@@ -79,7 +79,18 @@ def _deny_tombstones(session: Session, doctor: Doctor, issuer: str) -> None:
     ).first()
     links = session.exec(
         select(ScribeCaptureProviderLink)
-        .where(ScribeCaptureProviderLink.doctor_id == doctor.id)
+        .outerjoin(
+            AuthorityActorExternalIdentity,
+            col(AuthorityActorExternalIdentity.id)
+            == col(ScribeCaptureProviderLink.source_identity_id),
+        )
+        .where(
+            (ScribeCaptureProviderLink.doctor_id == doctor.id)
+            | (
+                (AuthorityActorExternalIdentity.issuer == issuer)
+                & (AuthorityActorExternalIdentity.subject == doctor.clerk_id)
+            )
+        )
         .execution_options(populate_existing=True)
     ).all()
     identities = session.exec(
@@ -94,6 +105,7 @@ def _deny_tombstones(session: Session, doctor: Doctor, issuer: str) -> None:
         revoked_grant is not None
         or len(links) > 1
         or any(link.revoked_at is not None for link in links)
+        or any(link.doctor_id != doctor.id for link in links)
         or len(identities) > 1
         or cancellation_denial(
             session.connection(),
@@ -275,7 +287,6 @@ def activate_scribe(
     practice_links = session.exec(
         select(ScribeCaptureProviderLink).where(
             ScribeCaptureProviderLink.practice_id == practice.id,
-            col(ScribeCaptureProviderLink.revoked_at).is_(None),
         )
     ).all()
     existing_uuids = {link.scribe_tenant_id for link in practice_links}

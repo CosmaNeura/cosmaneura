@@ -20,20 +20,20 @@ def upgrade():
         DO $$
         DECLARE practice_conflicts bigint; reused_uuids bigint; zero_uuids bigint;
         BEGIN
-            WITH active AS (
+            WITH historical AS (
                 SELECT practice_id, scribe_tenant_id
-                FROM scribe_capture_provider_link WHERE revoked_at IS NULL
+                FROM scribe_capture_provider_link
             )
             SELECT
                 (SELECT count(*) FROM (
-                    SELECT practice_id FROM active GROUP BY practice_id
+                    SELECT practice_id FROM historical GROUP BY practice_id
                     HAVING count(DISTINCT scribe_tenant_id) <> 1
                 ) p),
                 (SELECT count(*) FROM (
-                    SELECT scribe_tenant_id FROM active GROUP BY scribe_tenant_id
+                    SELECT scribe_tenant_id FROM historical GROUP BY scribe_tenant_id
                     HAVING count(DISTINCT practice_id) <> 1
                 ) t),
-                (SELECT count(*) FROM active
+                (SELECT count(*) FROM historical
                  WHERE scribe_tenant_id = '00000000-0000-0000-0000-000000000000')
             INTO practice_conflicts, reused_uuids, zero_uuids;
             IF practice_conflicts + reused_uuids + zero_uuids <> 0 THEN
@@ -67,7 +67,7 @@ def upgrade():
             (id, created_at, updated_at, practice_id, scribe_tenant_id)
         SELECT gen_random_uuid(), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
                practice_id, min(scribe_tenant_id::text)::uuid
-        FROM scribe_capture_provider_link WHERE revoked_at IS NULL
+        FROM scribe_capture_provider_link
         GROUP BY practice_id;
         CREATE FUNCTION practice_scribe_tenant_reject_mutation() RETURNS trigger
         LANGUAGE plpgsql AS $$ BEGIN
