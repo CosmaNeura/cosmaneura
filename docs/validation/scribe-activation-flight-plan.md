@@ -141,3 +141,42 @@ Record exact commit, local commands/results, diff budget, migration rehearsal
 and independent reviewer findings in the implementation PR. Independent review
 is pending until a non-implementer reviews the final substantive commit; local
 passes do not substitute for that review or GitHub approval.
+
+
+## Dark Core setup guidance follow-on — 2026-11-05
+
+Tier 2 source-only follow-on. Owner: John. This page is not activation and
+changes no membership, attestation, BAA, grant, billing, cohort, schema or native
+contract. It is prepared separately from the selected f356/d7bf staging release;
+no deployment or activation occurs with this source PR.
+
+`/scribe/setup` requires the existing signed-in Core client, refuses unknown or
+active view-as before reading existing caller-bound practice metadata, and
+returns fixed guidance without exposing server error details. It offers the
+existing ordinary enrollment or exact current owner-only BAA flow, or a clear
+owner/support review when an existing membership lacks lawful enrollment.
+Revoked/ended members never get either form. Nothing automatically attests,
+reenrolls, adopts another actor, restores Scribe cancellation or creates a link.
+
+The explicit Core path `/onboarding?scribe=setup` bypasses only the completed-user
+navigation redirect, uses the existing enrollment/BAA forms, and ends with
+instructions to return to native Check access instead of optional onboarding.
+Plain `/onboarding` keeps its current behavior. Query mode grants no authority;
+all existing server checks remain authoritative. Already-linked grandfathered
+read discovery and native processing are unchanged.
+
+Build97 opens only plain `/onboarding`. This additive Core route is reachable
+through an explicit Core URL/link without rebuilding iOS; it does not pretend
+that97 automatically selects the new mode. Wider native integration, live
+rollout, genuine missing-enrollment reconciliation and broader practice/capture
+admission remain separately approved work.
+
+Independent final-push review and relevant local tests must pass before merge.
+Before deploying a later Core candidate, prove signed-out/view-as refusal,
+normal onboarding redirect, explicit completed-user guidance, legitimate owner
+BAA acceptance, blocked existing-member attestation cases, unchanged linked
+access and return-to-native identity/revision checks using synthetic accounts.
+Source recovery is revert this follow-on, retaining the prior reviewed candidate.
+Runtime recovery uses the qualified prior Core artifact through the approved
+release process; do not remove correspondence or additive structures. This source
+preparation does not qualify new CREATE/legacy cohorts or production.
