@@ -9,6 +9,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import pwd
 import re
 import runpy
 import stat
@@ -162,21 +163,60 @@ def verify_file(fd: int) -> None:
         stat.S_ISREG(value.st_mode)
         and value.st_uid == os.geteuid()
         and value.st_nlink == 1
-        and not value.st_mode & 0o077
+        and stat.S_IMODE(value.st_mode) == 0o600
     )
+
+
+def persistent_journal_root() -> Path:
+    """Use the operating system account record, never mutable HOME inputs."""
+    home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+    require(home.is_absolute() and home.resolve() == home)
+    root = home / ".local/state/cosmaneura-staging"
+    require(root.resolve() == root)
+    return root
+
+
+def validate_journal_path(path: Path) -> None:
+    require(path.is_absolute() and path.resolve() == path)
+    root = persistent_journal_root()
+    if path.is_relative_to(root):
+        parent = path.parent
+        require(parent.is_relative_to(root))
+        while True:
+            value = parent.stat()
+            require(
+                stat.S_ISDIR(value.st_mode)
+                and value.st_uid == os.geteuid()
+                and stat.S_IMODE(value.st_mode) == 0o700
+            )
+            if parent == root:
+                break
+            parent = parent.parent
+    else:
+        require(path.is_relative_to("/private/tmp"))
+        value = path.parent.stat()
+        require(
+            stat.S_ISDIR(value.st_mode)
+            and value.st_uid == os.geteuid()
+            and stat.S_IMODE(value.st_mode) == 0o700
+        )
+    # This preflight never creates a lock or mutates an owner-state file.
+    for candidate in (path, path.with_name(path.name + ".lock")):
+        try:
+            fd = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            continue
+        try:
+            verify_file(fd)
+        finally:
+            os.close(fd)
 
 
 class Journal:
     """A stable lock protects atomically replaced hash-only phase records."""
 
     def __init__(self, path: Path, plan: dict, raw_hash: str):
-        require(
-            path.is_absolute()
-            and path.resolve() == path
-            and path.is_relative_to("/private/tmp")
-        )
-        parent = path.parent.stat()
-        require(parent.st_uid == os.geteuid() and not parent.st_mode & 0o022)
+        validate_journal_path(path)
         self.path, self.plan = path, plan
         self.binding = {
             "schema": "scribe_initialization_journal_v1",
@@ -361,6 +401,10 @@ def step(
 
 
 def main(argv: list[str]) -> None:
+    if len(argv) == 2 and argv[0] == "--check-journal-path":
+        validate_journal_path(Path(argv[1]))
+        print(json.dumps({"journal_path_valid": True}))
+        return
     require(len(argv) == 11 and argv[0] in {"before", "step", "closed-step", "finish"})
     (
         action,

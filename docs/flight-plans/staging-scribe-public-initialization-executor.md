@@ -44,8 +44,13 @@ After approval, also set:
 
 - `STAGING_SCRIBE_INIT_PLAN`: owned canonical absolute `/private/tmp/` plan path.
 - `EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256`: raw-file 64-hex SHA-256.
-- `STAGING_SCRIBE_INIT_JOURNAL`: canonical owned `/private/tmp/` journal path in
-  an owner-only directory, absent for first initialization.
+- `STAGING_SCRIBE_INIT_JOURNAL`: canonical owner-private persistent path under
+  the account database's home plus `.local/state/cosmaneura-staging`, absent for
+  first initialization. Provision that directory with mode 0700 and owner-only
+  nested directories. The helper derives home through `pwd.getpwuid`, never
+  environment HOME. Mode-0600 single-link journal/lock files are mandatory.
+  Existing owner-private `/private/tmp/` paths remain accepted for compatibility
+  and tests; use persistent storage for the actual release and recovery.
 - `STAGING_SCRIBE_INIT_ACTION`: `initialize` (default) or `closed` for recovery.
 - `EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256`: the pure plan's complete
   canonical `desired_sha256`, replacing the legacy subset preserve hash only
@@ -62,7 +67,10 @@ retaining its existing old-worker drain proof. Hosted workflow remains unchanged
 The observer uses only fixed three-app staging management/revision reads and
 the documented `containerapp secret list --show-values`. Private values stay in
 memory/stdin, never argv, logs, journal or artifacts. The journal stores public
-receipt rows, hashes and exact mutation intent. Protected resolver inputs used
+receipt rows, hashes and exact mutation intent. Persistent hash-only journal
+storage survives temporary-directory cleanup/reboot; preserve the public plan's
+exact bytes/hash alongside the release packet, restoring a fresh allowed bound
+input if needed without inventing a new baseline. Protected resolver inputs used
 by the schema job must match currently resolved private references exactly.
 
 Hash every app's complete raw template, configuration, identity and private

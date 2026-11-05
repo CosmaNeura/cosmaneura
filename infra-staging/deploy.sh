@@ -34,7 +34,7 @@ STAGING_SCRIBE_INIT_ACTION="${STAGING_SCRIBE_INIT_ACTION:-initialize}"
 if [[ -n "$STAGING_SCRIBE_INIT_PLAN$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256$STAGING_SCRIBE_INIT_JOURNAL" ]]; then
 	[[ "$STAGING_SCRIBE_INIT_PLAN" == /private/tmp/* && \
 		"$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256" =~ ^[0-9a-f]{64}$ && \
-		"$STAGING_SCRIBE_INIT_JOURNAL" == /private/tmp/* && \
+		-n "$STAGING_SCRIBE_INIT_JOURNAL" && \
 		"$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
 		"$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" && \
 		-n "$STAGING_PUBLICATION_RECEIPT" && \
@@ -103,6 +103,11 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	done
 	export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
 	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" ]]; then
+	"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_scribe_initialization_executor.py" \
+		--check-journal-path "$STAGING_SCRIBE_INIT_JOURNAL" >/dev/null || exit 1
 fi
 
 initialize_migration_job() {

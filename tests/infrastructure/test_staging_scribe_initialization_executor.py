@@ -520,3 +520,160 @@ def test_actual_closed_schema_probe_branch_never_expands(
         if action == "initialize"
         else []
     )
+
+
+@pytest.fixture
+def owner_state(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    home = tmp_path / "synthetic-owner-home"
+    root = home / ".local/state/cosmaneura-staging"
+    root.mkdir(parents=True, mode=0o700)
+    seen = []
+
+    def account(uid):
+        seen.append(uid)
+        return SimpleNamespace(pw_dir=str(home))
+
+    monkeypatch.setitem(
+        E["persistent_journal_root"].__globals__,
+        "pwd",
+        SimpleNamespace(getpwuid=account),
+    )
+    return home, root, seen
+
+
+def test_persistent_root_uses_account_database_and_readonly_path_preflight(
+    owner_state, monkeypatch, capsys
+):
+    import os
+
+    home, root, seen = owner_state
+    monkeypatch.setenv("HOME", "/untrusted/environment/home")
+    assert E["persistent_journal_root"]() == home / ".local/state/cosmaneura-staging"
+    path = root / "release.json"
+    E["main"](["--check-journal-path", str(path)])
+    assert json.loads(capsys.readouterr().out) == {"journal_path_valid": True}
+    assert list(root.iterdir()) == [] and set(seen) == {os.geteuid()}
+
+
+def test_persistent_closed_intent_survives_new_journal_instance(
+    bridge, owner_state, monkeypatch
+):
+    _, plan, ctx, old_journal, calls, configuration, build = bridge
+    _, root, _ = owner_state
+    path = root / "release.json"
+    journal = E["Journal"](path, plan, "f" * 64)
+    journal.write(old_journal.read())
+    normal = E["RUNTIME"]["az"]
+
+    def uncertain(*args):
+        normal(*args)
+        raise OSError("synthetic lost response")
+
+    monkeypatch.setitem(E["RUNTIME"], "az", uncertain)
+    try:
+        with pytest.raises(OSError):
+            E["step"](plan, ctx, journal, configuration, build, recover=True)
+    finally:
+        journal.close()
+    # Reopen only disk metadata; no in-memory phase receipt is transferred.
+    reopened = E["Journal"](path, plan, "f" * 64)
+    monkeypatch.setitem(E["RUNTIME"], "az", normal)
+    try:
+        assert E["step"](plan, ctx, reopened, configuration, build, recover=True)[
+            "acknowledged"
+        ]
+        assert len(calls) == 1
+        for _ in range(2):
+            E["step"](plan, ctx, reopened, configuration, build, recover=True)
+        assert E["step"](plan, ctx, reopened, configuration, build, recover=True)[
+            "ledger_ready"
+        ]
+        assert len(calls) == 3
+    finally:
+        reopened.close()
+    raw = path.read_text()
+    assert B["PRIVATE"] not in raw and "secret_values" not in raw
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "root_mode",
+        "nested_mode",
+        "journal_mode",
+        "lock_mode",
+        "hard_link",
+        "file_symlink",
+        "parent_symlink",
+    ],
+)
+def test_persistent_paths_refuse_aliases_permissions_and_shared_files(
+    owner_state, kind
+):
+    import os
+
+    _, root, _ = owner_state
+    path = root / "release.json"
+    if kind == "root_mode":
+        root.chmod(0o755)
+    elif kind == "nested_mode":
+        parent = root / "nested"
+        parent.mkdir(mode=0o755)
+        path = parent / "release.json"
+    elif kind in {"journal_mode", "lock_mode"}:
+        target = path if kind == "journal_mode" else path.with_name(path.name + ".lock")
+        target.write_text("invented metadata")
+        target.chmod(0o640)
+    elif kind == "hard_link":
+        path.write_text("invented metadata")
+        path.chmod(0o600)
+        os.link(path, root / "linked.json")
+    elif kind == "file_symlink":
+        target = root / "real.json"
+        target.write_text("invented metadata")
+        target.chmod(0o600)
+        path.symlink_to(target)
+    else:
+        parent = root / "real"
+        parent.mkdir(mode=0o700)
+        alias = root / "alias"
+        alias.symlink_to(parent, target_is_directory=True)
+        path = alias / "release.json"
+    with pytest.raises((ValueError, OSError)):
+        E["validate_journal_path"](path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "relative.json",
+        "/Users/unowned/release.json",
+        "/private/tmp/../elsewhere/release.json",
+    ],
+)
+def test_journal_refuses_noncanonical_or_unapproved_locations(owner_state, path):
+    with pytest.raises((ValueError, OSError)):
+        E["validate_journal_path"](Path(path))
+
+
+def test_unowned_file_refused_before_read(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    path = tmp_path / "metadata.json"
+    path.write_text("invented metadata")
+    path.chmod(0o600)
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        monkeypatch.setitem(
+            E["verify_file"].__globals__,
+            "os",
+            SimpleNamespace(fstat=os.fstat, geteuid=lambda: os.geteuid() + 1),
+        )
+        with pytest.raises(ValueError):
+            E["verify_file"](fd)
+    finally:
+        os.close(fd)
