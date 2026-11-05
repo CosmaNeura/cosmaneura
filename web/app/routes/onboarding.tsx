@@ -1079,8 +1079,8 @@ function OptionalSetup({
         <StepKicker n="04" label="Optional" />
         <DisplayTitle>Optional setup</DisplayTitle>
         <p className="text-muted-foreground max-w-md text-base">
-          The Cosmaneura Inc BAA is in force. Biography, an example note, and
-          Zoom can wait — they do not block Cosmas.
+          The Cosmaneura Inc BAA is in force. You can complete optional setup
+          later; it does not block Cosmas.
         </p>
         <div className="flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
           <Button size="lg" onClick={() => setStep("allset")}>
