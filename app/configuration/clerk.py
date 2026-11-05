@@ -3,7 +3,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import Lock
+from time import monotonic
 
+import httpx
+import jwt
 from clerk_backend_api import Clerk
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 from clerk_backend_api.security import (
@@ -15,7 +19,10 @@ from clerk_backend_api.security import (
 from clerk_backend_api.security import (
     RequestState as RequestState,
 )
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from decouple import config
+from jwt.algorithms import RSAAlgorithm
 
 from app.configuration import authority as authority_configuration
 from app.environments import python_environment
@@ -206,3 +213,82 @@ def verified_provider_session(
     return VerifiedProviderSession(
         issuer, subject, hashlib.sha256(sid.encode()).hexdigest(), expires_at
     )
+
+
+class NativeClerkAuthenticationError(ValueError):
+    """A native session could not be verified; no provider details leave here."""
+
+
+NATIVE_JWKS_HTTP_TIMEOUT_MS = 3000
+NATIVE_PUBLIC_KEY_TTL_SECONDS = 60.0
+NATIVE_MAX_PUBLIC_KEYS = 64
+
+
+class BoundedNativeClerkVerifier:
+    def __init__(self, sdk: Clerk):
+        self.sdk = sdk
+        # Each verifier belongs to one configured Clerk instance. Never share
+        # keys across instances by kid alone (the SDK's AISEC-82 constraint).
+        self._public_keys: dict[str, tuple[float, str]] = {}
+        self._key_lock = Lock()
+
+    def authenticate_request(self, request: httpx.Request, token: str) -> RequestState:
+        try:
+            header = jwt.get_unverified_header(token)
+            kid = header.get("kid")
+            if (
+                header.get("alg") != "RS256"
+                or not isinstance(kid, str)
+                or not 1 <= len(kid) <= 512
+            ):
+                raise ValueError
+            now = monotonic()
+            with self._key_lock:
+                cached = self._public_keys.get(kid)
+            pem = (
+                cached[1]
+                if cached and now - cached[0] < NATIVE_PUBLIC_KEY_TTL_SECONDS
+                else None
+            )
+            if pem is None:
+                # Supported generated SDK operation. Explicit None disables its
+                # default 5xx backoff; no URL/header/security override is passed.
+                # This is a single HTTP timeout, not a wall-clock cancellation
+                # guarantee for a remote server continuously streaming a body.
+                jwks = self.sdk.jwks.get_jwks(
+                    retries=None, timeout_ms=NATIVE_JWKS_HTTP_TIMEOUT_MS
+                )
+                if (
+                    not isinstance(jwks.keys, list)
+                    or not 1 <= len(jwks.keys) <= NATIVE_MAX_PUBLIC_KEYS
+                ):
+                    raise ValueError
+                matches = [
+                    key for key in jwks.keys if key.kid == kid and key.kty == "RSA"
+                ]
+                if len(matches) != 1:
+                    raise ValueError
+                key = RSAAlgorithm.from_jwk(matches[0].model_dump())
+                if not isinstance(key, RSAPublicKey):
+                    raise ValueError
+                pem = key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                ).decode("ascii")
+                with self._key_lock:
+                    if (
+                        len(self._public_keys) >= NATIVE_MAX_PUBLIC_KEYS
+                        and kid not in self._public_keys
+                    ):
+                        self._public_keys.clear()
+                    self._public_keys[kid] = (monotonic(), pem)
+            state = self.sdk.authenticate_request(
+                request,  # type: ignore
+                AuthenticateRequestOptions(jwt_key=pem),
+            )
+            # Invalid/expired tokens cannot evict a trusted cached key and
+            # force more network work. Keys expire only at the short TTL; a new
+            # rotation kid selects a new configured-instance public key.
+            return state
+        except Exception:
+            raise NativeClerkAuthenticationError from None
