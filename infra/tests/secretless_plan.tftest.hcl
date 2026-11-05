@@ -1018,3 +1018,32 @@ run "scribe_bundle_worker_requires_separate_identity_preparation" {
   }
   expect_failures = [var.scribe_core_bundle]
 }
+
+run "scribe_bundle_attach_only_retains_worker_dependency_without_activation" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_core_bundle                             = { attach_existing_translation_identity = true }
+  }
+  override_data {
+    target = data.azurerm_user_assigned_identity.scribe_bundle_translation
+    values = {
+      id           = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-scribe-production-runtime"
+      client_id    = "39d00a14-ca79-4cbf-8821-3e2af90ea0e2"
+      principal_id = "3f712a80-f393-49d0-ab42-6a40bc50dfbd"
+    }
+  }
+  assert {
+    condition     = length(azurerm_container_app.worker.identity[0].identity_ids) == 2 && contains(azurerm_container_app.worker.identity[0].identity_ids, data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id)
+    error_message = "Attach-only preparation must retain both the health-service identity and exact existing Translation dependency on the worker."
+  }
+  assert {
+    condition     = !contains(azurerm_container_app.app.identity[0].identity_ids, data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id) && !try(contains(azurerm_container_app.scheduler.identity[0].identity_ids, data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id), false)
+    error_message = "The Translation dependency must not be projected to API or scheduler."
+  }
+  assert {
+    condition     = local.scribe_bundle_api_values == { SCRIBE_BUNDLE_API_ENABLED = "false" } && local.scribe_bundle_worker_values == { SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = "false" } && local.scribe_bundle_scheduler_values == local.scribe_bundle_worker_values
+    error_message = "Retaining the dependency identity must not enable a bundle feature or inject stage configuration."
+  }
+}

@@ -29,4 +29,34 @@ recovery rehearsal, process attestation or atomic absence of changes outside the
 
 Release source only after exact-head independent review and CI. Founder-selected prepare/promote supplies the first actual receipt; tests do not.
 Capture/upload failure makes the run inadmissible without rolling back healthy apps. Resolve drift read-only before a founder-selected retry.
+
+## Existing Scribe worker identity compatibility — 2026-11-04
+
+The attach-only production plan/apply setting must retain the already existing
+Translation identity in `cosmaneura-scribe-production`. The binding recorder
+previously refused every identity outside Core's resource group, so that valid
+worker dependency would make post-deploy evidence fail despite healthy apps.
+Two synthetic cases reproduce the refusal, including ARM identifier case variants.
+
+Admit only the exact existing
+`cosmaneura-scribe-production-runtime` identity in the fixed subscription and
+Scribe production resource group, and only in the worker's assigned-identity
+inventory. API, scheduler, registry authentication, adjacent resource names,
+foreign subscription and staging identities retain their previous refusals.
+The original strict ASCII/no-normalization ARM comparison remains in use.
+Identity metadata and all arbitrary configuration/secret values remain erased.
+The source-controlled attach-only input creates no new identity or role grant
+and leaves bundle API/worker activation off. No live apply or attachment ran.
+
+Validation covers the full sampled binding suite, worker-only exception and
+negative boundaries, exact plan/apply attach-only inputs, DeID identity checks,
+lint and typing. Independent review must bind the final substantive pushed SHA.
+Fresh protected-source admission and a new immutable prepare/promotion receipt
+are required; an older contract digest cannot admit these recorder bytes.
+
+Recovery retains the dependency identity and leaves features disabled. Removing
+this source exception can refuse receipt capture; it does not detach an identity
+or roll back workloads. Actual detachment, IAM changes, configuration activation
+and production promotion remain separate founder decisions. No schema rung or
+migration rehearsal applies to this source-only identity/evidence correction.
 Source rollback removes this seam while preserving immutable evidence and existing recovery controls; no schema/config/identity/DNS changes occur.

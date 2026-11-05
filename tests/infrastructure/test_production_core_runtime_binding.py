@@ -1134,3 +1134,76 @@ def test_canonical_capture_is_success_only_after_deploy_before_cleanup():
         and "github.triggering_actor == 'JohnClem'" in deploy["if"]
     )
     assert "just build" not in "\n".join(item.get("run", "") for item in steps)
+
+
+TRANSLATION_IDENTITY = (
+    f"/subscriptions/{binding.SUBSCRIPTION}/resourceGroups/"
+    "cosmaneura-scribe-production/providers/Microsoft.ManagedIdentity/"
+    "userAssignedIdentities/cosmaneura-scribe-production-runtime"
+)
+
+
+@pytest.mark.parametrize("variant", [str, str.upper])
+def test_worker_binding_retains_exact_existing_scribe_translation_identity(variant):
+    state = app_state("worker")
+    identity = variant(TRANSLATION_IDENTITY)
+    state["app"]["identity"]["userAssignedIdentities"][identity] = {
+        "clientId": "39d00a14-ca79-4cbf-8821-3e2af90ea0e2",
+        "principalId": "3f712a80-f393-49d0-ab42-6a40bc50dfbd",
+    }
+    projection = binding.config_projection(
+        state["app"], "worker", revision_name("worker")
+    )
+    assert identity in projection["identity_ids"]
+    assert "clientId" not in json.dumps(projection)
+
+
+@pytest.mark.parametrize("role", ["api", "scheduler"])
+def test_scribe_translation_identity_is_not_admitted_on_other_core_roles(role):
+    state = app_state(role)
+    state["app"]["identity"]["userAssignedIdentities"][TRANSLATION_IDENTITY] = {}
+    with pytest.raises(c.CandidateRefused):
+        binding.config_projection(state["app"], role, revision_name(role))
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        TRANSLATION_IDENTITY + "/unexpected",
+        TRANSLATION_IDENTITY.replace("-runtime", "-other"),
+        TRANSLATION_IDENTITY.replace(
+            binding.SUBSCRIPTION, "00000000-0000-0000-0000-000000000000"
+        ),
+        TRANSLATION_IDENTITY.replace(
+            "cosmaneura-scribe-production/", "cosmaneura-staging/"
+        ),
+    ],
+)
+def test_worker_identity_exception_never_admits_adjacent_or_foreign_identity(identity):
+    state = app_state("worker")
+    state["app"]["identity"]["userAssignedIdentities"][identity] = {}
+    with pytest.raises(c.CandidateRefused):
+        binding.config_projection(state["app"], "worker", revision_name("worker"))
+
+
+def test_translation_identity_exception_cannot_be_used_as_registry_identity():
+    state = app_state("worker")
+    registry = state["app"]["properties"]["configuration"]["registries"][0]
+    registry.pop("passwordSecretRef")
+    registry["identity"] = TRANSLATION_IDENTITY
+    with pytest.raises(c.CandidateRefused):
+        binding.config_projection(state["app"], "worker", revision_name("worker"))
+
+
+def test_production_plan_and_apply_retain_attach_only_translation_identity():
+    for path, job in (
+        ("infra_production_plan_local.yml", "plan"),
+        ("infra_apply_local.yml", "apply"),
+    ):
+        workflow = yaml.safe_load((ROOT / ".github/workflows" / path).read_text())
+        environments = [value.get("env", {}) for value in workflow["jobs"].values()]
+        selected = [env for env in environments if "TF_VAR_scribe_core_bundle" in env]
+        assert len(selected) == 1, (path, job)
+        assert json.loads(selected[0]["TF_VAR_scribe_core_bundle"]) == {
+            "attach_existing_translation_identity": True
+        }
