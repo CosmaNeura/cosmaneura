@@ -138,6 +138,41 @@ def target(before, plan, name, recovery=False):
     )
 
 
+@pytest.mark.parametrize("presence", ["null", "absent"])
+def test_real_command_null_or_absence_is_preserved_without_normalization(
+    sample, presence
+):
+    before, plan, context = sample
+    container = before[API]["template"]["containers"][0]
+    if presence == "null":
+        container["command"] = None
+    else:
+        del container["command"]
+    plan = M["prepare_plan"](
+        before,
+        plan["controls"],
+        plan["bindings"],
+        {name: row["revision"] for name, row in plan["desired"].items()},
+        {
+            key: plan["recovery"][key]
+            for key in ("image", "source_sha", "compatibility_sha256", "revisions")
+        },
+        plan["created_at"],
+        plan["expires_at"],
+    )
+    context["plan_sha256"] = M["digest"](plan)
+    assert M["validate_transition"](plan, before, context, NOW)["enabled"]
+    after = target(before, plan, API)["template"]["containers"][0]
+    assert ("command" in after) == ("command" in container)
+    assert after.get("command") == container.get("command")
+    changed = copy.deepcopy(before)
+    changed[API]["template"]["containers"][0]["command"] = (
+        [] if presence == "null" else None
+    )
+    with pytest.raises(ValueError):
+        M["validate_transition"](plan, changed, context, NOW)
+
+
 def test_dormant_default_has_no_observation_or_authority_requirement():
     assert M["validate_transition"](None, {}, {}, NOW) == {"enabled": False}
 
@@ -348,6 +383,29 @@ def test_closed_recovery_preserves_read_authority_policy_private_state_and_ledge
     closed[PHASES[0]]["secret_values"]["session-secret-key"] += "changed"
     with pytest.raises(ValueError):
         M["validate_closed_recovery"](plan, closed, context, NOW)
+
+
+@pytest.mark.parametrize("operation", ["phase", "recovery"])
+def test_component_fingerprints_must_match_actual_bound_state(sample, operation):
+    before, plan, context = sample
+    name = PHASES[0]
+    context["schema_revision"] = plan["bindings"]["schema_after"]
+    if operation == "phase":
+        observed = copy.deepcopy(before)
+        observed[name] = target(before, plan, name)
+        plan["desired"][name]["private_sha256"] = "sha256:" + "f" * 64
+        context["plan_sha256"] = M["digest"](plan)
+        completed = [
+            {"name": name, "plan_sha256": M["digest"](plan), **plan["desired"][name]}
+        ]
+        with pytest.raises(ValueError):
+            M["validate_phase"](plan, observed, context, completed, NOW)
+    else:
+        observed = {key: target(before, plan, key, recovery=True) for key in PHASES}
+        plan["recovery"]["states"][name]["private_sha256"] = "sha256:" + "f" * 64
+        context["plan_sha256"] = M["digest"](plan)
+        with pytest.raises(ValueError):
+            M["validate_closed_recovery"](plan, observed, context, NOW)
 
 
 def test_cli_is_content_free_and_duplicate_keys_refuse():

@@ -89,9 +89,14 @@ def environment(state: dict[str, Any]) -> dict[str, dict[str, str]]:
     require(type(containers) is list and len(containers) == 1)
     container = cast(dict[str, Any], containers[0])
     require(type(container) is dict and re.fullmatch(IMAGE, container["image"]))
-    require(type(container["command"]) is list and type(container["args"]) is list)
+    command = container.get("command")
     require(
-        all(type(value) is str for value in container["command"] + container["args"])
+        command is None
+        or (type(command) is list and all(type(value) is str for value in command))
+    )
+    require(
+        type(container["args"]) is list
+        and all(type(value) is str for value in container["args"])
     )
     entries = cast(list[dict[str, str]], container["env"])
     require(type(entries) is list)
@@ -461,11 +466,7 @@ def validate_phase(
         expected = (
             plan["desired"][name] if index < len(completed) else plan["before"][name]
         )
-        require(
-            state["name"] == name
-            and state["revision"] == expected["revision"]
-            and digest(state) == expected["sha256"]
-        )
+        require(state["name"] == name and state_row(state) == expected)
         if index < len(completed):
             require(
                 completed[index]
@@ -503,7 +504,7 @@ def validate_closed_recovery(
         environment(state)
         require(
             state["name"] == name
-            and digest(state) == plan["recovery"]["states"][name]["sha256"]
+            and state_row(state) == plan["recovery"]["states"][name]
         )
     require(digest(observed) == plan["recovery"]["sha256"])
     require(
