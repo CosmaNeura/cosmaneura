@@ -27,6 +27,19 @@ STAGING_PUBLICATION_RECEIPT="${STAGING_PUBLICATION_RECEIPT:-}"
 EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256="${EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256:-}"
 RELEASE_V2_JSON=""
 EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"
+STAGING_SCRIBE_INIT_PLAN="${STAGING_SCRIBE_INIT_PLAN:-}"
+EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256="${EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256:-}"
+STAGING_SCRIBE_INIT_JOURNAL="${STAGING_SCRIBE_INIT_JOURNAL:-}"
+STAGING_SCRIBE_INIT_ACTION="${STAGING_SCRIBE_INIT_ACTION:-initialize}"
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256$STAGING_SCRIBE_INIT_JOURNAL" ]]; then
+	[[ "$STAGING_SCRIBE_INIT_PLAN" == /private/tmp/* && \
+		"$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256" =~ ^[0-9a-f]{64}$ && \
+		-n "$STAGING_SCRIBE_INIT_JOURNAL" && \
+		"$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
+		"$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" && \
+		-n "$STAGING_PUBLICATION_RECEIPT" && \
+		( "$STAGING_SCRIBE_INIT_ACTION" == "initialize" || "$STAGING_SCRIBE_INIT_ACTION" == "closed" ) ]] || exit 1
+fi
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
 	( -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
@@ -90,6 +103,11 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	done
 	export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
 	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" ]]; then
+	"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_scribe_initialization_executor.py" \
+		--check-journal-path "$STAGING_SCRIBE_INIT_JOURNAL" >/dev/null || exit 1
 fi
 
 initialize_migration_job() {
@@ -722,6 +740,7 @@ runtime_contracts_json() {
 }
 
 verify_effective_configuration_fingerprint() {
+	[[ -z "$STAGING_SCRIBE_INIT_PLAN" ]] || return 0 # Separate raw before/desired checks below.
 	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
 	local observed
 	observed=$(printf '%s\n%s\n' "$ENV_JSON" "$RUNTIME_CONTRACTS_JSON" |
@@ -734,7 +753,7 @@ verify_effective_configuration_fingerprint() {
 }
 
 RUNTIME_CONTRACTS_JSON=""
-if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" && -z "$STAGING_SCRIBE_INIT_PLAN" ]]; then
 	RUNTIME_CONTRACTS_JSON=$(runtime_contracts_json) || exit 1
 	verify_effective_configuration_fingerprint || exit 1
 	CONFIGURATION_EVIDENCE_JSON=$(jq -c \
@@ -749,6 +768,11 @@ if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
 fi
 if ! validate_deploy_revision_suffix "$REVISION_STRING" $CONTAINERS; then
 	exit 1
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" && "$STAGING_SCRIBE_INIT_ACTION" == "initialize" ]]; then
+	jq -e --arg suffix "--$REVISION_STRING" \
+		'.desired | all(.[]; .revision | endswith($suffix))' "$STAGING_SCRIBE_INIT_PLAN" >/dev/null || exit 1
 fi
 
 echo "Revision string: $REVISION_STRING"
@@ -1025,6 +1049,7 @@ verify_workload_state_ready() {
 }
 
 verify_preserved_runtime() {
+	[[ -z "$STAGING_SCRIBE_INIT_PLAN" ]] || return 0 # Full raw checks replace subset attestation.
 	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
 	local selected=${1:-$CRITICAL_CONTAINERS}
 	local observed container state contract expected_revision secrets
@@ -1483,6 +1508,13 @@ run_migrations() {
 	verify_migration_job_template || return 1
 	capture_schema_revision "Pre-migration" "$migration_container_name" || return 1
 	SCHEMA_BEFORE=$CAPTURED_SCHEMA_REVISION
+	if [[ -n "$STAGING_SCRIBE_INIT_PLAN" && "$STAGING_SCRIBE_INIT_ACTION" == "closed" ]]; then
+		[[ "$SCHEMA_BEFORE" == "$EXPECTED_SCHEMA_AFTER" ]] || return 1
+		SCHEMA_AFTER=$SCHEMA_BEFORE
+		emit_github_output schema_after "$SCHEMA_AFTER" || return 1
+		cleanup_migration_job || return 1
+		return 0 # Probe only; closed recovery does not apply or downgrade schema.
+	fi
 	emit_github_output schema_before "$SCHEMA_BEFORE" || return 1
 	if [[ "$SCHEMA_BEFORE" != "$EXPECTED_SCHEMA_BEFORE" ]]; then
 		echo "Live staging schema does not match the reviewed pre-migration revision."
@@ -1906,10 +1938,48 @@ wait_for_incompatible_worker_replicas_to_drain() {
 verify_staging_release_source || exit 1
 verify_azure_deployment_identity || exit 1
 verify_preserved_runtime || exit 1
+staging_scribe_bridge() {
+	local action=$1 schema=$2 result
+	# Protected resolver JSON travels over stdin; only hashes/public receipts return.
+	result=$(printf '%s' "$ENV_JSON" | jq -c '{configuration:.}' | \
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_scribe_initialization_executor.py" \
+		"$action" "$STAGING_SCRIBE_INIT_PLAN" "$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256" \
+		"$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
+		"$STAGING_PUBLICATION_RECEIPT" "$EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256" \
+		"$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "$schema" "$STAGING_SCRIBE_INIT_JOURNAL" \
+		"$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256") || return 1
+	emit_github_output scribe_initialization_result "$result" || return 1
+}
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" && "$STAGING_SCRIBE_INIT_ACTION" == "initialize" ]]; then
+	staging_scribe_bridge before "$EXPECTED_SCHEMA_BEFORE" || exit 1
+fi
 run_migrations
 if [[ $? -ne 0 ]]; then
 	echo "Migration failed. Aborting deployment."
 	exit 1
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" ]]; then
+	[[ "$SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER" ]] || exit 1
+	if [[ "$STAGING_SCRIBE_INIT_ACTION" == "closed" ]]; then
+		for container in $BACKEND_CONTAINERS "$API_CONTAINER"; do
+			verify_staging_release_source || exit 1
+			staging_scribe_bridge closed-step "$SCHEMA_AFTER" || exit 1
+		done
+		staging_scribe_bridge closed-step "$SCHEMA_AFTER" || exit 1
+	else
+		for container in $BACKEND_CONTAINERS; do
+			verify_staging_release_source || exit 1
+			staging_scribe_bridge step "$SCHEMA_AFTER" || exit 1
+			if [[ "$container" == "$WORKER_CONTAINER" ]]; then
+				wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
+			fi
+		done
+		verify_staging_release_source || exit 1
+		staging_scribe_bridge step "$SCHEMA_AFTER" || exit 1
+		staging_scribe_bridge finish "$SCHEMA_AFTER" || exit 1
+	fi
+	exit 0 # Qualified same-image CLOSED recovery; skip legacy cleanup/mutation path.
 fi
 
 # Deploy and verify recovery workloads before making the new API revision live.
