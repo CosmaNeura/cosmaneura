@@ -127,6 +127,24 @@ controller's ownership support is not an immediate rollback over a configured
 native environment: strict preservation would refuse its owned runtime names.
 That requires an explicit reconciliation or a reviewed fix-forward.
 
+The preserving initialization contract admits a retained secret reference only
+as `{name, secretRef}` or `{name, secretRef, value: ""}`. The bound Azure CLI
+adds the empty `value` field when updating retained containers; the desired and
+CLOSED target fingerprints model this exact representation change. Names,
+references, entry order, secret objects and resolved private bytes remain
+bound. A nonempty or nonstring literal alongside a reference, an unknown
+reference or any additional field is refused. No other missing field is
+normalized, including per-workload public health controls.
+
+This model change does not adopt an interrupted deployment. Preserve its
+original plan, journal and one-shot result. A changed controller requires fresh
+reviewed source authorization and an explicitly reconciled full before-state;
+old target fingerprints cannot be relabeled or rewritten. Recovery still
+requires exact source-admitted state, a same-candidate CLOSED plan and durable
+ordered phase evidence with ledger readiness retained. This source fix alone
+does not authorize deployment, schema changes, account activation or a wider
+practice cohort.
+
 ## Qualification and review evidence
 
 Owned PostgreSQL qualification covers fresh/incomplete setup with no writes,
