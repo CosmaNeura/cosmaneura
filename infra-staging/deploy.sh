@@ -490,7 +490,7 @@ fi
 emit_github_output() {
 	local name=$1 value=$2
 	case "$name" in
-	source_sha | image_digest | configuration_evidence | schema_before | schema_after | recovery_digest | workloads_before | workloads_after) ;;
+	source_sha | image_digest | configuration_evidence | schema_before | schema_after | recovery_digest | workloads_before | workloads_after | scribe_initialization_result) ;;
 	*) echo "Refusing to emit an output outside the staging evidence allowlist."; return 1 ;;
 	esac
 	[[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || {
