@@ -152,6 +152,44 @@ def recovery_preflight(plan, publication, observed, retained):
         require(image(retained[name]["template"]) == expected["image"])
         require(retained[name]["provisioningState"] == "Provisioned")
 
+    # Once any ledger is on, raw revision recovery cannot drop fences or
+    # reopen acquisition. Closed forward recovery is separately bound.
+    def public(template):
+        return {
+            item["name"]: item.get("value")
+            for container in template["containers"]
+            for item in container.get("env", [])
+        }
+
+    if any(
+        public(row["template"]).get("SCRIBE_CANCELLATION_LEDGER_READY") == "true"
+        for row in observed.values()
+    ):
+        require(
+            all(
+                public(row["template"]).get("SCRIBE_CANCELLATION_LEDGER_READY")
+                == "true"
+                for row in retained.values()
+            )
+        )
+        closed = public(retained["cosmaneura-staging-app"]["template"])
+        require(
+            closed.get("SCRIBE_NATIVE_WORKLOAD_ENABLED") == "true"
+            and closed.get("SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED") == "true"
+        )
+        require(closed.get("SCRIBE_ACTIVATION_PRACTICE_REFS") == "")
+        require(
+            all(
+                closed.get(key) == "false"
+                for key in (
+                    "SCRIBE_AUTOMATIC_ACTIVATION_ENABLED",
+                    "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
+                    "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
+                    "SCRIBE_CANCELLATION_ENABLED",
+                )
+            )
+        )
+
 
 def recover(plan, publication, execute):
     operation = "recover-core"
