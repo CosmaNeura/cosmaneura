@@ -615,9 +615,21 @@ resource "azurerm_container_app" "app" {
         transport               = "TCP"
       }
 
+      # A TCP probe passes while uvicorn holds the port even if the event loop
+      # is wedged, so a frozen API never restarts. TrustedHostMiddleware covers
+      # /healthcheck; the probe must send the public host or it gets a 400.
       liveness_probe {
-        port      = 80
-        transport = "TCP"
+        port                    = 80
+        transport               = "HTTP"
+        path                    = "/healthcheck"
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+
+        header {
+          name  = "Host"
+          value = "app.cosmaneura.com"
+        }
       }
 
       # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
