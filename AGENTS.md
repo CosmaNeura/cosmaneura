@@ -35,7 +35,15 @@ that work; it does not replace decomposition or deployed-state reconciliation.
 - PR CI runs secretless Backend and Frontend jobs. Infrastructure PRs run
   secretless OpenTofu format, validation, and provider-mocked tests.
 
-Agents never invoke production deploy, migration, or Azure mutation commands.
+Agents never invoke production deploy, production migration, or production
+Azure mutation commands.
+
+Staging Azure mutation and `Deploy Staging Candidate` are allowed only when
+John explicitly authorizes that exact staging action in the current session.
+There is no standing or global permission. Authorization never covers
+production or PHI. Founder-only, protected-master, immutable-candidate, and
+protected-credential gates remain mandatory. Read-only inspection of live
+staging or Core state remains allowed without a separate production decision.
 
 ## Risk classes (declare one on every PR)
 
@@ -116,6 +124,14 @@ highest tier and should be split when concerns can deploy independently.
 - Add dormant additive schema structures through an approved expand rung.
 - Inspect live state read-only and prepare reconciliation options.
 
+**Staging mutation — current-session founder authorization only**
+
+- Staging Azure mutation and `Deploy Staging Candidate` only when John
+  explicitly authorizes that exact staging action in the current session.
+  No standing or global permission. No production. No PHI. Preserve the
+  founder-only, protected-master, immutable-candidate, and
+  protected-credential gates in Approval and promotion boundaries.
+
 **Ask first**
 
 - Change auth/session, billing, patient-record schemas, security boundaries,
@@ -130,6 +146,8 @@ highest tier and should be split when concerns can deploy independently.
 - Deploy an unmerged branch or represent prose/agent output as GitHub approval.
 - Drop an additive expand structure as immediate rollback; leave it dormant.
 - Archive/delete repositories or production resources under this doctrine.
+- Invoke production deploy, production migration, or production Azure mutation
+  commands.
 
 ## Architecture and workflow
 
@@ -194,6 +212,10 @@ issue when it is done.
   allowed check. No login and no actions.
 
 ### Hard rules
+
+These rules apply to QA bots only. They do not restrict founder-authorized
+Codex or Cursor engineering sessions, which follow Permission boundaries
+above.
 
 - No production logins and no production deploys.
 - Never run `Deploy Staging Candidate` or any deploy or rollback workflow.
