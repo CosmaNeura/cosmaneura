@@ -619,8 +619,26 @@ printf '%s' "$TAG_ATTRIBUTES" | "$JQ" -e --arg digest "$IMAGE_DIGEST" \
 	'.digest == $digest and
 	 .changeableAttributes.writeEnabled == false and
 	 .changeableAttributes.deleteEnabled == false and
-	 .changeableAttributes.readEnabled == true' >/dev/null
+	 .changeableAttributes.readEnabled == true and
+	 .changeableAttributes.listEnabled == true' >/dev/null
 unset TAG_ATTRIBUTES
+
+PHASE=lock_and_reverify_candidate_manifest
+bound_acr acr repository update --name "$REGISTRY_NAME" \
+	--image "$REGISTRY_REPOSITORY@$IMAGE_DIGEST" \
+	--write-enabled false --delete-enabled false \
+	--only-show-errors --output none
+MANIFEST_ATTRIBUTES=$(bound_acr acr manifest show-metadata \
+	--registry "$REGISTRY_NAME" \
+	--name "$REGISTRY_REPOSITORY@$IMAGE_DIGEST" \
+	--output json)
+printf '%s' "$MANIFEST_ATTRIBUTES" | "$JQ" -e --arg digest "$IMAGE_DIGEST" \
+	'.digest == $digest and
+	 .changeableAttributes.writeEnabled == false and
+	 .changeableAttributes.deleteEnabled == false and
+	 .changeableAttributes.readEnabled == true and
+	 .changeableAttributes.listEnabled == true' >/dev/null
+unset MANIFEST_ATTRIBUTES
 
 PHASE=complete
 write_evidence true success
