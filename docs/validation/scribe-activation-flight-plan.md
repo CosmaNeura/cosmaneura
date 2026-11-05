@@ -77,6 +77,56 @@ application images. Leave the additive mapping dormant. Downgrade deliberately
 refuses to remove it; a future contract cleanup requires separate approval.
 Recovery must not remove cancellation, revocation or legal evidence.
 
+## Canonical staging configuration preparation
+
+The staging controller accepts three additional optional, complete public
+groups: native workload/context/visit controls; automatic activation and its
+exact practice TypeID cohort; cancellation intake, migrated-ledger readiness
+and its reviewed policy. Missing groups remove inherited values before the
+reviewed overlay; they never supply enabled defaults. Historical runtime plans
+remain valid. Partial groups, noncanonical Boolean values, wildcard/duplicate
+or oversized cohorts, incomplete native prerequisites and invalid policy
+values are refused with content-free errors.
+
+Native controls, activation and cancellation intake/policy are API-only.
+`SCRIBE_CANCELLATION_LEDGER_READY` is shared by API, worker and scheduler: the
+existing Doctor fence returns no denial while it is false, so API-only readiness
+would leave processing unfenced. After the cancellation ledger is migrated,
+retain readiness on every workload even when cancellation intake is closed.
+Closing intake neither removes receipts nor restores processing access.
+
+The pure pre-mutation guard receives only an explicit public projection. It
+retains the existing staging Entra tenant binding and exact Clerk issuer,
+checks the native authority token timing, and refuses native caller overlap
+with the original Sovereign tool callers. Native authentication selects the
+same native singleton for both policy checks and compares verified client IDs
+in `authenticate_native_workload`; it does not require equality with legacy
+capture caller/audience settings. No application imports, credential reads or
+new runtime identities are introduced by the controller.
+
+This patch supplies configuration ownership and validation, not an enabled
+cohort, migration, billing exemption, credential/configuration change or release
+authorization. Reconcile actual source/image/configuration/schema drift, rehearse
+and separately approve the existing expand through `e78845cecca6`, then bind
+the full effective configuration fingerprint and exact per-workload recovery
+revisions. Existing candidate/PR/controller provenance, schema checks and founder
+dispatch remain mandatory. Changed controller bytes require a fresh reviewed
+dispatch; the audited dependency manifest binds the revised controls.
+
+Retain the separate staging Scribe receiver topology. The canonical Core image
+does not include the separately assembled Scribe runtime; bundle controls remain
+outside the admitted public groups. Receiver support must be reviewed and
+promoted before the staging iOS client can qualify the physical-phone flow.
+Actions remains disabled pending a separate owner decision; preparation does
+not invoke or rerun a workflow.
+
+Recovery closes automatic activation/cohort and cancellation intake, restores
+the prior reviewed images/configuration through the retained-revision recovery,
+and keeps ledger readiness and additive structures intact. Reverting the
+controller's ownership support is not an immediate rollback over a configured
+native environment: strict preservation would refuse its owned runtime names.
+That requires an explicit reconciliation or a reviewed fix-forward.
+
 ## Qualification and review evidence
 
 Owned PostgreSQL qualification covers fresh/incomplete setup with no writes,
