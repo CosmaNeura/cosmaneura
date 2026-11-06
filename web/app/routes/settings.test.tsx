@@ -17,6 +17,8 @@ const client = vi.hoisted(() => ({
   getNoteTemplatePreference: vi.fn(),
   updateNoteTemplatePreference: vi.fn(),
   createNoteTemplate: vi.fn(),
+  initializeNoteTemplates: vi.fn(),
+  deleteNoteTemplate: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => client)
 
@@ -146,6 +148,9 @@ function openSettings() {
 beforeEach(() => {
   vi.clearAllMocks()
   supportView.active = false
+  client.initializeNoteTemplates.mockResolvedValue({
+    data: { status: "deleted", created: false },
+  })
   client.getNoteTemplatePreference.mockResolvedValue({
     data: { default_schema_ref: null, revision: 0 },
     response: new Response(null, { status: 200 }),

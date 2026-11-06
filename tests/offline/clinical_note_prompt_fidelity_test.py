@@ -142,6 +142,41 @@ def source_case(
     return transcript, example_note, schema, customization, doctor
 
 
+def test_default_soap_reuses_manual_starting_point_guidance_in_actual_prompt():
+    starting_point = json.loads(
+        (ROOT / "tests/fixtures/default_soap_starting_point.json").read_text()
+    )
+    expected = {field["heading"]: field["guidance"] for field in starting_point}
+    tree = ast.parse((ROOT / "app/services/default_note_template.py").read_text())
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "SOAP_FIELDS"
+            for target in node.targets
+        )
+    )
+    # Read only the real initializer's literal, without app/provider bootstrap.
+    fields = ast.literal_eval(assignment.value)
+    assert list(fields) == [field["heading"] for field in starting_point]
+    assert fields == expected
+    transcript, example, schema, customization, doctor = source_case()
+    schema.fields = fields
+    prompt = load_prompt_functions()["build_structured_prompt"](
+        transcript,
+        example,
+        schema,
+        customization,
+        action_items="",
+        doctor=doctor,
+        source_indexes=True,
+    )
+    actual_schema = json.loads(prompt.split("<schema>", 1)[1].split("</schema>", 1)[0])
+    assert actual_schema == expected
+    assert "<example_note>" not in prompt
+
+
 # Captured from the accepted185 actual indexed builder before this repair.
 # Synthetic prompt fixtures only; no live capture, caller or model evidence.
 INDEXED_BASELINE = {

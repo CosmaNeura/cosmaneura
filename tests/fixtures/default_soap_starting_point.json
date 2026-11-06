@@ -1,0 +1,18 @@
+[
+  {
+    "heading": "Subjective",
+    "guidance": "Reported symptoms and history. Retain uncertainty and who reported each fact."
+  },
+  {
+    "heading": "Objective",
+    "guidance": "Only observations, examination findings and results supported by the source."
+  },
+  {
+    "heading": "Assessment",
+    "guidance": "Only the assessment discussed in the source. Do not infer a diagnosis."
+  },
+  {
+    "heading": "Plan",
+    "guidance": "Only the plan discussed in the source, including conditions, corrections and follow-up."
+  }
+]

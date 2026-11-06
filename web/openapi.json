@@ -647,6 +647,92 @@
         }
       }
     },
+    "/internal/v1/note-schemas/initialize": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Initialize Note Templates",
+        "operationId": "initialize_note_templates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitializeNoteTemplates"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitializedNoteTemplates"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/note-schemas/{schema_id}": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Delete Note Template",
+        "operationId": "delete_note_template",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schema_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schema Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/note-template-preference": {
       "get": {
         "tags": [
@@ -5387,6 +5473,36 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InitializeNoteTemplates": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "InitializeNoteTemplates"
+      },
+      "InitializedNoteTemplates": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "deleted",
+              "capacity"
+            ],
+            "title": "Status"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "created"
+        ],
+        "title": "InitializedNoteTemplates"
       },
       "IntakeDetail": {
         "properties": {

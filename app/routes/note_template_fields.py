@@ -2,11 +2,16 @@
 
 import hashlib
 import json
-from typing import Annotated, Any, cast
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Path, Request
 from pydantic import BaseModel, Field, model_validator
 
+from app.services.default_note_template import (
+    DefaultTemplateOwnerUnavailable,
+    provision_default_note_template,
+)
 from app.services.note_template_preferences import (
     TemplatePreference,
     preference_row,
@@ -73,6 +78,58 @@ class CreateNoteTemplate(TemplateSections):
 class CreatedNoteTemplate(TemplateFields):
     schema_id: str
     note_type: str
+
+
+class InitializeNoteTemplates(BaseModel, extra="forbid"):
+    pass
+
+
+class InitializedNoteTemplates(BaseModel, extra="forbid"):
+    status: Literal["available", "deleted", "capacity"]
+    created: bool
+
+
+@note_template_fields_api.post(
+    "/note-schemas/initialize", name="initialize_note_templates"
+)
+def initialize_note_templates(
+    request: Request, data: InitializeNoteTemplates
+) -> InitializedNoteTemplates:
+    with get_session() as session:
+        try:
+            result = provision_default_note_template(session, request.state.doctor.id)
+        except DefaultTemplateOwnerUnavailable:
+            raise HTTPException(404) from None
+        session.commit()
+        return InitializedNoteTemplates(status=result.status, created=result.created)
+
+
+@note_template_fields_api.delete(
+    "/note-schemas/{schema_id}", name="delete_note_template", status_code=204
+)
+def delete_note_template(
+    request: Request, schema_id: Annotated[TypeIDType, Path()]
+) -> None:
+    with get_session() as session:
+        owner = session.exec(
+            select(Doctor).where(Doctor.id == request.state.doctor.id).with_for_update()
+        ).one_or_none()
+        if owner is None or owner.deleted_at is not None:
+            raise HTTPException(404)
+        schema = session.exec(
+            select(DoctorNoteSchema)
+            .where(
+                DoctorNoteSchema.id == schema_id,
+                DoctorNoteSchema.doctor_id == owner.id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if schema is None:
+            raise HTTPException(404)
+        if schema.deleted_at is None:
+            schema.deleted_at = datetime.now(UTC)
+            session.add(schema)
+            session.commit()
 
 
 class UpdateTemplatePreference(BaseModel, extra="forbid"):
