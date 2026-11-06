@@ -14,6 +14,7 @@ can import them without re-embedding them in staging-scoped fixture files.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from collections.abc import Iterable, Iterator
@@ -195,6 +196,17 @@ def scan_repository(root: Path | None = None) -> list[str]:
     return findings
 
 
+def _error(message: str) -> None:
+    # Only emit workflow commands inside Actions. Unit tests call main() and
+    # must not create ::error:: annotations that fail an unrelated CI step.
+    prefix = (
+        "::error::"
+        if os.environ.get("GITHUB_ACTIONS") == "true"
+        else "error: "
+    )
+    print(f"{prefix}{message}", file=sys.stderr)
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -211,17 +223,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         findings = scan_repository(args.root)
     except BoundaryViolation as error:
-        print(f"::error::{error}", file=sys.stderr)
+        _error(str(error))
         return 1
     if findings:
-        print(
-            "::error::Staging-scoped paths named live production hosts or the "
+        _error(
+            "Staging-scoped paths named live production hosts or the "
             "live sign-in instance. Keep staging on staging; production identity "
-            "belongs only on the founder-gated production promote path.",
-            file=sys.stderr,
+            "belongs only on the founder-gated production promote path."
         )
         for finding in findings:
-            print(f"::error::{finding}", file=sys.stderr)
+            _error(finding)
         return 1
     print("staging_environment_boundary_ok")
     return 0
