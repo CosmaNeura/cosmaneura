@@ -28,13 +28,11 @@ vi.mock("client/@tanstack/react-query.gen", () => ({
 beforeEach(() => {
   bindQueryPrincipal({ isLoaded: false, userId: null, sessionId: null })
   queryClient.clear()
-  readPrincipal
-    .mockReset()
-    .mockResolvedValue({
-      isLoaded: true,
-      userId: "synthetic-a",
-      sessionId: "session-a",
-    })
+  readPrincipal.mockReset().mockResolvedValue({
+    isLoaded: true,
+    userId: "synthetic-a",
+    sessionId: "session-a",
+  })
   readSettings.mockReset()
 })
 const load = () =>
