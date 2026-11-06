@@ -31,7 +31,21 @@ vi.mock("~/lib/practice-api", async (importOriginal) => ({
   ...practiceApi,
 }))
 
-vi.mock("@clerk/clerk-react", () => ({ useUser: () => ({ user: null }) }))
+const browserAuth = vi.hoisted(() => ({
+  loaded: true,
+  user: { id: "synthetic_settings_user" },
+  session: { id: "synthetic_settings_session" },
+  addListener: () => () => {},
+}))
+vi.mock("@clerk/clerk-react", () => ({
+  useUser: () => ({ user: null }),
+  useAuth: () => ({
+    isLoaded: true,
+    userId: browserAuth.user.id,
+    sessionId: browserAuth.session.id,
+  }),
+  useClerk: () => browserAuth,
+}))
 const supportView = vi.hoisted(() => ({ active: false }))
 vi.mock("~/components/ViewAsRouteGuard", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/components/ViewAsRouteGuard")>()),

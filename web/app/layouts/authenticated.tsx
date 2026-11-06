@@ -15,10 +15,13 @@ import {
   ViewAsRouteGuard,
 } from "~/components/ViewAsRouteGuard"
 import { ZoomConnectionAlert } from "~/components/ZoomConnectionAlert"
+import { readCurrentBrowserPrincipal } from "~/configuration/clerk"
 import {
-  SETTINGS_STALE_TIME,
-  queryClient,
-} from "~/configuration/tanstack-query"
+  QueryPrincipalChangedError,
+  QueryPrincipalUnavailableError,
+  withQueryPrincipal,
+} from "~/configuration/query-principal"
+import { queryClient } from "~/configuration/tanstack-query"
 import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 import { billingRecoveryLocation } from "~/lib/billing-recovery"
 import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
@@ -101,9 +104,11 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   try {
     return await withReadDeadline(
       (signal) =>
-        loadAuthenticatedData(request, signal, () => {
-          settingsStarted = true
-        }),
+        withQueryPrincipal(readCurrentBrowserPrincipal, () =>
+          loadAuthenticatedData(request, signal, () => {
+            settingsStarted = true
+          }),
+        ),
       {
         signal: request.signal,
         onTimeout: () => {
@@ -117,6 +122,15 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
       },
     )
   } catch (error) {
+    if (error instanceof QueryPrincipalUnavailableError) {
+      const url = new URL(request.url)
+      throw redirect(
+        `/sign-in?redirect_url=${encodeURIComponent(url.pathname + url.search)}`,
+      )
+    }
+    if (error instanceof QueryPrincipalChangedError) {
+      throw redirect(href("/onboarding"))
+    }
     if (error instanceof ReadDeadlineError) {
       // Settings is part of the access decision too. Never expose the outlet
       // when either settings or support-view verification could not complete.
@@ -178,9 +192,11 @@ async function loadAuthenticatedData(
   let data
   try {
     onSettingsRead()
-    data = await queryClient.ensureQueryData({
+    data = await queryClient.fetchQuery({
       ...settingsDataOptions(),
-      staleTime: SETTINGS_STALE_TIME,
+      // Access decisions recheck the server on each route load. Concurrent
+      // loaders still deduplicate; mounted consumers reuse the fresh result.
+      staleTime: 0,
       retry: shouldRetrySettingsQuery,
     })
     signal.throwIfAborted()
