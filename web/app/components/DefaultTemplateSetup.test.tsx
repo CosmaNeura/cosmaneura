@@ -10,6 +10,25 @@ vi.mock("~/configuration/client", () => ({
 vi.mock("~/components/ViewAsRouteGuard", () => ({
   useViewAsActive: () => state.viewAs,
 }))
+vi.mock("~/hooks/use-template-operation-context", () => ({
+  useTemplateOperationContext: (doctorId: string) => ({
+    key: doctorId + String(state.viewAs),
+    principal: {
+      isLoaded: true,
+      userId: "synthetic_user",
+      sessionId: "synthetic_session",
+    },
+    available: !state.viewAs,
+    isCurrent: () => !state.viewAs,
+  }),
+}))
+vi.mock("~/lib/template-operation", () => ({
+  templateOperation: (
+    _principal: unknown,
+    _isCurrent: unknown,
+    request: (options: object) => unknown,
+  ) => request({}),
+}))
 beforeEach(() => {
   vi.resetAllMocks()
   state.viewAs = false
@@ -20,7 +39,9 @@ it("initializes the current owner's SOAP without account or template data and re
     data: { status: "available", created: true },
   })
   const onCreated = vi.fn()
-  render(<DefaultTemplateSetup onCreated={onCreated} />)
+  render(
+    <DefaultTemplateSetup doctorId="synthetic_doctor" onCreated={onCreated} />,
+  )
   await act(async () => {})
   expect(state.initialize).toHaveBeenCalledExactlyOnceWith({ body: {} })
   expect(onCreated).toHaveBeenCalledOnce()
@@ -30,7 +51,9 @@ it("initializes the current owner's SOAP without account or template data and re
 it("checks an uncertain initialization with the identical owner-free request", async () => {
   state.initialize.mockRejectedValueOnce(new Error("Synthetic lost response"))
   const onCreated = vi.fn()
-  render(<DefaultTemplateSetup onCreated={onCreated} />)
+  render(
+    <DefaultTemplateSetup doctorId="synthetic_doctor" onCreated={onCreated} />,
+  )
   await screen.findByRole("alert")
   state.initialize.mockResolvedValue({
     data: { status: "available", created: false },
@@ -46,7 +69,9 @@ it("honors the retained deletion receipt and leaves custom creation/upload avail
     data: { status: "deleted", created: false },
   })
   const onCreated = vi.fn()
-  render(<DefaultTemplateSetup onCreated={onCreated} />)
+  render(
+    <DefaultTemplateSetup doctorId="synthetic_doctor" onCreated={onCreated} />,
+  )
   await screen.findByText(/Your supplied SOAP template was deleted/)
   expect(screen.queryByRole("button")).not.toBeInTheDocument()
   expect(onCreated).not.toHaveBeenCalled()
@@ -55,7 +80,9 @@ it("honors the retained deletion receipt and leaves custom creation/upload avail
 it("does not initialize in view-as and ignores an earlier reply when the account view changes", async () => {
   state.viewAs = true
   const onCreated = vi.fn()
-  const rendered = render(<DefaultTemplateSetup onCreated={onCreated} />)
+  const rendered = render(
+    <DefaultTemplateSetup doctorId="synthetic_doctor" onCreated={onCreated} />,
+  )
   expect(state.initialize).not.toHaveBeenCalled()
   let resolve!: (value: unknown) => void
   state.initialize.mockReturnValue(
@@ -64,10 +91,14 @@ it("does not initialize in view-as and ignores an earlier reply when the account
     }),
   )
   state.viewAs = false
-  rendered.rerender(<DefaultTemplateSetup onCreated={onCreated} />)
+  rendered.rerender(
+    <DefaultTemplateSetup doctorId="synthetic_doctor" onCreated={onCreated} />,
+  )
   expect(state.initialize).toHaveBeenCalledOnce()
   state.viewAs = true
-  rendered.rerender(<DefaultTemplateSetup onCreated={onCreated} />)
+  rendered.rerender(
+    <DefaultTemplateSetup doctorId="synthetic_doctor" onCreated={onCreated} />,
+  )
   await act(async () => {
     resolve({ data: { status: "available", created: true } })
   })

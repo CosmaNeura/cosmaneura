@@ -28,6 +28,15 @@ the internal API's centralized read-only view-as guard. The new UI controls hide
 during view-as. No migration, dependency, service, production action or live
 backfill is part of this PR.
 
+The two template mutations use per-request captured SDK session tokens and the
+existing guarded internal fetch. Identity/context is rechecked after token and
+request-binding awaits, at network dispatch, and before response binding/reload
+effects and UI callbacks. Their local status/confirmation lifetime resets for a
+changed SDK user/session, Doctor, selected schema or view-as context. A newly
+current eligible owner still initializes automatically. SDK/Doctor context stays
+ephemeral and is not added to the owner-free initializer body or legal records;
+the generated client's global authentication and other API calls are unchanged.
+
 ## Sequence and acceptance
 
 1. Validate on the disposable, explicitly owned synthetic PostgreSQL database:

@@ -1,21 +1,46 @@
 import { useEffect, useRef, useState } from "react"
 
-import { useViewAsActive } from "~/components/ViewAsRouteGuard"
 import { initializeNoteTemplates } from "~/configuration/client"
+import {
+  type TemplateOperationContext,
+  useTemplateOperationContext,
+} from "~/hooks/use-template-operation-context"
+import { templateOperation } from "~/lib/template-operation"
 
-export function DefaultTemplateSetup({ onCreated }: { onCreated: () => void }) {
-  const viewAsActive = useViewAsActive()
+export function DefaultTemplateSetup({
+  doctorId,
+  onCreated,
+}: {
+  doctorId: string
+  onCreated: () => void
+}) {
+  const context = useTemplateOperationContext(doctorId)
+  if (!context.available) return null
+  return (
+    <TemplateSetup key={context.key} context={context} onCreated={onCreated} />
+  )
+}
+
+function TemplateSetup({
+  context,
+  onCreated,
+}: {
+  context: TemplateOperationContext
+  onCreated: () => void
+}) {
   const notify = useRef(onCreated)
   notify.current = onCreated
   const [attempt, setAttempt] = useState(0)
   const [status, setStatus] = useState("pending")
   useEffect(() => {
-    if (viewAsActive) return
     let active = true
+    const isCurrent = () => active && context.isCurrent()
     setStatus("pending")
-    void initializeNoteTemplates({ body: {} }).then(
+    void templateOperation(context.principal, isCurrent, (options) =>
+      initializeNoteTemplates({ body: {}, ...options }),
+    ).then(
       (result) => {
-        if (!active) return
+        if (!isCurrent()) return
         if (!result.data) {
           setStatus("unknown")
           return
@@ -24,14 +49,13 @@ export function DefaultTemplateSetup({ onCreated }: { onCreated: () => void }) {
         if (result.data.status === "available") notify.current()
       },
       () => {
-        if (active) setStatus("unknown")
+        if (isCurrent()) setStatus("unknown")
       },
     )
     return () => {
       active = false
     }
-  }, [attempt, viewAsActive])
-  if (viewAsActive) return null
+  }, [attempt, context.key])
   if (status === "available") return null
   if (status === "pending")
     return <p role="status">Setting up your SOAP template…</p>

@@ -320,6 +320,7 @@ function NoteSchemaDisplay({
       {!noteSchemas.some((schema) => schema.note_type === "SOAP") && (
         <DefaultTemplateSetup
           key={doctorId}
+          doctorId={doctorId}
           onCreated={() => void revalidator.revalidate()}
         />
       )}
@@ -374,6 +375,7 @@ function NoteSchemaDisplay({
                 onSaved={() => void revalidator.revalidate()}
               />
               <DeleteNoteTemplate
+                doctorId={doctorId}
                 schemaId={schema.id}
                 name={schema.note_type}
                 onDeleted={() => void revalidator.revalidate()}

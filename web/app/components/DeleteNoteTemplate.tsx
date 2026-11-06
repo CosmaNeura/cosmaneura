@@ -1,23 +1,72 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
-import { useViewAsActive } from "~/components/ViewAsRouteGuard"
 import { deleteNoteTemplate } from "~/configuration/client"
+import {
+  type TemplateOperationContext,
+  useTemplateOperationContext,
+} from "~/hooks/use-template-operation-context"
+import { templateOperation } from "~/lib/template-operation"
 
 export function DeleteNoteTemplate({
+  doctorId,
   schemaId,
   name,
   onDeleted,
 }: {
+  doctorId: string
   schemaId: string
   name: string
   onDeleted: () => void
 }) {
-  const viewAsActive = useViewAsActive()
+  const context = useTemplateOperationContext(
+    doctorId,
+    JSON.stringify([schemaId, name]),
+  )
+  if (!context.available) return null
+  return (
+    <TemplateDeletion
+      key={context.key}
+      context={context}
+      schemaId={schemaId}
+      name={name}
+      onDeleted={onDeleted}
+    />
+  )
+}
+
+function TemplateDeletion({
+  context,
+  schemaId,
+  name,
+  onDeleted,
+}: {
+  context: TemplateOperationContext
+  schemaId: string
+  name: string
+  onDeleted: () => void
+}) {
   const [phase, setPhase] = useState("idle")
+  const mounted = useRef(false)
+  const pending = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const remove = async () => {
+    const isCurrent = () => mounted.current && context.isCurrent()
+    if (pending.current || !isCurrent()) return
+    pending.current = true
     setPhase("deleting")
     try {
-      const result = await deleteNoteTemplate({ path: { schema_id: schemaId } })
+      const result = await templateOperation(
+        context.principal,
+        isCurrent,
+        (options) =>
+          deleteNoteTemplate({ path: { schema_id: schemaId }, ...options }),
+      )
+      if (!isCurrent()) return
       if (result.response?.status !== 204) {
         setPhase("unknown")
         return
@@ -25,10 +74,11 @@ export function DeleteNoteTemplate({
       setPhase("done")
       onDeleted()
     } catch {
-      setPhase("unknown")
+      if (isCurrent()) setPhase("unknown")
+    } finally {
+      if (isCurrent()) pending.current = false
     }
   }
-  if (viewAsActive) return null
   if (phase === "done") return <p role="status">Template deleted.</p>
   if (phase === "idle")
     return (

@@ -8,6 +8,25 @@ vi.mock("~/configuration/client", () => ({ deleteNoteTemplate: state.remove }))
 vi.mock("~/components/ViewAsRouteGuard", () => ({
   useViewAsActive: () => state.viewAs,
 }))
+vi.mock("~/hooks/use-template-operation-context", () => ({
+  useTemplateOperationContext: (doctorId: string) => ({
+    key: doctorId + String(state.viewAs),
+    principal: {
+      isLoaded: true,
+      userId: "synthetic_user",
+      sessionId: "synthetic_session",
+    },
+    available: !state.viewAs,
+    isCurrent: () => !state.viewAs,
+  }),
+}))
+vi.mock("~/lib/template-operation", () => ({
+  templateOperation: (
+    _principal: unknown,
+    _isCurrent: unknown,
+    request: (options: object) => unknown,
+  ) => request({}),
+}))
 beforeEach(() => {
   vi.resetAllMocks()
   state.viewAs = false
@@ -16,6 +35,7 @@ beforeEach(() => {
 it("requires confirmation, offers keeping the template, and explains saved-note retention", () => {
   render(
     <DeleteNoteTemplate
+      doctorId="synthetic_doctor"
       schemaId="owned-synthetic"
       name="SOAP"
       onDeleted={vi.fn()}
@@ -35,6 +55,7 @@ it("retries only the same deletion after an unconfirmed response", async () => {
   const onDeleted = vi.fn()
   render(
     <DeleteNoteTemplate
+      doctorId="synthetic_doctor"
       schemaId="owned-synthetic"
       name="SOAP"
       onDeleted={onDeleted}
@@ -61,6 +82,7 @@ it("suppresses deletion controls during read-only view-as", () => {
   state.viewAs = true
   render(
     <DeleteNoteTemplate
+      doctorId="synthetic_doctor"
       schemaId="owned-synthetic"
       name="SOAP"
       onDeleted={vi.fn()}
