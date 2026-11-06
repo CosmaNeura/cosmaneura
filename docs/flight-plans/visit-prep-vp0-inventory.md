@@ -2,7 +2,8 @@
 
 **Status:** docs-only draft inventory for CTO/CoS agreement; **not** an authorization to implement, rebase, merge, deploy, or flip flags.  
 **Tier:** 0 (documentation only).  
-**Master anchor (observed this cloud run):** `9cf14420fcc70cffd162f51aff13772ddbba9a6f` on `origin/master`.  
+**Master anchor (current PR tip base):** `8b5b940309ba6b80b9d678bc5ea5bbfa72b3de5e` on `origin/master` (includes harness repair via `#979` / `#974`).  
+**Evidence sampling tip (historical):** chain/merge-tree observations below were taken against `9cf14420fcc70cffd162f51aff13772ddbba9a6f` before this branch was rebased onto current master.  
 **Inventory branch:** `grok/visit-prep-vp0-inventory` (John authorized docs-only draft publication 2026-11-06; he merges).  
 **Live users:** Tonight for existing live users: nothing changes.
 
