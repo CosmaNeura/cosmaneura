@@ -6,7 +6,9 @@ export default function VisitPrepsRoute() {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset><VisitPrepWorkspace /></SidebarInset>
+      <SidebarInset>
+        <VisitPrepWorkspace />
+      </SidebarInset>
     </SidebarProvider>
   )
 }
