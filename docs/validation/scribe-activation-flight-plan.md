@@ -1,6 +1,18 @@
 # Automatic Scribe activation — ADR 0029
 
 Risk: **Tier 2** (provider identity, entitlement and cross-repository contract).
+
+## Browser account-switch access checks
+
+The browser query cache is bound to the current normalized Clerk user and
+session. A changed or unavailable principal cancels and clears cached reads;
+authenticated route loads fetch fresh server access and reject replies or
+redirects that cross an identity change. Normal onboarding, view-as, membership,
+entitlement and cancellation rules remain authoritative. No API, native97,
+schema or release control changes are required. Qualification covers fresh
+signup after a browser account switch and late prior-account responses.
+Recovery is a separately reviewed frontend change; restoring the former cache
+behavior reintroduces stale access metadata and is not an authorization bypass.
 Design ratified by architecture PR 23, merge `75055344a96f2445d690512486a97817803337de`.
 Implementation does not authorize promotion, migration, billing changes or rollout.
 

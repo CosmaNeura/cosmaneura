@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react"
 
 import { forgetPendingInvitationOnSignOut } from "~/lib/pending-invitation"
 
+import { bindQueryPrincipal } from "./query-principal"
 import { ClerkProvider, useAuth, useClerk } from "@clerk/clerk-react"
 import { loadClerkJsScript } from "@clerk/shared/loadClerkJsScript"
 import { invariant } from "@epic-web/invariant"
@@ -71,6 +72,7 @@ function makeTestClerkClient(userId: string): ClerkClient {
     load: async () => {},
     user: { id: userId },
     session: {
+      id: `test-session:${userId}`,
       getToken: async (options) =>
         options?.template ? `test-provider:${userId}` : `test:${userId}`,
     },
@@ -165,6 +167,15 @@ function ForgetPendingInvitationOnSignOut() {
   return null
 }
 
+function BindBrowserQueryCache() {
+  const { identity, isLoaded, userId, sessionId } = useBrowserPrincipal()
+  useEffect(() => {
+    bindQueryPrincipal({ isLoaded, userId, sessionId })
+    return identity.subscribe(bindQueryPrincipal)
+  }, [identity, isLoaded, userId, sessionId])
+  return null
+}
+
 export default function withClerkProvider(Component: React.ComponentType) {
   return (props: React.ComponentProps<typeof Component>) => (
     <ClerkProvider
@@ -175,6 +186,7 @@ export default function withClerkProvider(Component: React.ComponentType) {
       signUpFallbackRedirectUrl="/notes"
     >
       <ForgetPendingInvitationOnSignOut />
+      <BindBrowserQueryCache />
       <Component {...props} />
     </ClerkProvider>
   )
@@ -206,6 +218,15 @@ function browserPrincipal(
     userId: resources?.user?.id ?? null,
     sessionId: resources?.session?.id ?? null,
   }
+}
+
+/** Read the mutable SDK resource, including a signed-out state, at load time. */
+export async function readCurrentBrowserPrincipal(): Promise<BrowserPrincipal> {
+  const testAuth = readTestAuth()
+  if (testAuth) return browserPrincipal(makeTestClerkClient(testAuth.userId))
+  if (!loadedClerkClientPromise)
+    loadedClerkClientPromise = resolveLoadedClient()
+  return browserPrincipal(await loadedClerkClientPromise)
 }
 
 /** Normalize React, listener and actual SDK identity at the vendor boundary. */
