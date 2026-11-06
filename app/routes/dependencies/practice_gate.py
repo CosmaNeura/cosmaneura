@@ -35,6 +35,7 @@ EXEMPT_ROUTE_NAMES = {
     "accept_practice_baa",
     "lookup_practice",
     "join_practice",
+    "attest_current_practice_member",
     # an invitee has no membership until acceptance; both enforce their own
     # identity, invitation and BAA checks
     "inspect_practice_invitation",
