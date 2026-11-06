@@ -199,11 +199,7 @@ def scan_repository(root: Path | None = None) -> list[str]:
 def _error(message: str) -> None:
     # Only emit workflow commands inside Actions. Unit tests call main() and
     # must not create ::error:: annotations that fail an unrelated CI step.
-    prefix = (
-        "::error::"
-        if os.environ.get("GITHUB_ACTIONS") == "true"
-        else "error: "
-    )
+    prefix = "::error::" if os.environ.get("GITHUB_ACTIONS") == "true" else "error: "
     print(f"{prefix}{message}", file=sys.stderr)
 
 
