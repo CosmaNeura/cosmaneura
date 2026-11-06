@@ -51,7 +51,6 @@ from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
-from .routes.visit_prep_core import visit_prep_public_api
 from .routes.scribe_activation import install as install_scribe_activation
 from .routes.scribe_cancellation import install as install_scribe_cancellation
 from .routes.scribe_capture_deadline import install_capture_boundaries
@@ -61,6 +60,7 @@ from .routes.scribe_native_encounters import install as install_scribe_native_en
 from .routes.scribe_provider_context import install as install_scribe_provider_context
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .routes.visit_prep_core import visit_prep_public_api
 from .services.scribe_http_pool import install_scribe_connections
 
 fast_api_args = {}

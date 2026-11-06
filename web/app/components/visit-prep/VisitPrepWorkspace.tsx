@@ -9,7 +9,6 @@ import {
 
 type QuestionSet = {
   id: string
-  question_set_id: string
   name: string
   is_default: boolean
   questions: Array<{
@@ -31,7 +30,6 @@ function defaultSchedule() {
 export function VisitPrepWorkspace() {
   const [sets, setSets] = useState<QuestionSet[]>([])
   const [preps, setPreps] = useState<PrepPayload[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
   const [pkg, setPkg] = useState<PackagePayload | null>(null)
   const [link, setLink] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -84,57 +82,39 @@ export function VisitPrepWorkspace() {
     setLink(created.access_url)
     await refresh()
   }
-  async function copyLink(prepId: string) {
-    const rotated = await providerJson<PrepPayload>(
-      `/visit-prep/preps/${prepId}/copy-link`,
-      { method: "POST" },
-    )
-    setLink(rotated.access_url)
-    if (rotated.access_url)
-      await navigator.clipboard.writeText(rotated.access_url)
-  }
-  async function openPackage(prepId: string) {
-    setSelected(prepId)
-    setPkg(
-      await providerJson<PackagePayload>(`/visit-prep/preps/${prepId}/package`),
-    )
-  }
 
   const current = sets.find((s) => s.is_default) ?? sets[0]
   return (
     <div
-      className="mx-auto max-w-3xl space-y-8 p-6"
+      className="mx-auto max-w-3xl space-y-6 p-6"
       data-testid="visit-prep-workspace"
     >
-      <header className="space-y-2">
+      <header className="space-y-1">
         <h1 className="text-2xl font-semibold">Visit Prep</h1>
         <p className="text-muted-foreground text-sm">
           Synthetic link-only journey. Email/SMS send stays off.
         </p>
         {error && <p className="text-sm text-red-700">{error}</p>}
       </header>
-      <section className="space-y-3">
+      <section className="space-y-2">
         <h2 className="text-lg font-medium">Question set</h2>
         <Button
           onClick={() => ensureDefault().catch((e) => setError(String(e)))}
         >
           Ensure founder five
         </Button>
-        <ol className="list-decimal space-y-2 pl-5 text-sm">
+        <ol className="list-decimal space-y-1 pl-5 text-sm">
           {(current?.questions ?? []).map((q) => (
             <li key={q.key}>
-              <span className="font-medium">{q.prompt}</span>
-              {q.show_if && (
-                <span className="text-muted-foreground">
-                  {" "}
-                  (if {q.show_if.question_key} in {q.show_if.values.join(", ")})
-                </span>
-              )}
+              {q.prompt}
+              {q.show_if
+                ? ` (if ${q.show_if.question_key} in ${q.show_if.values.join(", ")})`
+                : ""}
             </li>
           ))}
         </ol>
       </section>
-      <section className="space-y-3">
+      <section className="space-y-2">
         <h2 className="text-lg font-medium">Create copyable HTTPS link</h2>
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="text-sm">
@@ -166,26 +146,38 @@ export function VisitPrepWorkspace() {
           </p>
         )}
       </section>
-      <section className="space-y-3">
+      <section className="space-y-2">
         <h2 className="text-lg font-medium">Preparations</h2>
         <ul className="space-y-2">
           {preps.map((prep) => (
             <li
               key={prep.id}
-              className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm"
+              className="flex flex-wrap items-center gap-2 rounded border p-2 text-sm"
             >
               <span className="font-medium">{prep.lifecycle_state}</span>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => copyLink(prep.id)}
+                onClick={async () => {
+                  const rotated = await providerJson<PrepPayload>(
+                    `/visit-prep/preps/${prep.id}/copy-link`,
+                    { method: "POST" },
+                  )
+                  setLink(rotated.access_url)
+                  if (rotated.access_url)
+                    await navigator.clipboard.writeText(rotated.access_url)
+                }}
               >
                 Copy HTTPS link
               </Button>
               <Button
                 size="sm"
                 onClick={() =>
-                  openPackage(prep.id).catch((e) => setError(String(e)))
+                  providerJson<PackagePayload>(
+                    `/visit-prep/preps/${prep.id}/package`,
+                  )
+                    .then(setPkg)
+                    .catch((e) => setError(String(e)))
                 }
               >
                 Review package
@@ -198,44 +190,33 @@ export function VisitPrepWorkspace() {
           ))}
         </ul>
       </section>
-      {pkg && selected && (
-        <section className="space-y-4" data-testid="vp-package">
+      {pkg && (
+        <section className="space-y-3" data-testid="vp-package">
           <h2 className="text-lg font-medium">Package review</h2>
           <p className="text-sm">
             Raw answers always available:{" "}
-            {String(pkg.raw_answers_always_available)}
+            {String(pkg.raw_answers_always_available)}. Synthesis:{" "}
+            {pkg.synthesis.status}
+            {pkg.synthesis.brief.headline
+              ? ` — ${pkg.synthesis.brief.headline.text}`
+              : ""}
           </p>
-          <div className="space-y-3">
-            <h3 className="font-medium">Verbatim answers</h3>
-            {pkg.topics.map((t) => (
-              <article
-                key={t.question_key}
-                className="rounded border p-3 text-sm"
-              >
-                <h4 className="font-medium">{t.prompt}</h4>
-                <p className="mt-2 whitespace-pre-wrap">
-                  {t.response_kind === "skipped"
-                    ? "Skipped — not supplied"
-                    : (t.answer ?? "Not answered")}
-                </p>
-                <p className="text-muted-foreground mt-2 text-xs">
-                  Recorded: {t.recorded_at ?? "n/a"}
-                </p>
-              </article>
-            ))}
-          </div>
-          <div className="space-y-2 rounded border p-3 text-sm">
-            <h3 className="font-medium">Synthesis (alongside raw)</h3>
-            <p>Status: {pkg.synthesis.status}</p>
-            {pkg.synthesis.brief.headline && (
-              <p>{pkg.synthesis.brief.headline.text}</p>
-            )}
-            <ul className="list-disc pl-5">
-              {pkg.synthesis.brief.summary.map((item, i) => (
-                <li key={i}>{item.text}</li>
-              ))}
-            </ul>
-          </div>
+          {pkg.topics.map((t) => (
+            <article
+              key={t.question_key}
+              className="rounded border p-3 text-sm"
+            >
+              <h4 className="font-medium">{t.prompt}</h4>
+              <p className="mt-1 whitespace-pre-wrap">
+                {t.response_kind === "skipped"
+                  ? "Skipped — not supplied"
+                  : (t.answer ?? "Not answered")}
+              </p>
+              <p className="text-muted-foreground mt-1 text-xs">
+                Recorded: {t.recorded_at ?? "n/a"}
+              </p>
+            </article>
+          ))}
         </section>
       )}
     </div>

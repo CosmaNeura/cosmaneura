@@ -31,18 +31,19 @@ if (typeof window !== "undefined") {
   window.addEventListener("pagehide", forgetVisitPrepCredential)
 }
 
-const choice = z.object({
-  value: z.string(),
-  label: z.string(),
-  hint: z.string().nullable().optional(),
-})
 const question = z.object({
   key: z.string(),
   position: z.number(),
   prompt: z.string(),
   helper_text: z.string().nullable(),
   kind: z.enum(["story", "list", "choice"]),
-  choices: z.array(choice),
+  choices: z.array(
+    z.object({
+      value: z.string(),
+      label: z.string(),
+      hint: z.string().nullable().optional(),
+    }),
+  ),
 })
 export const interviewState = z.object({
   status: z.enum([
