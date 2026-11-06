@@ -1,23 +1,17 @@
 """add visit prep journey aggregate and responses
-
 Revision ID: 69bad2e072e2
 Revises: e78845cecca6
 Create Date: 2026-11-06
 """
 from __future__ import annotations
-
 import sqlalchemy as sa
 from alembic import op
-
 from activemodel.types.typeid import TypeIDType
-
 revision = "69bad2e072e2"
 down_revision = "e78845cecca6"
 branch_labels = None
 depends_on = None
 _UUID_RE = "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
-
-
 def upgrade() -> None:
     op.create_table(
         "visit_prep",
@@ -66,33 +60,13 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("credential_generation > 0", name="vp_credential_generation_positive"),
         sa.CheckConstraint("schedule_generation > 0", name="vp_schedule_generation_positive"),
-        sa.ForeignKeyConstraint(
-            ["owner_practice_member_id"],
-            ["practice_member.id"],
-            name="fk_vp_owner_member",
-            ondelete="RESTRICT",
-        ),
-        sa.ForeignKeyConstraint(
-            ["practice_id"],
-            ["practice.id"],
-            name="fk_vp_practice",
-            ondelete="RESTRICT",
-        ),
-        sa.ForeignKeyConstraint(
-            ["owner_doctor_id"],
-            ["doctor.id"],
-            name="fk_vp_owner_doctor",
-            ondelete="RESTRICT",
-        ),
+        sa.ForeignKeyConstraint(["owner_practice_member_id"], ["practice_member.id"], name="fk_vp_owner_member", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["practice_id"], ["practice.id"], name="fk_vp_practice", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["owner_doctor_id"], ["doctor.id"], name="fk_vp_owner_doctor", ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["question_set_version_id", "owner_practice_member_id"],
-            [
-                "visit_prep_question_set_version.id",
-                "visit_prep_question_set_version.owner_practice_member_id",
-            ],
-            name="fk_vp_question_version_owner",
-            ondelete="RESTRICT",
-        ),
+            ["visit_prep_question_set_version.id", "visit_prep_question_set_version.owner_practice_member_id"],
+            name="fk_vp_question_version_owner", ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("owner_practice_member_id", "creation_idempotency_key", name="uq_vp_owner_idempotency"),
         sa.UniqueConstraint("token_hash", name="uq_vp_token_hash"),
@@ -131,8 +105,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("visit_prep_id", "submission_sequence", name="uq_vp_response_sequence"),
         sa.UniqueConstraint("visit_prep_id", "idempotency_key", name="uq_vp_response_idempotency"),
     )
-
-
 def downgrade() -> None:
     op.drop_table("visit_prep_question_response")
     op.drop_index("visit_prep_owner_idx", table_name="visit_prep")

@@ -36,7 +36,7 @@ export function VisitPrepWorkspace() {
   const [link, setLink] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [firstName, setFirstName] = useState("Synthetic")
-  const [email, setEmail] = useState("patient@example.test")
+  const [email, setEmail] = useState("patient@example.com")
 
   async function refresh() {
     const [q, p] = await Promise.all([
@@ -113,10 +113,8 @@ export function VisitPrepWorkspace() {
         </p>
         {error && <p className="text-sm text-red-700">{error}</p>}
       </header>
-      <section className="space-y-3" aria-labelledby="vp-questions">
-        <h2 id="vp-questions" className="text-lg font-medium">
-          Question set
-        </h2>
+      <section className="space-y-3">
+        <h2 className="text-lg font-medium">Question set</h2>
         <Button
           onClick={() => ensureDefault().catch((e) => setError(String(e)))}
         >
@@ -136,10 +134,8 @@ export function VisitPrepWorkspace() {
           ))}
         </ol>
       </section>
-      <section className="space-y-3" aria-labelledby="vp-create">
-        <h2 id="vp-create" className="text-lg font-medium">
-          Create copyable HTTPS link
-        </h2>
+      <section className="space-y-3">
+        <h2 className="text-lg font-medium">Create copyable HTTPS link</h2>
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="text-sm">
             Synthetic first name
@@ -170,10 +166,8 @@ export function VisitPrepWorkspace() {
           </p>
         )}
       </section>
-      <section className="space-y-3" aria-labelledby="vp-list">
-        <h2 id="vp-list" className="text-lg font-medium">
-          Preparations
-        </h2>
+      <section className="space-y-3">
+        <h2 className="text-lg font-medium">Preparations</h2>
         <ul className="space-y-2">
           {preps.map((prep) => (
             <li
@@ -205,14 +199,8 @@ export function VisitPrepWorkspace() {
         </ul>
       </section>
       {pkg && selected && (
-        <section
-          className="space-y-4"
-          aria-labelledby="vp-package"
-          data-testid="vp-package"
-        >
-          <h2 id="vp-package" className="text-lg font-medium">
-            Package review
-          </h2>
+        <section className="space-y-4" data-testid="vp-package">
+          <h2 className="text-lg font-medium">Package review</h2>
           <p className="text-sm">
             Raw answers always available:{" "}
             {String(pkg.raw_answers_always_available)}

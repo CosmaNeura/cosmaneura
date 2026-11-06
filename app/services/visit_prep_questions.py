@@ -1,6 +1,4 @@
-"""Founder-five defaults and per-physician question set versioning."""
 from __future__ import annotations
-
 import hashlib
 import json
 import re
@@ -9,77 +7,62 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Sequence, cast
 from uuid import UUID
-
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
 from sqlmodel import select
-
 from app.models.visit_prep_question_set import (
     VisitPrepQuestion, VisitPrepQuestionChoice, VisitPrepQuestionSet, VisitPrepQuestionSetVersion,
 )
-
 QuestionKind = Literal["story", "list", "choice"]
 _SAFE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-
 class VisitPrepQuestionError(Exception):
     pass
-
 class VisitPrepQuestionNotFound(VisitPrepQuestionError):
     pass
-
 class VisitPrepQuestionValidation(VisitPrepQuestionError, ValueError):
     pass
-
 class VisitPrepQuestionConflict(VisitPrepQuestionError):
     pass
-
 @dataclass(frozen=True)
 class ChoiceIn:
     value: str; label: str; hint: str | None = None
-
 @dataclass(frozen=True)
 class ConditionIn:
     question_key: str; values: tuple[str, ...]
-
 @dataclass(frozen=True)
 class QuestionIn:
     key: str; prompt: str; kind: QuestionKind
     helper_text: str | None = None; choices: tuple[ChoiceIn, ...] = (); show_if: ConditionIn | None = None
-
 @dataclass(frozen=True)
 class VersionIn:
     name: str; questions: tuple[QuestionIn, ...] = ()
-
 @dataclass(frozen=True)
 class QuestionOut:
     id: TypeIDType; key: str; position: int; prompt: str; helper_text: str | None
     kind: QuestionKind; choices: tuple[ChoiceIn, ...]; show_if: ConditionIn | None
-
 @dataclass(frozen=True)
 class VersionOut:
     id: TypeIDType; question_set_id: TypeIDType; version_number: int; name: str
     published_at: datetime | None; is_default: bool; questions: tuple[QuestionOut, ...]
-
 DEFAULT_SEED, DEFAULT_NAME = "default.v1", "Visit Prep default questions"
 CANONICAL_DEFAULT = VersionIn(name=DEFAULT_NAME, questions=(
     QuestionIn("reason", "What is the main reason for this visit?", "story",
-               "In your own words. The thing you most want understood before you sit down."),
+               "In your own words — what you most want understood."),
     QuestionIn("medications", "What medications are you prescribed right now?", "list",
-               "Include the dose if you know it. Over-the-counter and supplements count too."),
+               "Include dose if known. OTC and supplements count."),
     QuestionIn("adherence", "Are you taking them as prescribed?", "choice",
-               "There is no wrong answer. Honesty here saves the visit.", (
+               "No wrong answer. Honesty saves the visit.", (
                    ChoiceIn("yes", "Yes, as prescribed", "Most days, as written"),
                    ChoiceIn("some", "Some of them", "A few get skipped"),
                    ChoiceIn("no", "Not really", "Something got in the way"),
                    ChoiceIn("none", "I don't take any"),
                )),
     QuestionIn("adherence_barrier", "If not — what got in the way?", "story",
-               "Cost, side effects, a chaotic morning, forgetting, not being sure it helps.",
+               "Cost, side effects, chaos, forgetting, unsure it helps.",
                show_if=ConditionIn("adherence", ("some", "no"))),
     QuestionIn("story", "Tell me your health story — whatever feels relevant.", "story",
-               "What has been happening in your body, and in your life, that belongs in this visit?"),
+               "What in your body and life belongs in this visit?"),
 ))
-
 def _text(value: object, *, maximum: int, message: str) -> str:
     if not isinstance(value, str):
         raise VisitPrepQuestionValidation(message)
@@ -88,12 +71,10 @@ def _text(value: object, *, maximum: int, message: str) -> str:
             or any(unicodedata.category(c).startswith("C") and c not in "\n\t" for c in normalized)):
         raise VisitPrepQuestionValidation(message)
     return normalized
-
 def _key(value: object) -> str:
     if not isinstance(value, str) or _SAFE_KEY.fullmatch(value) is None:
         raise VisitPrepQuestionValidation("question key is invalid")
     return value
-
 def normalize_version(definition: VersionIn, *, for_publish: bool) -> VersionIn:
     if not isinstance(definition, VersionIn):
         raise VisitPrepQuestionValidation("question-set payload is invalid")
@@ -138,7 +119,6 @@ def normalize_version(definition: VersionIn, *, for_publish: bool) -> VersionIn:
     if for_publish and (out[-1].key != "story" or out[-1].kind != "story" or out[-1].show_if is not None):
         raise VisitPrepQuestionValidation("final story topic is required")
     return VersionIn(name=name, questions=tuple(out))
-
 def creation_payload_sha256(definition: VersionIn) -> str:
     n = normalize_version(definition, for_publish=True)
     payload = {"name": n.name, "questions": [{
@@ -148,7 +128,6 @@ def creation_payload_sha256(definition: VersionIn) -> str:
             "question_key": q.show_if.question_key, "values": list(q.show_if.values)},
     } for q in n.questions]}
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
-
 def _serialize_version(version: VisitPrepQuestionSetVersion) -> VersionOut:
     questions = sorted(
         VisitPrepQuestion.where(VisitPrepQuestion.question_set_version_id == version.id).all(),
@@ -172,7 +151,6 @@ def _serialize_version(version: VisitPrepQuestionSetVersion) -> VersionOut:
             question.helper_text, cast(QuestionKind, question.kind), tuple(choices), show_if))
     return VersionOut(version.id, version.question_set_id, version.version_number, version.name,
                       version.published_at, version.is_default, tuple(out))
-
 def _write_questions(session, *, version: VisitPrepQuestionSetVersion, definition: VersionIn) -> None:
     key_to_id: dict[str, TypeIDType] = {}; pending: list[tuple[VisitPrepQuestion, QuestionIn]] = []
     for index, question in enumerate(definition.questions, start=1):
@@ -189,9 +167,7 @@ def _write_questions(session, *, version: VisitPrepQuestionSetVersion, definitio
         row.show_if_question_id = key_to_id[question.show_if.question_key]
         row.show_if_values = list(question.show_if.values)
         session.add(row)
-
 def ensure_default_question_set(*, owner_practice_member_id: TypeIDType) -> VersionOut:
-    """Idempotently seed and publish the founder five for one owner."""
     definition = normalize_version(CANONICAL_DEFAULT, for_publish=True)
     fingerprint = creation_payload_sha256(definition)
     with get_session() as session:
@@ -212,7 +188,6 @@ def ensure_default_question_set(*, owner_practice_member_id: TypeIDType) -> Vers
             owner_practice_member_id=owner_practice_member_id, seed_key=DEFAULT_SEED,
             creation_payload_sha256=fingerprint)
         session.add(question_set); session.flush()
-        # Insert questions while unpublished (default check requires published_at).
         version = VisitPrepQuestionSetVersion(
             question_set_id=question_set.id, owner_practice_member_id=owner_practice_member_id,
             version_number=1, name=definition.name, published_at=None, is_default=False)
@@ -223,12 +198,10 @@ def ensure_default_question_set(*, owner_practice_member_id: TypeIDType) -> Vers
         session.add(version); session.flush()
         session.commit(); session.refresh(version)
         return _serialize_version(version)
-
 def publish_question_set_version(
     *, owner_practice_member_id: TypeIDType, question_set_id: TypeIDType,
     definition: VersionIn, make_default: bool = True,
 ) -> VersionOut:
-    """Publish a new version (edit/reorder/add/remove within five topics)."""
     normalized = normalize_version(definition, for_publish=True)
     with get_session() as session:
         question_set = session.exec(select(VisitPrepQuestionSet).where(
@@ -257,7 +230,6 @@ def publish_question_set_version(
         session.add(version); session.flush()
         session.commit(); session.refresh(version)
         return _serialize_version(version)
-
 def list_question_sets(*, owner_practice_member_id: TypeIDType) -> list[VersionOut]:
     ensure_default_question_set(owner_practice_member_id=owner_practice_member_id)
     versions = VisitPrepQuestionSetVersion.where(
@@ -266,18 +238,15 @@ def list_question_sets(*, owner_practice_member_id: TypeIDType) -> list[VersionO
     published = [v for v in versions if v.published_at is not None]
     published.sort(key=lambda v: (not v.is_default, -v.version_number))
     return [_serialize_version(v) for v in published]
-
 def get_published_version(*, owner_practice_member_id: TypeIDType, question_set_version_id: TypeIDType) -> VersionOut:
     version = VisitPrepQuestionSetVersion.get(
         id=question_set_version_id, owner_practice_member_id=owner_practice_member_id)
     if version is None or version.published_at is None:
         raise VisitPrepQuestionNotFound("question version not found")
     return _serialize_version(version)
-
 def version_from_questions(questions: Sequence[QuestionOut]) -> VersionIn:
     return VersionIn(name=DEFAULT_NAME, questions=tuple(
         QuestionIn(q.key, q.prompt, q.kind, q.helper_text, q.choices, q.show_if) for q in questions))
-
 def canonical_idempotency_key(value: object) -> str:
     if not isinstance(value, str):
         raise VisitPrepQuestionValidation("idempotency key is invalid")

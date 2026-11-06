@@ -78,17 +78,14 @@ export function PatientInterview() {
       {error && <p className="text-sm text-red-700">{error}</p>}
       {!state && !error && <p className="text-sm">Loading…</p>}
       {state?.status === "confirmation_required" && (
-        <section className="space-y-3" aria-labelledby="vp-confirm">
-          <h2 id="vp-confirm" className="text-lg font-medium">
-            Before we begin
-          </h2>
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Before we begin</h2>
           <label className="block text-sm">
             First name
             <input
               className="mt-1 w-full rounded border px-3 py-2"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              autoComplete="given-name"
             />
           </label>
           <label className="block text-sm">
@@ -115,13 +112,11 @@ export function PatientInterview() {
         </section>
       )}
       {state?.status === "in_progress" && q && (
-        <section className="space-y-3" aria-labelledby="vp-question">
+        <section className="space-y-3">
           <p className="text-muted-foreground text-sm">
             {state.submitted_questions + 1} of {state.maximum_questions}
           </p>
-          <h2 id="vp-question" className="text-lg font-medium break-words">
-            {q.prompt}
-          </h2>
+          <h2 className="text-lg font-medium break-words">{q.prompt}</h2>
           {q.helper_text && (
             <p className="text-muted-foreground text-sm">{q.helper_text}</p>
           )}

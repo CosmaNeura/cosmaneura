@@ -1,25 +1,17 @@
 """Visit Prep send flags stay off/false and unreachable in every environment."""
-
 from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
-
 import pytest
 from typeid import TypeID
-
 from app.configuration import visit_prep as visit_prep_config
 from app.configuration.visit_prep import VisitPrepSettings, load_visit_prep_settings
 from app.services.visit_prep_access import resolve_visit_prep_access
 from app.services.visit_prep_journey import RecipientInput, VisitPrepUnavailable, create_visit_prep
 from tests.services.visit_prep_access_test import _doctor, _practice
-
-
 def test_defaults_keep_send_flags_false_in_every_environment():
     s = load_visit_prep_settings({})
     assert (s.email_send_enabled, s.sms_send_enabled, s.public_api_enabled, s.enabled) == (False, False, False, False)
     assert s.require_synthetic_recipients is True
-
-
 @pytest.mark.parametrize("values", [
     {},
     {"FF_VISIT_PREP_202608": "true"},
@@ -31,8 +23,6 @@ def test_loaded_settings_never_enable_send_unless_explicit(values):
     s = load_visit_prep_settings(values)
     if s.configuration_valid:
         assert s.email_send_enabled is False and s.sms_send_enabled is False
-
-
 def test_access_decision_keeps_send_capabilities_false_when_eligible():
     doctor = _doctor("send-flags"); _practice(doctor)
     d = resolve_visit_prep_access(
@@ -43,8 +33,6 @@ def test_access_decision_keeps_send_capabilities_false_when_eligible():
         ),
     )
     assert d.eligible is True and d.can_send_email is False and d.can_send_sms is False
-
-
 def test_create_refuses_when_send_flags_are_true(monkeypatch):
     doctor = _doctor("send-block")
     practice, member = _practice(doctor)

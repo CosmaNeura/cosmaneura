@@ -1,4 +1,3 @@
-"""Link-only Visit Prep create, interview, package, and cited synthesis."""
 from __future__ import annotations
 import base64
 import hashlib
@@ -40,14 +39,12 @@ class VisitPrepNotFound(VisitPrepError): pass
 class VisitPrepValidation(VisitPrepError, ValueError): pass
 class VisitPrepConflict(VisitPrepError): pass
 class VisitPrepUnavailable(VisitPrepError): pass
-
 @dataclass(frozen=True)
 class RecipientInput:
     first_name: str = field(repr=False)
     role: RecipientRole = "patient"
     email: str | None = field(default=None, repr=False)
     phone: str | None = field(default=None, repr=False)
-
 @dataclass(frozen=True)
 class PrepOut:
     id: TypeIDType; question_set_version_id: TypeIDType; lifecycle_state: str
@@ -56,24 +53,20 @@ class PrepOut:
     credential_active: bool
     access_url: str | None = field(default=None, repr=False)
     access_token: str | None = field(default=None, repr=False)
-
 @dataclass(frozen=True)
 class InterviewQuestion:
     key: str; position: int; prompt: str; helper_text: str | None; kind: str
     choices: tuple[dict[str, str | None], ...]
-
 @dataclass(frozen=True)
 class InterviewState:
     status: InterviewStatus; physician_display_name: str | None; practice_display_name: str | None
     scheduled_at: datetime | None; timezone_name: str | None; submitted_questions: int
     maximum_questions: int; current_question: InterviewQuestion | None
-
 @dataclass(frozen=True)
 class TopicSource:
     question_key: str; prompt: str; kind: str; choices: tuple[dict[str, str | None], ...]
     response_kind: ResponseKind | None; answer: str | None; recorded_at: datetime | None
     response_id: TypeIDType | None
-
 @dataclass(frozen=True)
 class PackageOut:
     package_id: TypeIDType; contract: str; preparation: PrepOut; actor_role: RecipientRole | None
@@ -101,7 +94,6 @@ def _utc(value: datetime | None = None) -> datetime:
     if current.tzinfo is None or current.utcoffset() is None:
         raise VisitPrepValidation("timestamp is invalid")
     return current.astimezone(UTC)
-
 def is_synthetic_recipient(email: str | None, phone: str | None) -> bool:
     email_ok = email is not None and (
         email.endswith(".test") or email.endswith(".example")
@@ -130,13 +122,10 @@ def _normalize_recipient(recipient: RecipientInput, *, settings: VisitPrepSettin
     return first_name, recipient.role, email, phone
 def _new_access_token() -> str:
     return f"{_TOKEN_PREFIX}{base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('ascii').rstrip('=')}"
-
 def access_token_hash(token: str) -> str:
     return hashlib.sha256(_TOKEN_DOMAIN + token.encode("ascii")).hexdigest()
-
 def is_canonical_token(token: str) -> bool:
     return bool(re.fullmatch(r"vp1_[A-Za-z0-9_-]{43}", token))
-
 def access_url_for_token(token: str) -> str:
     return f"https://{INTAKE_CHAT_DOMAIN}/visit-prep#access_token={quote(token, safe='')}"
 def _schedule(scheduled_at: datetime, timezone_name: object, *, now: datetime) -> tuple[datetime, str]:
@@ -166,10 +155,8 @@ def _prep_out(prep: VisitPrep, *, access_token: str | None = None, at: datetime 
         None if access_token is None else access_url_for_token(access_token), access_token)
 def _json_compact(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
 def _resolved_settings(settings: VisitPrepSettings | None) -> VisitPrepSettings:
     return VISIT_PREP_SETTINGS if settings is None else settings
-
 def create_visit_prep(
     *, owner_practice_member_id: TypeIDType, owner_doctor_id: TypeIDType, practice_id: TypeIDType,
     idempotency_key: str, recipient: RecipientInput, physician_display_name: str,
@@ -220,16 +207,13 @@ def create_visit_prep(
             token_hash=access_token_hash(token), credential_expires_at=scheduled_utc + _CREDENTIAL_AFTER)
         session.add(prep); session.commit(); session.refresh(prep)
         return _prep_out(prep, access_token=token, at=effective)
-
 def list_visit_preps(*, owner_practice_member_id: TypeIDType) -> list[PrepOut]:
     rows = VisitPrep.where(VisitPrep.owner_practice_member_id == owner_practice_member_id).all()
     rows.sort(key=lambda row: row.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
     return [_prep_out(row) for row in rows]
-
 def copy_visit_prep_link(
     *, owner_practice_member_id: TypeIDType, visit_prep_id: TypeIDType, now: datetime | None = None,
 ) -> PrepOut:
-    """Rotate credential and return a fresh one-time HTTPS link."""
     effective = _utc(now)
     with get_session() as session:
         prep = session.exec(select(VisitPrep).where(
@@ -287,7 +271,6 @@ def _choice_dict(choice: object) -> dict:
     if isinstance(choice, dict):
         return {"value": choice["value"], "label": choice["label"], "hint": choice.get("hint")}
     return {"value": choice.value, "label": choice.label, "hint": choice.hint}
-
 def _interview_question(question: VisitPrepQuestion) -> InterviewQuestion:
     return InterviewQuestion(
         question.question_key, question.position, question.prompt_text, question.helper_text, question.kind,
@@ -311,10 +294,8 @@ def _interview_state(prep: VisitPrep) -> InterviewState:
     if pending is None:
         return _state("ready_to_complete", prep, submitted)
     return _state("in_progress", prep, submitted, _interview_question(pending))
-
 def get_interview(token: str, *, settings: VisitPrepSettings | None = None) -> InterviewState:
     return _interview_state(_load_by_token(token, settings=_resolved_settings(settings)))
-
 def confirm_interview(
     token: str, *, first_name: str, role: RecipientRole,
     settings: VisitPrepSettings | None = None, now: datetime | None = None,
@@ -354,7 +335,6 @@ def _response_hmac(prep_id, question_key: str, response_kind: str, answer: str |
     return pseudonymous_digest(_json_compact({
         "answer": answer, "question_key": question_key, "response_kind": response_kind,
         "visit_prep_id": str(prep_id), "version": 1}), context=_RESPONSE_HMAC)
-
 def submit_response(
     token: str, *, question_key: str, response_kind: ResponseKind, answer: str | None,
     idempotency_key: str, settings: VisitPrepSettings | None = None, now: datetime | None = None,
@@ -413,7 +393,6 @@ def submit_response(
             locked.lifecycle_state = "in_progress"; locked.started_at = effective
         session.add(row); session.add(locked); session.commit(); session.refresh(locked)
         return _interview_state(locked)
-
 def complete_interview(
     token: str, *, settings: VisitPrepSettings | None = None, now: datetime | None = None,
 ) -> InterviewState:
@@ -431,36 +410,29 @@ def complete_interview(
         session.add(locked); session.commit(); session.refresh(locked)
         return _interview_state(locked)
 def _source_version(topics: list[TopicSource]) -> str:
-    payload = [{
-        "answer": t.answer, "key": t.question_key, "kind": t.response_kind,
-        "recorded_at": None if t.recorded_at is None else t.recorded_at.isoformat(),
-        "response_id": None if t.response_id is None else str(t.response_id),
-    } for t in topics]
+    payload = [{"answer": t.answer, "key": t.question_key, "kind": t.response_kind,
+                "recorded_at": None if t.recorded_at is None else t.recorded_at.isoformat(),
+                "response_id": None if t.response_id is None else str(t.response_id)} for t in topics]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 def _synthesis_item(topic: TopicSource) -> dict:
     assert topic.answer is not None and topic.response_id is not None
-    return {"text": topic.answer[:700],
-            "evidence": [{"source_ref": str(topic.response_id), "quote": topic.answer[:300]}]}
+    return {"text": topic.answer[:700], "evidence": [{"source_ref": str(topic.response_id), "quote": topic.answer[:300]}]}
 def _synthesis_from_topics(topics: list[TopicSource]) -> dict:
     answered = [t for t in topics if t.response_kind == "answered" and t.answer]
-    base = {
-        "contract": "visit_prep.patient_synthesis.v1", "status": "ready", "build_status": "ready",
-        "brief": {"headline": None, "summary": [], "visit_priorities": [],
-                  "medication_and_adherence": [], "barriers": [], "uncertainties": []},
-        "artifact_id": None, "version": 1, "recorded_at": datetime.now(UTC).isoformat()}
+    empty = {"headline": None, "summary": [], "visit_priorities": [], "medication_and_adherence": [],
+             "barriers": [], "uncertainties": []}
+    base = {"contract": "visit_prep.patient_synthesis.v1", "status": "ready", "build_status": "ready",
+            "brief": empty, "artifact_id": None, "version": 1, "recorded_at": datetime.now(UTC).isoformat()}
     if not answered:
         return base
-    by_key = {t.question_key: t for t in answered}
-    return {**base, "brief": {
-        "headline": _synthesis_item(answered[0]),
-        "summary": [_synthesis_item(t) for t in answered[:5]],
-        "visit_priorities": [_synthesis_item(t) for t in answered if t.question_key in {"reason", "story"}][:3],
-        "medication_and_adherence": [_synthesis_item(t) for t in answered
-            if t.question_key in {"medications", "adherence", "adherence_barrier"}][:3],
-        "barriers": [_synthesis_item(t) for t in answered if t.question_key == "adherence_barrier"][:2],
-        "uncertainties": []},
-        "artifact_id": f"synthetic:{answered[0].response_id}", "sources_order": list(by_key)}
-
+    med = {"medications", "adherence", "adherence_barrier"}
+    brief = {"headline": _synthesis_item(answered[0]), "summary": [_synthesis_item(t) for t in answered[:5]],
+             "visit_priorities": [_synthesis_item(t) for t in answered if t.question_key in {"reason", "story"}][:3],
+             "medication_and_adherence": [_synthesis_item(t) for t in answered if t.question_key in med][:3],
+             "barriers": [_synthesis_item(t) for t in answered if t.question_key == "adherence_barrier"][:2],
+             "uncertainties": []}
+    return {**base, "brief": brief, "artifact_id": f"synthetic:{answered[0].response_id}",
+            "sources_order": [t.question_key for t in answered]}
 def read_package(*, owner_practice_member_id: TypeIDType, visit_prep_id: TypeIDType) -> PackageOut:
     prep = VisitPrep.get(id=visit_prep_id, owner_practice_member_id=owner_practice_member_id)
     if prep is None or prep.lifecycle_state != "completed":
@@ -469,14 +441,14 @@ def read_package(*, owner_practice_member_id: TypeIDType, visit_prep_id: TypeIDT
     answers = {k: v for k, (_r, v) in decrypted.items()}
     topics: list[TopicSource] = []
     for question in _visible_questions(prep, answers):
-        row_answer = decrypted.get(question.question_key)
+        row = decrypted.get(question.question_key)
         topics.append(TopicSource(
             question.question_key, question.prompt_text, question.kind,
             tuple(_choice_dict(c) for c in question.choice_options),
-            None if row_answer is None else row_answer[0].response_kind,  # type: ignore[arg-type]
-            None if row_answer is None else row_answer[1],
-            None if row_answer is None else row_answer[0].recorded_at,
-            None if row_answer is None else row_answer[0].id))
+            None if row is None else row[0].response_kind,  # type: ignore[arg-type]
+            None if row is None else row[1],
+            None if row is None else row[0].recorded_at,
+            None if row is None else row[0].id))
     return PackageOut(
         prep.id, "visit_prep.patient_sources.v1", _prep_out(prep),
         None if prep.confirmed_by_role is None else prep.confirmed_by_role,  # type: ignore[arg-type]
