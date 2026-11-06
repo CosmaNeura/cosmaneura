@@ -21,6 +21,9 @@ export type PracticeStatus = {
   baa_accepted: boolean
   role: string
   attested: boolean
+  self_attestation_available?: boolean
+  attestation_practice_ref?: string | null
+  attestation_baa_reference?: string | null
   access_authorized: boolean
   authorization_basis: string | null
   access_revoked: boolean
@@ -110,6 +113,18 @@ async function practiceRequest<T>(
 
 export function getPractice() {
   return practiceRequest<PracticeStatus | null>("/practice")
+}
+
+export function attestCurrentPracticeMember(body: {
+  practice_ref: string
+  baa_reference: string
+  attestation_name: string
+  checks: string[]
+}) {
+  return practiceRequest<PracticeStatus>("/practice/attestation", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
 }
 
 export function getOrganizationAccessOpportunity() {
