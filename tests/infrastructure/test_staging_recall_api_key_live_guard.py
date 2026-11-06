@@ -24,6 +24,14 @@ assert spec is not None and spec.loader is not None
 m = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = m
 spec.loader.exec_module(m)
+boundary_spec = importlib.util.spec_from_file_location(
+    "staging_environment_boundary_tokens",
+    ROOT / "scripts/staging_environment_boundary.py",
+)
+assert boundary_spec is not None and boundary_spec.loader is not None
+boundary = importlib.util.module_from_spec(boundary_spec)
+sys.modules[boundary_spec.name] = boundary
+boundary_spec.loader.exec_module(boundary)
 KEY = "fictional-test-credential-do-not-use"
 ENV = {
     "PYTHON_ENV": "staging",
@@ -284,7 +292,7 @@ printf '%s\n' step-input-absent >> "$TRACE"
     def test_invalid_context_or_input_refuses_before_any_cli_read(self):
         for field, value in [
             ("PYTHON_ENV", "production"),
-            ("API_BASE_URL", "https://app.cosmaneura.com"),
+            ("API_BASE_URL", f"https://{boundary.LIVE_APP_HOST}"),
             ("RECALL_API_BASE", "https://other.invalid/api"),
             (m.INPUT, ""),
             (m.INPUT, None),
@@ -380,7 +388,7 @@ printf '%s\n' step-input-absent >> "$TRACE"
             if change == "recallBase":
                 entries[1]["value"] = "https://other.invalid"
             if change == "apiOrigin":
-                entries[2]["value"] = "https://app.cosmaneura.com"
+                entries[2]["value"] = f"https://{boundary.LIVE_APP_HOST}"
             with self.subTest(change=change), self.assertRaises(m.PreservationRefused):
                 m.verify_preservation(ENV, runner=f.run)
 

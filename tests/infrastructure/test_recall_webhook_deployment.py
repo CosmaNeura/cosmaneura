@@ -503,6 +503,7 @@ def test_every_pull_request_workflow_is_credential_free() -> None:
         "change-budget.yml",
         "infra_plan.yml",
         "pull_request_checks.yml",
+        "staging_environment_boundary.yml",
     }
     forbidden = (
         "${{ secrets.",

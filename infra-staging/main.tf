@@ -869,18 +869,17 @@ resource "onepassword_item" "squarespace_domain" {
 
     https://account.squarespace.com/domains/managed/cosmaneura.com/dns/dns-settings
 
-    ### app.cosmaneura.com & chat.cosmaneura.com
+    ### staging-app.cosmaneura.com & staging-chat.cosmaneura.com
 
     - CNAME. fqdn of the target container app.
     - asuid.app. Hash based on TF output.
 
-    ### Clerk
+    ### Clerk (staging development instance only)
 
-    - Add CNAME for `clerk.cosmaneura.com` -> `frontend-api.clerk.services`
-    - Add CNAME for `accounts.cosmaneura.com` -> `accounts.clerk.services`
-    - Add CNAME for `clk._domainkey.cosmaneura.com` -> `dkim1.au47c8ot0r4y.clerk.services`
-    - Add CNAME for `clk2._domainkey.cosmaneura.com` -> `dkim2.au47c8ot0r4y.clerk.services`
-    - Add CNAME for `clkmail.cosmaneura.com` -> `mail.au47c8ot0r4y.clerk.services`
+    - Keep staging on the dedicated Clerk development issuer
+      (`resolved-emu-53.clerk.accounts.dev`). Do not point staging DNS or
+      runtime config at the live production Clerk custom domains.
+    - Production Clerk DNS remains on the founder-gated production promote path.
   EOT
 
   section {

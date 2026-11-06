@@ -1,6 +1,21 @@
 # Automatic Scribe activation — ADR 0029
 
 Risk: **Tier 2** (provider identity, entitlement and cross-repository contract).
+
+## Browser account-switch access checks
+
+The browser query cache is bound to the current normalized Clerk user and
+session. A changed or unavailable principal cancels and clears cached reads;
+authenticated route loads fetch fresh server access and reject replies or
+redirects that cross an identity change. Normal onboarding, view-as, membership,
+entitlement and cancellation rules remain authoritative. No API, native97,
+schema or release control changes are required. Qualification covers fresh
+signup after a browser account switch and late prior-account responses.
+Concurrent authenticated and notes ancestor loaders bind identity before starting
+cached queries, so initial cache binding cannot cancel a same-account visit list.
+The notes deadline also prevents a late identity lookup from starting a read.
+Recovery is a separately reviewed frontend change; restoring the former cache
+behavior reintroduces stale access metadata and is not an authorization bypass.
 Design ratified by architecture PR 23, merge `75055344a96f2445d690512486a97817803337de`.
 Implementation does not authorize promotion, migration, billing changes or rollout.
 
@@ -146,6 +161,36 @@ does not authorize deployment, schema changes, account activation or a wider
 practice cohort.
 
 ## Qualification and review evidence
+
+### Current-member workforce attestation repair
+
+An authenticated active member of an unmanaged practice can record their own
+missing workforce attestation through the normal Settings form. The own-practice
+POST binds the displayed practice reference and BAA reference; it accepts only a
+typed name and all four existing acknowledgements, never a target Doctor or a
+grant. Advisory form availability defaults to false for older responses. The
+mutation freshly locks practice, enrollment email, Doctor and membership, and
+rechecks verified identity, exact current membership, active access, unmanaged
+enrollment, matching email and an in-force unchanged BAA. Existing legal records
+are retained on retry. No membership, role, seat, billing, grant or tombstone is
+created or restored. The ordinary join form uses the same repair for an existing
+unattested member.
+
+The metadata commit precedes the existing best-effort activation event; Scribe's
+revocation, cancellation, entitlement and exact cohort fences remain mandatory.
+The receiver and Settings form ship as one current-member attestation outcome
+in the same Core image. The browser form resets its name and acknowledgements
+when the normalized SDK user/session, displayed practice/BAA or view-as context
+changes. Pending intent is tied to that exact context and the actual SDK session
+object: identity is checked after SDK loading, after token retrieval and after
+the existing view-as request binding, immediately before network dispatch. Late
+success, error and pending-state updates cannot affect a changed or unmounted
+form. SDK identity remains ephemeral and is never added to the attestation body
+or legal records. Other practice API requests keep their existing auth and
+view-as binding behavior.
+This repair needs no migration and does not authorize deployment or activation.
+Recovery removes the form/endpoint through reviewed source while retaining any
+genuinely submitted attestation; reverting code must not erase legal evidence.
 
 Owned PostgreSQL qualification covers fresh/incomplete setup with no writes,
 grandfathered entitlement without billing changes, approved second members,
