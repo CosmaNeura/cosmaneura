@@ -27,21 +27,23 @@ LIVE_PUBLISHABLE_KEY_PREFIX = "pk_live_"
 LIVE_SECRET_KEY_PREFIX = "sk_live_"
 LIVE_CLERK_VAULT_ITEM = "clerk-production-api"
 
+# Opaque report ids only — never echo live key prefixes or secret-shaped
+# literals into logs or CI annotations (CodeQL clear-text logging).
 # Negative lookbehind keeps staging-app / staging-chat from matching.
 _FORBIDDEN: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
-        LIVE_APP_HOST,
+        "live_app_host",
         re.compile(r"(?<![A-Za-z0-9-])app\.cosmaneura\.com"),
     ),
     (
-        LIVE_CHAT_HOST,
+        "live_chat_host",
         re.compile(r"(?<![A-Za-z0-9-])chat\.cosmaneura\.com"),
     ),
-    (LIVE_CLERK_HOST, re.compile(r"clerk\.cosmaneura\.com")),
-    (LIVE_CLERK_ACCOUNTS_HOST, re.compile(r"accounts\.cosmaneura\.com")),
-    (LIVE_PUBLISHABLE_KEY_PREFIX, re.compile(r"\bpk_live_")),
-    (LIVE_SECRET_KEY_PREFIX, re.compile(r"\bsk_live_")),
-    (LIVE_CLERK_VAULT_ITEM, re.compile(r"clerk-production-api")),
+    ("live_clerk_host", re.compile(r"clerk\.cosmaneura\.com")),
+    ("live_clerk_accounts_host", re.compile(r"accounts\.cosmaneura\.com")),
+    ("live_publishable_key_prefix", re.compile(r"\bpk_live_")),
+    ("live_secret_key_prefix", re.compile(r"\bsk_live_")),
+    ("live_clerk_vault_item", re.compile(r"clerk-production-api")),
 )
 
 _STAGING_WORKFLOWS = frozenset(

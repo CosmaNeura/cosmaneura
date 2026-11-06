@@ -74,7 +74,8 @@ class StagingEnvironmentBoundaryTests(unittest.TestCase):
                 f"export API_BASE_URL=https://{m.LIVE_APP_HOST}\n",
             )
             findings = m.scan_repository(root)
-            self.assertTrue(any(m.LIVE_APP_HOST in item for item in findings))
+            self.assertTrue(any("live_app_host" in item for item in findings))
+            self.assertFalse(any(m.LIVE_APP_HOST in item for item in findings))
             self.assertEqual(m.main(["--root", str(root)]), 1)
 
     def test_staging_workflow_naming_live_clerk_fails(self):
@@ -86,7 +87,8 @@ class StagingEnvironmentBoundaryTests(unittest.TestCase):
                 f"issuer: https://{m.LIVE_CLERK_HOST}\n",
             )
             findings = m.scan_repository(root)
-            self.assertTrue(any(m.LIVE_CLERK_HOST in item for item in findings))
+            self.assertTrue(any("live_clerk_host" in item for item in findings))
+            self.assertFalse(any(m.LIVE_CLERK_HOST in item for item in findings))
 
     def test_staging_fixture_with_live_key_prefix_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,6 +100,9 @@ class StagingEnvironmentBoundaryTests(unittest.TestCase):
             )
             findings = m.scan_repository(root)
             self.assertTrue(
+                any("live_publishable_key_prefix" in item for item in findings)
+            )
+            self.assertFalse(
                 any(m.LIVE_PUBLISHABLE_KEY_PREFIX in item for item in findings)
             )
 
