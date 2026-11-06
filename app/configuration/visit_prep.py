@@ -11,6 +11,7 @@ from typeid.errors import TypeIDException
 
 VISIT_PREP_FLAG_NAME = "ff_visit_prep_202608"
 VISIT_PREP_FLAG_ENV = "FF_VISIT_PREP_202608"
+VISIT_PREP_PUBLIC_API_ENV = "VISIT_PREP_PUBLIC_API_ENABLED"
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,8 @@ class VisitPrepSettings:
     """
 
     enabled: bool = False
+    public_api_enabled: bool = False
+    require_synthetic_recipients: bool = True
     enabled_doctor_ids: frozenset[str] = field(default_factory=frozenset)
     enabled_practice_ids: frozenset[str] = field(default_factory=frozenset)
     email_send_enabled: bool = False
@@ -84,6 +87,10 @@ def load_visit_prep_settings(
 
     try:
         enabled = _parse_bool(read(VISIT_PREP_FLAG_ENV, "false"))
+        public_api_enabled = _parse_bool(read(VISIT_PREP_PUBLIC_API_ENV, "false"))
+        require_synthetic_recipients = _parse_bool(
+            read("VISIT_PREP_REQUIRE_SYNTHETIC_RECIPIENTS", "true")
+        )
         enabled_doctor_ids = _parse_typeid_cohort(
             read("VISIT_PREP_ENABLED_DOCTOR_IDS", ""),
             prefix="doctor",
@@ -101,6 +108,8 @@ def load_visit_prep_settings(
 
     return VisitPrepSettings(
         enabled=enabled,
+        public_api_enabled=public_api_enabled,
+        require_synthetic_recipients=require_synthetic_recipients,
         enabled_doctor_ids=enabled_doctor_ids,
         enabled_practice_ids=enabled_practice_ids,
         email_send_enabled=email_send_enabled,
