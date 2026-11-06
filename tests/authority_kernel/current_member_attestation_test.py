@@ -1,6 +1,8 @@
 """Own-member acknowledgement repair on an explicitly owned synthetic PostgreSQL.
 
 Run with --confcutdir=tests/authority_kernel; never load the root test hooks.
+Without the explicit owned DSN this local concurrency suite is skipped, not
+represented as hosted PostgreSQL coverage. A supplied invalid DSN still fails.
 """
 
 import importlib
@@ -13,7 +15,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from app.routes import internal
@@ -36,7 +38,11 @@ from tests.authority_kernel.scribe_activation_test import (
 
 @pytest.fixture(scope="module")
 def engine():
-    raw = os.environ["SELF_ATTESTATION_TEST_DATABASE_URL"]
+    raw = os.environ.get("SELF_ATTESTATION_TEST_DATABASE_URL")
+    if not raw:
+        pytest.skip(
+            "Explicit owned synthetic PostgreSQL required for local concurrency tests"
+        )
     url = make_url(raw)
     assert (url.host, url.port, url.database, url.username) == (
         None,
@@ -117,7 +123,17 @@ def member_case(engine, monkeypatch):
 def submit(f, *, join=False, **changes):
     with session_for(f.engine) as session:
         doctor = session.get(Doctor, f.doctor_id)
-        request = SimpleNamespace(state=SimpleNamespace(doctor=doctor, view_as=None))
+        assert doctor is not None
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/internal/v1/practice/attestation",
+                "headers": [],
+            }
+        )
+        request.state.doctor = doctor
+        request.state.view_as = None
         body = {
             "attestation_name": "  Synthetic Clinician  ",
             "checks": ["workforce", "not-party", "direction", "phi"],
@@ -249,12 +265,14 @@ def test_request_cannot_supply_another_doctor_or_membership(member_case):
     f = member_case
     before = snapshot(f)
     with pytest.raises(ValidationError):
-        internal.CurrentPracticeAttestationBody(
-            practice_ref=str(f.practice_id),
-            baa_reference=BAA_CURRENT_REFERENCE,
-            attestation_name="Synthetic Clinician",
-            checks=["workforce", "not-party", "direction", "phi"],
-            doctor_ref=str(f.doctor_id),
+        internal.CurrentPracticeAttestationBody.model_validate(
+            {
+                "practice_ref": str(f.practice_id),
+                "baa_reference": BAA_CURRENT_REFERENCE,
+                "attestation_name": "Synthetic Clinician",
+                "checks": ["workforce", "not-party", "direction", "phi"],
+                "doctor_ref": str(f.doctor_id),
+            }
         )
     assert snapshot(f) == before
 
@@ -267,9 +285,16 @@ def test_view_as_cannot_record_another_members_attestation(member_case):
         member = session.get(PracticeMember, f.member_id)
         practice = session.get(Practice, f.practice_id)
         assert doctor is not None and member is not None and practice is not None
-        request = SimpleNamespace(
-            state=SimpleNamespace(doctor=doctor, view_as=object())
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/internal/v1/practice/attestation",
+                "headers": [],
+            }
         )
+        request.state.doctor = doctor
+        request.state.view_as = object()
         with pytest.raises(HTTPException) as failure:
             internal._attest_current_practice_member(
                 request,
