@@ -11,6 +11,9 @@ redirects that cross an identity change. Normal onboarding, view-as, membership,
 entitlement and cancellation rules remain authoritative. No API, native97,
 schema or release control changes are required. Qualification covers fresh
 signup after a browser account switch and late prior-account responses.
+Concurrent authenticated and notes ancestor loaders bind identity before starting
+cached queries, so initial cache binding cannot cancel a same-account visit list.
+The notes deadline also prevents a late identity lookup from starting a read.
 Recovery is a separately reviewed frontend change; restoring the former cache
 behavior reintroduces stale access metadata and is not an authorization bypass.
 Design ratified by architecture PR 23, merge `75055344a96f2445d690512486a97817803337de`.
