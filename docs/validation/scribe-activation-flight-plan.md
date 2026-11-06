@@ -147,6 +147,27 @@ practice cohort.
 
 ## Qualification and review evidence
 
+### Current-member workforce attestation repair
+
+An authenticated active member of an unmanaged practice can record their own
+missing workforce attestation through the normal Settings form. The own-practice
+POST binds the displayed practice reference and BAA reference; it accepts only a
+typed name and all four existing acknowledgements, never a target Doctor or a
+grant. Advisory form availability defaults to false for older responses. The
+mutation freshly locks practice, enrollment email, Doctor and membership, and
+rechecks verified identity, exact current membership, active access, unmanaged
+enrollment, matching email and an in-force unchanged BAA. Existing legal records
+are retained on retry. No membership, role, seat, billing, grant or tombstone is
+created or restored. The ordinary join form uses the same repair for an existing
+unattested member.
+
+The metadata commit precedes the existing best-effort activation event; Scribe's
+revocation, cancellation, entitlement and exact cohort fences remain mandatory.
+Backend and Settings changes are separate dependency-ordered source slices.
+This repair needs no migration and does not authorize deployment or activation.
+Recovery removes the form/endpoint through reviewed source while retaining any
+genuinely submitted attestation; reverting code must not erase legal evidence.
+
 Owned PostgreSQL qualification covers fresh/incomplete setup with no writes,
 grandfathered entitlement without billing changes, approved second members,
 preserved personal authority namespaces, reused emails without adoption,
