@@ -14,7 +14,7 @@ _UUID_RE = "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
 def upgrade() -> None:
     op.create_table(
         "visit_prep",
-        sa.Column("id", TypeIDType("visit_prep"), nullable=False),
+        sa.Column("id", TypeIDType("visit_prep"), nullable=False, comment="TypeID with prefix: visit_prep"),
         sa.Column("practice_id", TypeIDType("practice"), nullable=False),
         sa.Column("owner_practice_member_id", TypeIDType("practice_member"), nullable=False),
         sa.Column("owner_doctor_id", TypeIDType("doctor"), nullable=False),
@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
         sa.CheckConstraint("lifecycle_state IN ('invited', 'confirmed', 'in_progress', 'completed')", name="vp_lifecycle_state_allowed"),
         sa.CheckConstraint(f"creation_idempotency_key ~ {_UUID_RE}", name="vp_creation_idempotency_key_shape"),
         sa.CheckConstraint("creation_payload_hmac_sha256 ~ '^[0-9a-f]{64}$'", name="vp_creation_payload_hmac_shape"),
@@ -61,7 +61,7 @@ def upgrade() -> None:
     op.create_index("visit_prep_owner_idx", "visit_prep", ["owner_practice_member_id", "id"])
     op.create_table(
         "visit_prep_question_response",
-        sa.Column("id", TypeIDType("visit_prep_response"), nullable=False),
+        sa.Column("id", TypeIDType("visit_prep_response"), nullable=False, comment="TypeID with prefix: visit_prep_response"),
         sa.Column("visit_prep_id", TypeIDType("visit_prep"), nullable=False),
         sa.Column("question_set_version_id", TypeIDType("visit_prep_question_set_version"), nullable=False),
         sa.Column("question_id", TypeIDType("visit_prep_question"), nullable=False),
@@ -72,7 +72,7 @@ def upgrade() -> None:
         sa.Column("payload_hmac_sha256", sa.String(length=64), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
         sa.CheckConstraint("submission_sequence BETWEEN 1 AND 5", name="vp_response_sequence_range"),
         sa.CheckConstraint("response_kind IN ('answered', 'skipped')", name="vp_response_kind_allowed"),
         sa.CheckConstraint("(response_kind = 'answered' AND answer_ciphertext IS NOT NULL) OR (response_kind = 'skipped' AND answer_ciphertext IS NULL)", name="vp_response_answer_shape"),
