@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 from typeid import TypeID
@@ -16,6 +17,8 @@ from app.services.visit_prep_journey import (
     create_visit_prep,
     is_synthetic_recipient,
 )
+
+from activemodel.types import TypeIDType as TID
 
 from tests.services.visit_prep_access_test import _doctor, _practice
 
@@ -31,17 +34,8 @@ def test_synthetic_allowlist_requires_every_provided_contact():
 
 def test_defaults_keep_send_flags_false_in_every_environment():
     s = load_visit_prep_settings({})
-    assert (
-        s.email_send_enabled,
-        s.sms_send_enabled,
-        s.public_api_enabled,
-        s.enabled,
-    ) == (
-        False,
-        False,
-        False,
-        False,
-    )
+    flags = (s.email_send_enabled, s.sms_send_enabled, s.public_api_enabled, s.enabled)
+    assert flags == (False, False, False, False)
     assert s.require_synthetic_recipients is True
 
 
@@ -102,6 +96,8 @@ def test_create_refuses_when_send_flags_are_true(monkeypatch):
             physician_display_name="Dr Synthetic",
             scheduled_at=datetime.now(UTC) + timedelta(days=2),
             timezone_name="UTC",
-            question_set_version_id=TypeID("visit_prep_question_set_version"),
+            question_set_version_id=cast(
+                TID, TypeID("visit_prep_question_set_version")
+            ),
             settings=settings,
         )
