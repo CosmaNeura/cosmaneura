@@ -95,11 +95,13 @@ def _utc(value: datetime | None = None) -> datetime:
         raise VisitPrepValidation("timestamp is invalid")
     return current.astimezone(UTC)
 def is_synthetic_recipient(email: str | None, phone: str | None) -> bool:
-    email_ok = email is not None and (
-        email.endswith(".test") or email.endswith(".example")
-        or email.endswith("@example.com") or email.endswith("@example.net")
-        or email.endswith("@example.org"))
-    return bool(email_ok or (phone is not None and _NANP_555.fullmatch(phone) is not None))
+    # Every provided contact must be synthetic (AND). Empty set is not.
+    if email is None and phone is None:
+        return False
+    email_ok = email is None or email.endswith((
+        ".test", ".example", "@example.com", "@example.net", "@example.org"))
+    phone_ok = phone is None or _NANP_555.fullmatch(phone) is not None
+    return bool(email_ok and phone_ok)
 def _normalize_recipient(recipient: RecipientInput, *, settings: VisitPrepSettings):
     first_name = _text(recipient.first_name, maximum=120, message="recipient first name is invalid")
     if recipient.role not in {"patient", "caregiver"}:

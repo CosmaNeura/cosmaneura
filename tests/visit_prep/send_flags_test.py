@@ -6,8 +6,16 @@ from typeid import TypeID
 from app.configuration import visit_prep as visit_prep_config
 from app.configuration.visit_prep import VisitPrepSettings, load_visit_prep_settings
 from app.services.visit_prep_access import resolve_visit_prep_access
-from app.services.visit_prep_journey import RecipientInput, VisitPrepUnavailable, create_visit_prep
+from app.services.visit_prep_journey import (
+    RecipientInput, VisitPrepUnavailable, create_visit_prep, is_synthetic_recipient,
+)
 from tests.services.visit_prep_access_test import _doctor, _practice
+def test_synthetic_allowlist_requires_every_provided_contact():
+    assert is_synthetic_recipient("patient@example.com", "+15555550100")
+    assert is_synthetic_recipient("patient@example.com", None) and is_synthetic_recipient(None, "+15555550100")
+    assert not is_synthetic_recipient("person@real-hospital.org", "+15555550100")
+    assert not is_synthetic_recipient("patient@example.com", "+14152345678")
+    assert not is_synthetic_recipient(None, None)
 def test_defaults_keep_send_flags_false_in_every_environment():
     s = load_visit_prep_settings({})
     assert (s.email_send_enabled, s.sms_send_enabled, s.public_api_enabled, s.enabled) == (False, False, False, False)
@@ -45,7 +53,7 @@ def test_create_refuses_when_send_flags_are_true(monkeypatch):
         create_visit_prep(
             owner_practice_member_id=member.id, owner_doctor_id=doctor.id, practice_id=practice.id,
             idempotency_key="00000000-0000-4000-8000-000000000001",
-            recipient=RecipientInput(first_name="Synthetic", email="patient@example.test"),
+            recipient=RecipientInput(first_name="Synthetic", email="patient@example.com"),
             physician_display_name="Dr Synthetic",
             scheduled_at=datetime.now(UTC) + timedelta(days=2), timezone_name="UTC",
             question_set_version_id=TypeID("visit_prep_question_set_version"), settings=settings,
