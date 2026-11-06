@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
 import httpx
@@ -1445,6 +1445,22 @@ def _practice_payload(
         and access_decision.allowed
         and access_decision.authorization_basis == "pilot_grant"
     )
+    self_attestation_available = bool(
+        include_join_code
+        and doctor is not None
+        and doctor.deleted_at is None
+        and member.attested_at is None
+        and member_access_state(member, at=datetime.now(UTC))
+        is MemberAccessState.active
+        and practice.organization_id is None
+        and not practice.negotiated_baa_required
+        and member.organization_roster_approval_id is None
+        and member.organization_authorized_at is None
+        and practice.baa_in_force()
+        and email_matches_domain(doctor.email or "", practice.email_domain)
+        and not uses_managed_organization_path(doctor)
+        and not doctor_has_managed_roster_assignment(doctor)
+    )
     return PracticeStatus(
         legal_name=practice.legal_name,
         # Administratively reserved and organization-managed practices use the
@@ -1465,6 +1481,13 @@ def _practice_payload(
         baa_accepted=practice.baa_in_force(),
         role=member.role,
         attested=member.attested_at is not None,
+        self_attestation_available=self_attestation_available,
+        attestation_practice_ref=str(practice.id)
+        if self_attestation_available
+        else None,
+        attestation_baa_reference=(
+            practice.baa_version if self_attestation_available else None
+        ),
         access_authorized=authorization_basis is not None,
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
@@ -1550,6 +1573,10 @@ class PracticeStatus(BaseModel, extra="forbid"):
     baa_accepted: bool
     role: str
     attested: bool
+    self_attestation_available: bool = False
+    "Advisory own-member form availability; mutation rechecks every gate."
+    attestation_practice_ref: str | None = None
+    attestation_baa_reference: str | None = None
     access_authorized: bool
     authorization_basis: str | None
     access_revoked: bool
@@ -2700,6 +2727,128 @@ class JoinPracticeBody(BaseModel, extra="forbid"):
     checks: list[str]
 
 
+class CurrentPracticeAttestationBody(BaseModel, extra="forbid"):
+    practice_ref: str = Field(min_length=35, max_length=35)
+    baa_reference: str = Field(min_length=1, max_length=120)
+    attestation_name: str = Field(min_length=2, max_length=120)
+    checks: list[str] = Field(max_length=4)
+
+
+def _attest_current_practice_member(
+    request: Request,
+    data: JoinPracticeBody | CurrentPracticeAttestationBody,
+    practice: Practice,
+    member: PracticeMember,
+) -> PracticeStatus:
+    """Record real acknowledgements without changing memberships, seats, or grants."""
+
+    doctor: Doctor = request.state.doctor
+    if getattr(request.state, "view_as", None) is not None:
+        raise HTTPException(status_code=403, detail="Use your own account to attest.")
+    name = data.attestation_name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Your full name is required.")
+    if not {"workforce", "not-party", "direction", "phi"}.issubset(set(data.checks)):
+        raise HTTPException(
+            status_code=400, detail="All workforce acknowledgements are required."
+        )
+    # Snapshot request ownership before fresh locked reads replace ORM values.
+    doctor_id, subject, email = doctor.id, doctor.clerk_id, doctor.email
+    practice_id, member_id = practice.id, member.id
+    recorded = False
+    with get_session() as session:
+        locked_practice = lock_practice_for_active_seat_mutation(session, practice_id)
+        lock_roster_enrollment_email(session, (email or "").strip().lower())
+        locked_doctor = session.exec(
+            select(Doctor)
+            .where(Doctor.id == doctor_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one()
+        if (
+            locked_doctor.deleted_at is not None
+            or locked_doctor.clerk_id != subject
+            or locked_doctor.email != email
+        ):
+            raise HTTPException(status_code=409, detail="The account changed. Retry.")
+        verified_email = _verified_legacy_enrollment_email(locked_doctor)
+        if uses_managed_organization_path(
+            locked_doctor, verified_primary_email=verified_email
+        ) or doctor_has_managed_roster_assignment(locked_doctor, session=session):
+            raise HTTPException(
+                status_code=409, detail="Use organization-managed enrollment."
+            )
+        locked_member = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == doctor_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if (
+            locked_member is None
+            or locked_member.id != member_id
+            or locked_member.practice_id != locked_practice.id
+        ):
+            raise HTTPException(status_code=409, detail=ACCOUNT_IN_ANOTHER_PRACTICE)
+        if isinstance(data, JoinPracticeBody):
+            _refuse_join_code_of_another_practice(locked_practice, data.join_code)
+        elif (
+            data.practice_ref != str(locked_practice.id)
+            or data.baa_reference != locked_practice.baa_version
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="The practice agreement changed. Review it again.",
+            )
+        if (
+            locked_practice.organization_id is not None
+            or locked_practice.negotiated_baa_required
+            or locked_member.organization_roster_approval_id is not None
+            or locked_member.organization_authorized_at is not None
+        ):
+            raise HTTPException(
+                status_code=409, detail="Use organization-managed enrollment."
+            )
+        if (
+            member_access_state(locked_member, at=datetime.now(UTC))
+            != MemberAccessState.active
+        ):
+            raise HTTPException(status_code=403, detail="Practice access is inactive.")
+        if not email_matches_domain(verified_email, locked_practice.email_domain):
+            raise HTTPException(status_code=403, detail="Your work email must match.")
+        if not locked_practice.baa_in_force():
+            raise HTTPException(
+                status_code=409,
+                detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
+            )
+        if locked_member.attested_at is None:
+            locked_member.attested_at = datetime.now(UTC)
+            locked_member.attestation_name = name
+            session.add(locked_member)
+            recorded = True
+        session.commit()
+        session.refresh(locked_member)
+        payload = _practice_payload(locked_practice, locked_member)
+        assert payload
+    if recorded:
+        activate_scribe_after_commit(trigger="membership", doctor_ref=doctor_id)
+    return payload
+
+
+@internal_api_app.post("/practice/attestation", name="attest_current_practice_member")
+def attest_current_practice_member(
+    request: Request, data: CurrentPracticeAttestationBody
+) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    practice = Practice.get(id=member.practice_id) if member is not None else None
+    if practice is None or member is None:
+        raise HTTPException(
+            status_code=409, detail="Current practice membership is required."
+        )
+    return _attest_current_practice_member(request, data, practice, member)
+
+
 @internal_api_app.post("/practice/join", name="join_practice")
 def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
     doctor: Doctor = request.state.doctor
@@ -2748,6 +2897,9 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 ),
             )
         _refuse_join_code_of_another_practice(practice, data.join_code)
+        if existing.attested_at is None:
+            assert practice
+            return _attest_current_practice_member(request, data, practice, existing)
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
@@ -2817,6 +2969,10 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=ACCOUNT_IN_ANOTHER_PRACTICE,
+                )
+            if existing.attested_at is None:
+                return _attest_current_practice_member(
+                    request, data, locked_practice, existing
                 )
             session.commit()
             session.refresh(existing)

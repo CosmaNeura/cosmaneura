@@ -2413,6 +2413,52 @@
         ]
       }
     },
+    "/internal/v1/practice/attestation": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Attest Current Practice Member",
+        "operationId": "attest_current_practice_member",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurrentPracticeAttestationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/practice/join": {
       "post": {
         "tags": [
@@ -4825,6 +4871,45 @@
         ],
         "title": "CreatedNoteTemplate"
       },
+      "CurrentPracticeAttestationBody": {
+        "properties": {
+          "practice_ref": {
+            "type": "string",
+            "maxLength": 35,
+            "minLength": 35,
+            "title": "Practice Ref"
+          },
+          "baa_reference": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Baa Reference"
+          },
+          "attestation_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Attestation Name"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "practice_ref",
+          "baa_reference",
+          "attestation_name",
+          "checks"
+        ],
+        "title": "CurrentPracticeAttestationBody"
+      },
       "DailyVolumeRow": {
         "properties": {
           "day": {
@@ -7132,6 +7217,33 @@
           "attested": {
             "type": "boolean",
             "title": "Attested"
+          },
+          "self_attestation_available": {
+            "type": "boolean",
+            "title": "Self Attestation Available",
+            "default": false
+          },
+          "attestation_practice_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Practice Ref"
+          },
+          "attestation_baa_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Baa Reference"
           },
           "access_authorized": {
             "type": "boolean",

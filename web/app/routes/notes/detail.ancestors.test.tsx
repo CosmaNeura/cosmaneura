@@ -7,6 +7,7 @@ import {
 } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { bindQueryPrincipal } from "~/configuration/query-principal"
 import { queryClient } from "~/configuration/tanstack-query"
 import AuthenticatedLayout, {
   ErrorBoundary as AuthBoundary,
@@ -21,12 +22,18 @@ import { READ_DEADLINE_MS } from "~/lib/read-deadline"
 import { ErrorBoundary, clientLoader } from "./detail"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 
-const { detail, list, settings, status, observe } = vi.hoisted(() => ({
-  detail: vi.fn(),
-  list: vi.fn(),
-  settings: vi.fn(),
-  status: vi.fn(),
-  observe: vi.fn((value) => value),
+const { detail, list, settings, status, observe, readPrincipal } = vi.hoisted(
+  () => ({
+    detail: vi.fn(),
+    list: vi.fn(),
+    settings: vi.fn(),
+    status: vi.fn(),
+    observe: vi.fn((value) => value),
+    readPrincipal: vi.fn(),
+  }),
+)
+vi.mock("~/configuration/clerk", () => ({
+  readCurrentBrowserPrincipal: readPrincipal,
 }))
 vi.mock("~/utils/terminology", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/utils/terminology")>()
@@ -140,6 +147,8 @@ function openVisit() {
           },
         ],
       },
+      { path: "/sign-in", element: <div>Sign in required</div> },
+      { path: "/onboarding", element: <div>Fresh account onboarding</div> },
     ],
     { initialEntries: ["/notes/synthetic_visit?reviewNote=synthetic_note"] },
   )
@@ -149,7 +158,13 @@ function openVisit() {
 beforeEach(() => {
   window.history.replaceState(null, "", "/notes/synthetic_visit")
   vi.clearAllMocks()
+  bindQueryPrincipal({ isLoaded: false, userId: null, sessionId: null })
   queryClient.clear()
+  readPrincipal.mockReset().mockResolvedValue({
+    isLoaded: true,
+    userId: "synthetic-visit-owner",
+    sessionId: "synthetic-visit-session",
+  })
   status.mockResolvedValue(inactive)
   settings.mockResolvedValue(readySettings)
   list.mockResolvedValue({ data: { appointments: [] } })
@@ -163,6 +178,77 @@ afterEach(() => {
 })
 
 describe("visit retry with its actual ancestor loaders", () => {
+  it("routes a signed-out ancestor to sign-in without checking account access", async () => {
+    readPrincipal.mockResolvedValue({
+      isLoaded: true,
+      userId: null,
+      sessionId: null,
+    })
+    openVisit()
+    expect(await screen.findByText("Sign in required")).toBeVisible()
+    expect(status).not.toHaveBeenCalled()
+    expect(settings).not.toHaveBeenCalled()
+    expect(screen.queryByText("Visits sidebar")).not.toBeInTheDocument()
+  })
+
+  it("fences a pending ancestor result when the account changes", async () => {
+    let finish!: (value: unknown) => void
+    settings.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    detail.mockResolvedValue({ data: { notes: [{ id: "synthetic_note" }] } })
+    openVisit()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(settings).toHaveBeenCalledOnce()
+    expect(screen.queryByText(/Visit loaded:/)).not.toBeInTheDocument()
+    readPrincipal.mockResolvedValue({
+      isLoaded: true,
+      userId: "synthetic-replacement-owner",
+      sessionId: "synthetic-replacement-session",
+    })
+    await act(async () => {
+      finish(readySettings)
+    })
+    expect(await screen.findByText("Fresh account onboarding")).toBeVisible()
+    expect(queryClient.getQueryData(["settings"])).toBeUndefined()
+    expect(screen.queryByText(/Visit loaded:/)).not.toBeInTheDocument()
+    expect(screen.queryByText("Visits sidebar")).not.toBeInTheDocument()
+  })
+
+  it("does not start a list after a timed-out principal lookup settles", async () => {
+    let finish!: (value: unknown) => void
+    readPrincipal.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    })
+    openVisit()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(READ_DEADLINE_MS + 1)
+    })
+    expect(
+      screen.getByRole("heading", { name: "Couldn’t verify account access" }),
+    ).toBeVisible()
+    await act(async () => {
+      finish({
+        isLoaded: true,
+        userId: "synthetic-visit-owner",
+        sessionId: "synthetic-visit-session",
+      })
+    })
+    expect(settings).not.toHaveBeenCalled()
+    expect(list).not.toHaveBeenCalled()
+    expect(queryClient.getQueryData(["noteList"])).toBeUndefined()
+    expect(screen.queryByText(/Visit loaded:/)).not.toBeInTheDocument()
+  })
+
   it.each(["status", "settings", "list"] as const)(
     "settles a stalled %s read without accepting its late result",
     async (stalled) => {

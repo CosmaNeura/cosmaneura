@@ -23,6 +23,7 @@ import { useViewAsActive } from "~/components/ViewAsRouteGuard"
 import { Icons } from "~/components/icons"
 import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ConfirmDialog } from "~/components/shared/ConfirmDialog"
+import { CurrentPracticeAttestation } from "~/components/shared/CurrentPracticeAttestation"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
@@ -161,6 +162,14 @@ function PracticeSettings({
         practice={practice}
         showBillingActions
         billingReturnTo={billingReturnTo}
+      />
+      <CurrentPracticeAttestation
+        practice={practice}
+        viewAsActive={viewAsActive}
+        onPracticeChange={(next) => {
+          onPracticeChange(next)
+          void revalidator.revalidate()
+        }}
       />
       {canReviewAgreement ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
