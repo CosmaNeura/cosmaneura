@@ -150,7 +150,10 @@ def creation_payload_sha256(definition: VersionIn) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
 def _serialize_version(version: VisitPrepQuestionSetVersion) -> VersionOut:
-    questions = sorted(VisitPrepQuestion.where(question_set_version_id=version.id).all(), key=lambda q: q.position)
+    questions = sorted(
+        VisitPrepQuestion.where(VisitPrepQuestion.question_set_version_id == version.id).all(),
+        key=lambda q: q.position,
+    )
     by_id = {q.id: q for q in questions}
     out: list[QuestionOut] = []
     for question in questions:
@@ -158,10 +161,15 @@ def _serialize_version(version: VisitPrepQuestionSetVersion) -> VersionOut:
         if question.show_if_question_id is not None:
             parent = by_id[question.show_if_question_id]
             show_if = ConditionIn(parent.question_key, tuple(question.show_if_values or ()))
+        choices: list[ChoiceIn] = []
+        for raw in question.choice_options:
+            if isinstance(raw, dict):
+                choices.append(ChoiceIn(raw["value"], raw["label"], raw.get("hint")))
+            else:
+                choices.append(ChoiceIn(raw.value, raw.label, raw.hint))
         out.append(QuestionOut(
             question.id, question.question_key, question.position, question.prompt_text,
-            question.helper_text, cast(QuestionKind, question.kind),
-            tuple(ChoiceIn(c.value, c.label, c.hint) for c in question.choice_options), show_if))
+            question.helper_text, cast(QuestionKind, question.kind), tuple(choices), show_if))
     return VersionOut(version.id, version.question_set_id, version.version_number, version.name,
                       version.published_at, version.is_default, tuple(out))
 
@@ -204,11 +212,15 @@ def ensure_default_question_set(*, owner_practice_member_id: TypeIDType) -> Vers
             owner_practice_member_id=owner_practice_member_id, seed_key=DEFAULT_SEED,
             creation_payload_sha256=fingerprint)
         session.add(question_set); session.flush()
+        # Insert questions while unpublished (default check requires published_at).
         version = VisitPrepQuestionSetVersion(
             question_set_id=question_set.id, owner_practice_member_id=owner_practice_member_id,
-            version_number=1, name=definition.name, published_at=datetime.now(UTC), is_default=True)
+            version_number=1, name=definition.name, published_at=None, is_default=False)
         session.add(version); session.flush()
         _write_questions(session, version=version, definition=definition)
+        version.published_at = datetime.now(UTC)
+        version.is_default = True
+        session.add(version); session.flush()
         session.commit(); session.refresh(version)
         return _serialize_version(version)
 
@@ -237,15 +249,20 @@ def publish_question_set_version(
             question_set_id=question_set.id, owner_practice_member_id=owner_practice_member_id,
             version_number=next_number, name=normalized.name,
             supersedes_version_id=None if latest is None else latest.id,
-            published_at=datetime.now(UTC), is_default=make_default)
+            published_at=None, is_default=False)
         session.add(version); session.flush()
         _write_questions(session, version=version, definition=normalized)
+        version.published_at = datetime.now(UTC)
+        version.is_default = make_default
+        session.add(version); session.flush()
         session.commit(); session.refresh(version)
         return _serialize_version(version)
 
 def list_question_sets(*, owner_practice_member_id: TypeIDType) -> list[VersionOut]:
     ensure_default_question_set(owner_practice_member_id=owner_practice_member_id)
-    versions = VisitPrepQuestionSetVersion.where(owner_practice_member_id=owner_practice_member_id).all()
+    versions = VisitPrepQuestionSetVersion.where(
+        VisitPrepQuestionSetVersion.owner_practice_member_id == owner_practice_member_id,
+    ).all()
     published = [v for v in versions if v.published_at is not None]
     published.sort(key=lambda v: (not v.is_default, -v.version_number))
     return [_serialize_version(v) for v in published]

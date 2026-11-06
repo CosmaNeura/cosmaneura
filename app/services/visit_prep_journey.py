@@ -167,12 +167,16 @@ def _prep_out(prep: VisitPrep, *, access_token: str | None = None, at: datetime 
 def _json_compact(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
+def _resolved_settings(settings: VisitPrepSettings | None) -> VisitPrepSettings:
+    return VISIT_PREP_SETTINGS if settings is None else settings
+
 def create_visit_prep(
     *, owner_practice_member_id: TypeIDType, owner_doctor_id: TypeIDType, practice_id: TypeIDType,
     idempotency_key: str, recipient: RecipientInput, physician_display_name: str,
     scheduled_at: datetime, timezone_name: str, question_set_version_id: TypeIDType,
-    settings: VisitPrepSettings = VISIT_PREP_SETTINGS, now: datetime | None = None,
+    settings: VisitPrepSettings | None = None, now: datetime | None = None,
 ) -> PrepOut:
+    settings = _resolved_settings(settings)
     if settings.email_send_enabled or settings.sms_send_enabled:
         raise VisitPrepUnavailable("Visit Prep send channels stay unreachable")
     effective = _utc(now); key = _uuid(idempotency_key)
@@ -218,7 +222,7 @@ def create_visit_prep(
         return _prep_out(prep, access_token=token, at=effective)
 
 def list_visit_preps(*, owner_practice_member_id: TypeIDType) -> list[PrepOut]:
-    rows = VisitPrep.where(owner_practice_member_id=owner_practice_member_id).all()
+    rows = VisitPrep.where(VisitPrep.owner_practice_member_id == owner_practice_member_id).all()
     rows.sort(key=lambda row: row.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
     return [_prep_out(row) for row in rows]
 
@@ -252,8 +256,12 @@ def _load_by_token(token: str, *, settings: VisitPrepSettings) -> VisitPrep:
         raise VisitPrepUnavailable("Visit Prep link is unavailable")
     return prep
 def _questions_for(prep: VisitPrep) -> list[VisitPrepQuestion]:
-    return sorted(VisitPrepQuestion.where(question_set_version_id=prep.question_set_version_id).all(),
-                  key=lambda q: q.position)
+    return sorted(
+        VisitPrepQuestion.where(
+            VisitPrepQuestion.question_set_version_id == prep.question_set_version_id,
+        ).all(),
+        key=lambda q: q.position,
+    )
 def _visible_questions(prep: VisitPrep, answers: dict[str, str | None]) -> list[VisitPrepQuestion]:
     questions = _questions_for(prep); by_id = {q.id: q for q in questions}; visible: list[VisitPrepQuestion] = []
     for question in questions:
@@ -266,17 +274,24 @@ def _visible_questions(prep: VisitPrep, answers: dict[str, str | None]) -> list[
 def _decrypt_answers(prep: VisitPrep) -> dict[str, tuple[VisitPrepQuestionResponse, str | None]]:
     questions = {q.id: q for q in _questions_for(prep)}
     out: dict[str, tuple[VisitPrepQuestionResponse, str | None]] = {}
-    for response in VisitPrepQuestionResponse.where(visit_prep_id=prep.id).all():
+    for response in VisitPrepQuestionResponse.where(
+        VisitPrepQuestionResponse.visit_prep_id == prep.id,
+    ).all():
         question = questions[response.question_id]; answer = None
         if response.response_kind == "answered":
             assert response.answer_ciphertext is not None
             answer = json.loads(decrypt_value(response.answer_ciphertext))["value"]
         out[question.question_key] = (response, answer)
     return out
+def _choice_dict(choice: object) -> dict:
+    if isinstance(choice, dict):
+        return {"value": choice["value"], "label": choice["label"], "hint": choice.get("hint")}
+    return {"value": choice.value, "label": choice.label, "hint": choice.hint}
+
 def _interview_question(question: VisitPrepQuestion) -> InterviewQuestion:
     return InterviewQuestion(
         question.question_key, question.position, question.prompt_text, question.helper_text, question.kind,
-        tuple({"value": c.value, "label": c.label, "hint": c.hint} for c in question.choice_options))
+        tuple(_choice_dict(c) for c in question.choice_options))
 def _state(status: InterviewStatus, prep: VisitPrep | None, submitted: int,
            current: InterviewQuestion | None = None) -> InterviewState:
     if prep is None:
@@ -297,13 +312,14 @@ def _interview_state(prep: VisitPrep) -> InterviewState:
         return _state("ready_to_complete", prep, submitted)
     return _state("in_progress", prep, submitted, _interview_question(pending))
 
-def get_interview(token: str, *, settings: VisitPrepSettings = VISIT_PREP_SETTINGS) -> InterviewState:
-    return _interview_state(_load_by_token(token, settings=settings))
+def get_interview(token: str, *, settings: VisitPrepSettings | None = None) -> InterviewState:
+    return _interview_state(_load_by_token(token, settings=_resolved_settings(settings)))
 
 def confirm_interview(
     token: str, *, first_name: str, role: RecipientRole,
-    settings: VisitPrepSettings = VISIT_PREP_SETTINGS, now: datetime | None = None,
+    settings: VisitPrepSettings | None = None, now: datetime | None = None,
 ) -> InterviewState:
+    settings = _resolved_settings(settings)
     if role not in {"patient", "caregiver"}:
         raise VisitPrepValidation("confirmation is invalid")
     name = _text(first_name, maximum=120, message="confirmation is invalid")
@@ -341,8 +357,9 @@ def _response_hmac(prep_id, question_key: str, response_kind: str, answer: str |
 
 def submit_response(
     token: str, *, question_key: str, response_kind: ResponseKind, answer: str | None,
-    idempotency_key: str, settings: VisitPrepSettings = VISIT_PREP_SETTINGS, now: datetime | None = None,
+    idempotency_key: str, settings: VisitPrepSettings | None = None, now: datetime | None = None,
 ) -> InterviewState:
+    settings = _resolved_settings(settings)
     effective, key = _utc(now), _uuid(idempotency_key)
     prep = _load_by_token(token, settings=settings)
     if prep.lifecycle_state == "invited":
@@ -362,7 +379,9 @@ def submit_response(
     try:
         if response_kind == "answered":
             value = _normalize_answer(answer)
-            if pending.kind == "choice" and value not in {c.value for c in pending.choice_options}:
+            if pending.kind == "choice" and value not in {
+                _choice_dict(c)["value"] for c in pending.choice_options
+            }:
                 raise VisitPrepValidation("answer is invalid")
             ciphertext = encrypt_value(_json_compact({"kind": pending.kind, "value": value, "version": 1}))
             payload_hmac = _response_hmac(prep.id, question_key, response_kind, value)
@@ -396,8 +415,9 @@ def submit_response(
         return _interview_state(locked)
 
 def complete_interview(
-    token: str, *, settings: VisitPrepSettings = VISIT_PREP_SETTINGS, now: datetime | None = None,
+    token: str, *, settings: VisitPrepSettings | None = None, now: datetime | None = None,
 ) -> InterviewState:
+    settings = _resolved_settings(settings)
     effective = _utc(now); prep = _load_by_token(token, settings=settings)
     state = _interview_state(prep)
     if state.status == "completed":
@@ -452,7 +472,7 @@ def read_package(*, owner_practice_member_id: TypeIDType, visit_prep_id: TypeIDT
         row_answer = decrypted.get(question.question_key)
         topics.append(TopicSource(
             question.question_key, question.prompt_text, question.kind,
-            tuple({"value": c.value, "label": c.label, "hint": c.hint} for c in question.choice_options),
+            tuple(_choice_dict(c) for c in question.choice_options),
             None if row_answer is None else row_answer[0].response_kind,  # type: ignore[arg-type]
             None if row_answer is None else row_answer[1],
             None if row_answer is None else row_answer[0].recorded_at,

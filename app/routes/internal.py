@@ -52,6 +52,7 @@ from app.configuration.stripe import (
     stripe_webhook_configured,
 )
 from app.routes.scribe_visit_extras import router as scribe_visit_extras_api
+from app.routes.visit_prep_core import visit_prep_provider_api
 from app.services import lab_ranges as lab_ranges_service
 from app.services.billing_header_contract import BillingHeaderSource
 from app.services.biomarkers import (
@@ -258,6 +259,7 @@ internal_api_app.include_router(billing_header_api)
 internal_api_app.include_router(cab_bff_router)
 internal_api_app.include_router(note_template_fields_api)
 internal_api_app.include_router(scribe_visit_extras_api)
+internal_api_app.include_router(visit_prep_provider_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
