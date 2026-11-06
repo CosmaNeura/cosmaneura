@@ -11,10 +11,10 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 SOAP_FIELDS = {
-    "Subjective": "",
-    "Objective": "",
-    "Assessment": "",
-    "Plan": "",
+    "Subjective": "Reported symptoms and history. Retain uncertainty and who reported each fact.",
+    "Objective": "Only observations, examination findings and results supported by the source.",
+    "Assessment": "Only the assessment discussed in the source. Do not infer a diagnosis.",
+    "Plan": "Only the plan discussed in the source, including conditions, corrections and follow-up.",
 }
 MAX_CATALOGUE_TEMPLATES = 100
 

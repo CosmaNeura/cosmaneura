@@ -1,8 +1,10 @@
 """Real locking tests in the root-owned, synthetic-only default SOAP database."""
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -97,26 +99,35 @@ def test_initialization_races_produce_one_owned_soap_and_default(client, engine,
     with Session(engine) as session:
         rows = schemas(session, owner)
         assert len(rows) == 1 and rows[0].note_type == "SOAP"
+        starting_point = json.loads(
+            (
+                Path(__file__).parents[1] / "fixtures/default_soap_starting_point.json"
+            ).read_text()
+        )
         assert rows[0].fields == {
-            "Subjective": "",
-            "Objective": "",
-            "Assessment": "",
-            "Plan": "",
+            field["heading"]: field["guidance"] for field in starting_point
         }
         preference = preference_snapshot(session, owner.id)
         assert preference.default_schema_ref == str(rows[0].id)
     assert client.post("/note-schemas/initialize", json={}).json()["created"] is False
 
 
-@pytest.mark.parametrize("name", ["SOAP", "My custom template"])
-def test_existing_custom_fields_and_chosen_default_are_unchanged(
-    client, engine, owner, name
+@pytest.mark.parametrize(
+    "name,fields",
+    [
+        ("SOAP", {"Custom": "Synthetic custom guidance"}),
+        ("My custom template", {"Custom": "Synthetic custom guidance"}),
+        ("SOAP", {"Subjective": "", "Objective": "", "Assessment": "", "Plan": ""}),
+    ],
+)
+def test_existing_fields_and_chosen_default_are_unchanged(
+    client, engine, owner, name, fields
 ):
     with Session(engine) as session:
         schema = DoctorNoteSchema(
             doctor_id=owner.id,
             note_type=name,
-            fields={"Custom": "Synthetic custom guidance"},
+            fields=fields,
         )
         session.add(schema)
         session.flush()
@@ -130,9 +141,7 @@ def test_existing_custom_fields_and_chosen_default_are_unchanged(
     assert client.post("/note-schemas/initialize", json={}).status_code == 200
     with Session(engine) as session:
         original = session.get(DoctorNoteSchema, reference)
-        assert original is not None and original.fields == {
-            "Custom": "Synthetic custom guidance"
-        }
+        assert original is not None and original.fields == fields
         assert preference_snapshot(session, owner.id).model_dump() == {
             "default_schema_ref": str(reference),
             "revision": 7,

@@ -3,6 +3,9 @@
 Tier 2. Owner: John Clemente. This source change provides the patient-independent
 four-section SOAP template used in the synthetic Scribe preparation, without
 copying any visit, patient, audio, transcript or generated note into an account.
+Its headings and conservative section guidance exactly match the manual SOAP
+starting point. Guidance enters the structured note prompt; initialization never
+rewrites an existing owned SOAP row, including an older blank-guidance template.
 
 ## Outcome and boundaries
 
@@ -44,6 +47,8 @@ the generated client's global authentication and other API calls are unchanged.
    durable deletion; real saved AIVisitNote/example references; ownership and
    body-injection denial; transaction rollback; normal onboarding/native hooks;
    revoked activation, consent and view-as denial.
+   Require guidance parity with the manual starter and exact inclusion in the
+   real structured prompt, without an example visit or model-service call.
 2. Generate the complete internal OpenAPI and locked frontend client; validate
    focused initialization/deletion and Settings behavior, lint and types. Record
    the final commit, commands/results and independent after-push review.
