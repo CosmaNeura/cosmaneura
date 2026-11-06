@@ -826,14 +826,19 @@ verify_azure_deployment_identity() {
 verify_azure_deployment_identity || exit 1
 
 ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	STAGING_CANDIDATE_MANIFEST="$STAGING_REPOSITORY@$STAGING_IMAGE_DIGEST"
+else
+	STAGING_CANDIDATE_MANIFEST="$STAGING_REPOSITORY:$GIT_SHA"
+fi
 if ! PUBLISHED_DIGEST=$(az acr manifest show-metadata \
-	--registry "$ACR_NAME" --name "$STAGING_REPOSITORY:$GIT_SHA" \
+	--registry "$ACR_NAME" --name "$STAGING_CANDIDATE_MANIFEST" \
 	--query digest -o tsv); then
 	echo "Failed to resolve the staging candidate image digest."
 	exit 1
 fi
 if [[ "$PUBLISHED_DIGEST" != "$STAGING_IMAGE_DIGEST" ]]; then
-	echo "The staging candidate tag does not resolve to the approved image digest."
+	echo "The staging candidate manifest does not resolve to the approved image digest."
 	exit 1
 fi
 emit_github_output image_digest "$STAGING_IMAGE_DIGEST" || exit 1

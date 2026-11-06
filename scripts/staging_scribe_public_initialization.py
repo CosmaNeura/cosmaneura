@@ -116,7 +116,12 @@ def environment(state: dict[str, Any]) -> dict[str, dict[str, str]]:
     for entry in entries:
         require(
             type(entry) is dict
-            and set(entry) in ({"name", "value"}, {"name", "secretRef"})
+            and set(entry)
+            in (
+                {"name", "value"},
+                {"name", "secretRef"},
+                {"name", "secretRef", "value"},
+            )
         )
         key = entry["name"]
         require(
@@ -127,7 +132,12 @@ def environment(state: dict[str, Any]) -> dict[str, dict[str, str]]:
         if "secretRef" in entry:
             require(
                 key not in FIELDS
+                and type(entry["secretRef"]) is str
                 and entry["secretRef"] == key.lower().replace("_", "-")
+                and (
+                    "value" not in entry
+                    or (type(entry["value"]) is str and entry["value"] == "")
+                )
             )
             require(entry["secretRef"] in secrets)
         else:
@@ -174,8 +184,14 @@ def transformed(
     container = target["template"]["containers"][0]
     container["image"] = image
     selected = FIELDS if before["name"] == API else {LEDGER}
+    # The bound Azure CLI update fills an absent value with an empty string on
+    # retained secret references. Model that raw representation explicitly;
+    # the reference, resolved secret bytes and ordering remain unchanged.
+    for item in container["env"]:
+        if "secretRef" in item and "value" not in item:
+            item["value"] = ""
     # Preserve every unowned entry and its order. Complete controls include
-    # explicit empty public values; no field is removed or normalized.
+    # explicit empty public values; no other field is removed or normalized.
     container["env"] = [
         (
             {"name": item["name"], "value": controls[item["name"]]}
