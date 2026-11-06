@@ -1,5 +1,14 @@
-import { getClient } from "~/configuration/clerk"
-import { internalApiFetch, safeBillingReturnTo } from "~/lib/billing-recovery"
+import {
+  type BrowserPrincipal,
+  type BrowserPrincipalToken,
+  getBrowserPrincipalToken,
+  getClient,
+} from "~/configuration/clerk"
+import {
+  internalApiFetch,
+  internalApiFetchWithDispatchGuard,
+  safeBillingReturnTo,
+} from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
 
 export type BillingSeatSummary = {
@@ -98,10 +107,22 @@ async function parseError(res: Response): Promise<string> {
 async function practiceRequest<T>(
   path: string,
   init?: RequestInit,
+  auth?: BrowserPrincipalToken,
 ): Promise<T> {
-  const res = await internalApiFetch(`${apiBase()}/internal/v1${path}`, {
+  const headers = auth
+    ? {
+        Authorization: `Bearer ${auth.token}`,
+        "Content-Type": "application/json",
+      }
+    : await authHeaders()
+  auth?.assertCurrent()
+  const fetch = auth
+    ? (input: RequestInfo | URL, init: RequestInit) =>
+        internalApiFetchWithDispatchGuard(input, init, auth.assertCurrent)
+    : internalApiFetch
+  const res = await fetch(`${apiBase()}/internal/v1${path}`, {
     ...init,
-    headers: { ...(await authHeaders()), ...(init?.headers ?? {}) },
+    headers: { ...headers, ...(init?.headers ?? {}) },
     credentials: "include",
   })
   if (!res.ok) throw new Error(await parseError(res))
@@ -115,16 +136,35 @@ export function getPractice() {
   return practiceRequest<PracticeStatus | null>("/practice")
 }
 
-export function attestCurrentPracticeMember(body: {
-  practice_ref: string
-  baa_reference: string
-  attestation_name: string
-  checks: string[]
-}) {
-  return practiceRequest<PracticeStatus>("/practice/attestation", {
-    method: "POST",
-    body: JSON.stringify(body),
-  })
+export async function attestCurrentPracticeMember(
+  body: {
+    practice_ref: string
+    baa_reference: string
+    attestation_name: string
+    checks: string[]
+  },
+  context: { principal: BrowserPrincipal; isCurrent: () => boolean },
+) {
+  const payload = JSON.stringify(body)
+  const auth = await getBrowserPrincipalToken(
+    context.principal,
+    context.isCurrent,
+  )
+  try {
+    const next = await practiceRequest<PracticeStatus>(
+      "/practice/attestation",
+      {
+        method: "POST",
+        body: payload,
+      },
+      auth,
+    )
+    auth.assertCurrent()
+    return next
+  } catch (failure) {
+    auth.assertCurrent()
+    throw failure
+  }
 }
 
 export function getOrganizationAccessOpportunity() {

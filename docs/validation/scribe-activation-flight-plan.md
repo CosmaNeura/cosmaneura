@@ -178,7 +178,16 @@ unattested member.
 
 The metadata commit precedes the existing best-effort activation event; Scribe's
 revocation, cancellation, entitlement and exact cohort fences remain mandatory.
-Backend and Settings changes are separate dependency-ordered source slices.
+The receiver and Settings form ship as one current-member attestation outcome
+in the same Core image. The browser form resets its name and acknowledgements
+when the normalized SDK user/session, displayed practice/BAA or view-as context
+changes. Pending intent is tied to that exact context and the actual SDK session
+object: identity is checked after SDK loading, after token retrieval and after
+the existing view-as request binding, immediately before network dispatch. Late
+success, error and pending-state updates cannot affect a changed or unmounted
+form. SDK identity remains ephemeral and is never added to the attestation body
+or legal records. Other practice API requests keep their existing auth and
+view-as binding behavior.
 This repair needs no migration and does not authorize deployment or activation.
 Recovery removes the form/endpoint through reviewed source while retaining any
 genuinely submitted attestation; reverting code must not erase legal evidence.
