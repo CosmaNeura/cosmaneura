@@ -2739,7 +2739,7 @@ def _attest_current_practice_member(
     practice: Practice,
     member: PracticeMember,
 ) -> PracticeStatus:
-    """Record submitted acknowledgements, never manufacture or restore access."""
+    """Record real acknowledgements without changing memberships, seats, or grants."""
 
     doctor: Doctor = request.state.doctor
     if getattr(request.state, "view_as", None) is not None:
