@@ -20,6 +20,7 @@ from app.services.companion_provider_provisioning import (
     _provider_correspondence,
     _write_provider_correspondence,
 )
+from app.services.default_note_template import provision_default_note_template
 from app.services.doctor_access import resolve_doctor_access
 from app.services.organization_access import member_authorization_basis
 from app.services.scribe_cancellation import digest
@@ -278,6 +279,7 @@ def activate_scribe(
     doctor, practice = activation_provider(
         session, issuer=issuer, subject=subject, settings=settings, lock=True
     )
+    provision_default_note_template(session, doctor.id)
     stable = session.exec(
         select(PracticeScribeTenant)
         .where(PracticeScribeTenant.practice_id == practice.id)
