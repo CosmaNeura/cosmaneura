@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,7 +72,9 @@ def _deploy_control_prefix(configuration: dict[str, str] | None = None) -> str:
     )
     reconciliation_end = deploy.index("\nemit_github_output() {", reconciliation_start)
     return (
-        deploy[capture_start:capture_end]
+        f"REPOSITORY_ROOT={shlex.quote(str(ROOT))}\n"
+        f"PYTHON_BIN={shlex.quote(sys.executable)}\n"
+        + deploy[capture_start:capture_end]
         + f"ENV_JSON='{json.dumps(rendered)}'\n"
         + deploy[reconciliation_start:reconciliation_end]
     )
