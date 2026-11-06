@@ -30,11 +30,13 @@ export default [
       ]),
     ]),
     route("/settings", "routes/settings.tsx"),
+    route("/visit-preps", "routes/visit-preps.tsx"),
     route(
       "/session-prep/citations/:citation_ref",
       "routes/session-prep/citation.tsx",
     ),
   ]),
+  route("visit-prep", "routes/visit-prep-patient.tsx"),
   // public, unauthenticated, intake chat
   route("chat/intake/:id", "routes/chat/intake.tsx"),
   // public legal / support pages
