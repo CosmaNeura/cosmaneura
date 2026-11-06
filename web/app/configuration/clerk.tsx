@@ -198,6 +198,53 @@ export type BrowserPrincipal = Readonly<{
   userId: string | null
   sessionId: string | null
 }>
+export function sameBrowserPrincipal(
+  left: BrowserPrincipal,
+  right: BrowserPrincipal,
+) {
+  return (
+    left.isLoaded === right.isLoaded &&
+    left.userId === right.userId &&
+    left.sessionId === right.sessionId
+  )
+}
+
+export type BrowserPrincipalToken = Readonly<{
+  token: string
+  assertCurrent: () => void
+}>
+
+/** Mutations retain the exact SDK session across loading, token retrieval and dispatch. */
+export async function getBrowserPrincipalToken(
+  expected: BrowserPrincipal,
+  isCurrent: () => boolean,
+): Promise<BrowserPrincipalToken> {
+  const principal = { ...expected }
+  const client = await getClient()
+  const session = client?.session
+  const assertCurrent = () => {
+    if (
+      !principal.isLoaded ||
+      !principal.userId ||
+      !principal.sessionId ||
+      !session ||
+      client?.session !== session ||
+      !sameBrowserPrincipal(browserPrincipal(client), principal) ||
+      !isCurrent()
+    ) {
+      throw new Error(
+        "The signed-in account or session changed. Review the form again.",
+      )
+    }
+  }
+  assertCurrent()
+  const token = await session!.getToken()
+  assertCurrent()
+  if (!token)
+    throw new Error("A signed-in session is required to submit this form.")
+  return { token, assertCurrent }
+}
+
 export type BrowserPrincipalIdentity = Readonly<{
   current: () => BrowserPrincipal
   subscribe: (listener: (principal: BrowserPrincipal) => void) => () => void

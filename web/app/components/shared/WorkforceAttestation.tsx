@@ -54,10 +54,14 @@ export function WorkforceAttestation({
   legalName,
   busy,
   onAttest,
+  submitLabel,
+  busyLabel = "Joining…",
 }: {
   legalName: string
   busy: boolean
   onAttest: (submission: WorkforceAttestationSubmission) => void
+  submitLabel?: string
+  busyLabel?: string
 }) {
   const [checks, setChecks] = useState<Record<string, boolean>>({})
   const [name, setName] = useState("")
@@ -97,7 +101,7 @@ export function WorkforceAttestation({
         }
         size="lg"
       >
-        {busy ? "Joining…" : `Attest and join ${legalName}`}
+        {busy ? busyLabel : (submitLabel ?? `Attest and join ${legalName}`)}
       </Button>
     </div>
   )
