@@ -778,6 +778,7 @@ GRANT_SECRET_ENV_NAME=SOVEREIGN_RECORD_GRANT_SECRET
 RECALL_SECRET_ENV_NAME=RECALL_WEBHOOK_SECRET
 STRIPE_INTEGRATION_ENABLED=false
 STAGING_PRESERVE_EFFECTIVE_CONFIGURATION=false
+STAGING_SCRIBE_INIT_PLAN=
 configure_workload_contract() { container_secret_vars=(); container_public_vars=(); }
 record_grants_enabled_for() { return 1; }
 billing_integration_enabled_for() { return 1; }
