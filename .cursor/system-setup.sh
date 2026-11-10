@@ -15,9 +15,15 @@ CURSOR_SETUP_DIR="$(cd -P "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P
 source "$CURSOR_SETUP_DIR/credential-neutral.sh"
 cursor_require_credential_neutral
 
+echo "== [system] remove legacy host-wide Localias trust =="
+sudo /bin/rm -f -- /usr/local/share/ca-certificates/localias-root.crt
+if [[ -x /usr/sbin/update-ca-certificates ]]; then
+  sudo /usr/sbin/update-ca-certificates --fresh >/dev/null 2>&1 </dev/null
+fi
+
 echo "== [system] apt packages =="
 APT_PACKAGES=(
-  zsh libnss3-tools poppler-utils ffmpeg
+  zsh acl libnss3-tools poppler-utils ffmpeg
   ca-certificates curl gnupg lsb-release jq
   postgresql-client redis-tools
   libpq-dev build-essential lsof
@@ -33,22 +39,40 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 echo "== [system] docker engine =="
-if ! command -v docker >/dev/null 2>&1; then
+if [[ ! -x /usr/bin/docker || ! -x /usr/bin/dockerd ]] \
+  || ! /usr/bin/docker compose version >/dev/null 2>&1; then
   bash "$CURSOR_SETUP_DIR/../scripts/install_verified_docker_apt_key.sh"
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME:?} stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
   sudo apt-get "${APT_CONFOLD[@]}" -o Acquire::Retries=3 update -qq
   sudo apt-get "${APT_CONFOLD[@]}" -o Acquire::Retries=3 install -y --no-install-recommends \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
-sudo usermod -aG docker "$USER" 2>/dev/null || true
 
-# Nested overlayfs cannot convert whiteout files; use fuse-overlayfs and the
-# classic graphdriver instead of the containerd snapshotter.
-if [ ! -f /etc/docker/daemon.json ]; then
-  sudo mkdir -p /etc/docker
-  echo '{ "features": { "containerd-snapshotter": false }, "storage-driver": "fuse-overlayfs" }' \
-    | sudo tee /etc/docker/daemon.json >/dev/null
+# A running platform-managed daemon keeps its own effective configuration. Only
+# provision the nested-agent configuration when no daemon owns the exact local
+# socket; services.sh separately rejects non-local listeners. Nested overlayfs
+# cannot convert whiteouts, so a daemon started by this bootstrap must use
+# fuse-overlayfs and the classic graphdriver.
+if ! sudo /usr/bin/env -i \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/bin/docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+  if sudo test -L /etc/docker/daemon.json; then
+    echo "Docker daemon configuration must not be a symlink." >&2
+    exit 1
+  elif ! sudo test -e /etc/docker/daemon.json; then
+    sudo mkdir -p /etc/docker
+    echo '{ "features": { "containerd-snapshotter": false }, "storage-driver": "fuse-overlayfs" }' \
+      | sudo tee /etc/docker/daemon.json >/dev/null
+  fi
+  if ! sudo /usr/bin/jq -e \
+    '."storage-driver" == "fuse-overlayfs" and .features."containerd-snapshotter" == false and .hosts == null' \
+    /etc/docker/daemon.json >/dev/null; then
+    echo "Docker daemon configuration is not the required local-only nested setup." >&2
+    exit 1
+  fi
 fi
 
 echo "== [system] mise (pinned toolchain manager) =="
