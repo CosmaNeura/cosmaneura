@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { CreateNoteTemplate } from "~/components/CreateNoteTemplate"
 import { DefaultNoteTemplate } from "~/components/DefaultNoteTemplate"
+import { DefaultTemplateSetup } from "~/components/DefaultTemplateSetup"
+import { DeleteNoteTemplate } from "~/components/DeleteNoteTemplate"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { NoteTemplateFieldsEditor } from "~/components/NoteTemplateFieldsEditor"
@@ -294,7 +296,13 @@ function BiographyInput({ biography }: { biography: string | null }) {
   )
 }
 
-function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
+function NoteSchemaDisplay({
+  noteSchemas,
+  doctorId,
+}: {
+  noteSchemas: NoteSchema[]
+  doctorId: string
+}) {
   const [expandedIds, setExpandedIds] = useState<string[]>([])
   const revalidator = useRevalidator()
 
@@ -309,6 +317,13 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
       <h3>Note templates</h3>
+      {!noteSchemas.some((schema) => schema.note_type === "SOAP") && (
+        <DefaultTemplateSetup
+          key={doctorId}
+          doctorId={doctorId}
+          onCreated={() => void revalidator.revalidate()}
+        />
+      )}
       {noteSchemas.length > 0 ? (
         <p>
           Choose the sections used for future notes. Existing saved notes are
@@ -359,6 +374,12 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 schemaId={schema.id}
                 onSaved={() => void revalidator.revalidate()}
               />
+              <DeleteNoteTemplate
+                doctorId={doctorId}
+                schemaId={schema.id}
+                name={schema.note_type}
+                onDeleted={() => void revalidator.revalidate()}
+              />
             </>
           )}
         </div>
@@ -402,7 +423,13 @@ function NoteCustomization({
   )
 }
 
-function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
+function NoteUpload({
+  noteSchemas,
+  doctorId,
+}: {
+  noteSchemas: NoteSchema[]
+  doctorId: string
+}) {
   const t = useTerminology()
   const formSchema = z.object({
     note_type: z.string(),
@@ -551,7 +578,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
           </section>
         </form>
       </Form>
-      <NoteSchemaDisplay noteSchemas={noteSchemas} />
+      <NoteSchemaDisplay noteSchemas={noteSchemas} doctorId={doctorId} />
     </div>
   )
 }
@@ -945,7 +972,10 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
                 </SettingsAnchorTarget>
               )}
               <SettingsAnchorTarget anchor={ANCHORS.noteTypes}>
-                <NoteUpload noteSchemas={loaderData.notes_schema} />
+                <NoteUpload
+                  noteSchemas={loaderData.notes_schema}
+                  doctorId={loaderData.doctor_id}
+                />
               </SettingsAnchorTarget>
               {hasNoteTypes && (
                 <SettingsAnchorTarget anchor={ANCHORS.aiOutput}>

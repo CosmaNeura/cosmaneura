@@ -66,6 +66,7 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
+from app.services.default_note_template import provision_default_note_template
 from app.services.doctor_access import (
     DoctorAccessDecision,
     practice_members_access_in_force,
@@ -3050,9 +3051,14 @@ def complete_onboarding(request: Request) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
         )
+    doctor_ref = doctor.id
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
-    doctor.save()
-    activate_scribe_after_commit(trigger="onboarding", doctor_ref=doctor.id)
+    with get_session() as session:
+        session.add(doctor)
+        provision_default_note_template(session, doctor_ref)
+        session.commit()
+        session.refresh(doctor)
+    activate_scribe_after_commit(trigger="onboarding", doctor_ref=doctor_ref)
 
 
 class BillingCheckoutBody(BaseModel, extra="forbid"):
