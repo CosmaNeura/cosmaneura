@@ -19,6 +19,8 @@ def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+# Proof (b): real follow-up change so a newer synchronize cancels the prior
+# in-progress Pull Request Checks run via the workflow concurrency group.
 def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
     workflow = _workflow()
@@ -48,14 +50,14 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
         if step.get("name") == "Require every backend prerequisite to succeed"
     )
     assert gate["run"] == (
-        "if [[ \"$BACKEND_QUALITY_RESULT\" != \"success\" "
-        "|| \"$BACKEND_TESTS_RESULT\" != \"success\" ]]; then\n"
-        "  if [[ \"$BACKEND_TESTS_RESULT\" == \"skipped\" ]]; then\n"
-        "    echo \"::error::Light draft run is red by design "
-        "(backend-tests skipped). Add the ci:full label for a full run.\"\n"
+        'if [[ "$BACKEND_QUALITY_RESULT" != "success" '
+        '|| "$BACKEND_TESTS_RESULT" != "success" ]]; then\n'
+        '  if [[ "$BACKEND_TESTS_RESULT" == "skipped" ]]; then\n'
+        '    echo "::error::Light draft run is red by design '
+        '(backend-tests skipped). Add the ci:full label for a full run."\n'
         "  else\n"
-        "    echo \"::error::Backend prerequisites did not all succeed "
-        "(quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT).\"\n"
+        '    echo "::error::Backend prerequisites did not all succeed '
+        '(quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."\n'
         "  fi\n"
         "  exit 1\n"
         "fi\n"
