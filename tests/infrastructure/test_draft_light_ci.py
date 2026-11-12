@@ -21,6 +21,7 @@ def _workflow() -> dict:
 
 # Proof (b): real follow-up change so a newer synchronize cancels the prior
 # in-progress Pull Request Checks run via the workflow concurrency group.
+# Follow-up: keep this file as the only non-empty synchronize for proof (c).
 def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
     workflow = _workflow()
