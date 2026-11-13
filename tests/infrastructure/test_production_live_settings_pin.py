@@ -52,17 +52,30 @@ def _names_fixture() -> dict[str, list[str]]:
 
 
 def _hcl_object_block(source: str, name: str) -> str:
-    match = re.search(rf"{re.escape(name)}\s*=\s*\{{", source)
+    """Return the RHS of `name = ...`, including merge()/ternary object locals."""
+    match = re.search(rf"(?m)^\s*{re.escape(name)}\s*=\s*", source)
     assert match is not None, f"missing object assignment for {name}"
-    start = match.end() - 1
-    depth = 0
+    start = match.end()
+    depth_brace = depth_paren = depth_bracket = 0
+    started = False
     for index, char in enumerate(source[start:], start=start):
         if char == "{":
-            depth += 1
+            depth_brace += 1
+            started = True
         elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start : index + 1]
+            depth_brace -= 1
+        elif char == "(":
+            depth_paren += 1
+            started = True
+        elif char == ")":
+            depth_paren -= 1
+        elif char == "[":
+            depth_bracket += 1
+            started = True
+        elif char == "]":
+            depth_bracket -= 1
+        if started and depth_brace == 0 and depth_paren == 0 and depth_bracket == 0:
+            return source[start : index + 1]
     raise AssertionError(f"unclosed object for {name}")
 
 
@@ -123,7 +136,20 @@ def _projected_names(container: str) -> set[str]:
     for local_name, path in local_sources.items():
         if f"local.{local_name}" not in body:
             continue
-        projected |= _env_tokens(_read(path))
+        file_source = _read(path)
+        projected |= _env_tokens(_hcl_object_block(file_source, local_name))
+        # Keys for the for-expression local live on the defaults object.
+        if local_name == "core_cab_public_values":
+            projected |= _env_tokens(
+                _hcl_object_block(file_source, "core_cab_public_defaults")
+            )
+        # API cancellation merge starts from the shared ledger local.
+        if local_name == "scribe_cancellation_api_public_values":
+            projected |= _env_tokens(
+                _hcl_object_block(
+                    file_source, "scribe_cancellation_shared_public_values"
+                )
+            )
 
     if "var.python_public_vars" in body:
         projected |= _default_string_list("python_public_vars")
