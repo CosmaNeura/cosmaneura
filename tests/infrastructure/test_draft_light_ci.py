@@ -31,16 +31,29 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
     assert jobs["ci-mode"]["runs-on"] == "ubuntu-24.04"
     assert jobs["ci-mode"]["outputs"]["full"] == "${{ steps.decide.outputs.full }}"
 
+    label_gate = (
+        "github.event.action != 'labeled' || github.event.label.name == 'ci:full'"
+    )
+
     backend_tests = jobs["backend-tests"]
     assert backend_tests["needs"] == ["ci-mode"]
-    assert backend_tests["if"] == "needs.ci-mode.outputs.full != 'false'"
+    assert backend_tests["if"] == (
+        "${{ (" + label_gate + ") && needs.ci-mode.outputs.full != 'false' }}"
+    )
 
-    assert "if" not in jobs["web"]
-    assert "if" not in jobs["backend-quality"]
+    assert jobs["ci-mode"]["if"] == "${{ " + label_gate + " }}"
+    assert jobs["web"]["if"] == "${{ " + label_gate + " }}"
+    assert jobs["backend-quality"]["if"] == "${{ " + label_gate + " }}"
     assert "ci-mode.outputs.full" not in str(jobs["web"])
     assert "ci-mode.outputs.full" not in str(jobs["backend-quality"])
-    assert jobs["app"]["if"] == "${{ always() }}"
+    assert jobs["app"]["if"] == "${{ always() && (" + label_gate + ") }}"
     assert "ci-mode.outputs.full" not in str(jobs["app"]["if"])
+    # PyYAML parses the workflow key `on` as boolean True.
+    assert (
+        "    types: [opened, synchronize, reopened, ready_for_review, labeled]\n"
+        in source
+    )
+    assert "unlabeled" not in source[source.index("on:") : source.index("jobs:\n")]
 
     backend = jobs["app"]
     assert backend["name"] == "Backend"

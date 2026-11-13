@@ -16,6 +16,8 @@ WORKFLOWS = (
     ROOT / ".github/workflows/build_and_publish_local.yml",
     ROOT / ".github/workflows/deploy_staging_candidate.yml",
 )
+# Fine-grained logical shards retained for deploy/release matrices and for
+# proving every pytest nodeid still belongs to exactly one partition.
 SHARDS = (
     "application",
     "infrastructure-general",
@@ -49,6 +51,64 @@ SHARDS = (
     "infrastructure-restore",
     "integration",
 )
+# Pull Request Checks pays setup once per bundle by composing the logical
+# recipes above. Deploy workflows keep SHARDS unchanged.
+PR_JOB_SHARDS = (
+    "application",
+    "infrastructure-core",
+    "infrastructure-sanitizer-source",
+    "infrastructure-sanitizer-evidence-exec",
+    "infrastructure-sanitizer-observer-bundle",
+    "infrastructure-sanitizer-connection-plan-bundle",
+    "infrastructure-sanitizer-bootstrap-bundle",
+    "infrastructure-restore",
+    "integration",
+)
+PR_JOB_MEMBERS = {
+    "application": ("application",),
+    "infrastructure-core": (
+        "infrastructure-general",
+        "infrastructure-controller",
+        "infrastructure-receipt-io",
+    ),
+    "infrastructure-sanitizer-source": (
+        "infrastructure-sanitizer-foundation",
+        "infrastructure-sanitizer-source-state-authority",
+        "infrastructure-sanitizer-source-state-context",
+        "infrastructure-sanitizer-source-state-integrity",
+    ),
+    "infrastructure-sanitizer-evidence-exec": (
+        "infrastructure-sanitizer-evidence",
+        "infrastructure-sanitizer-evidence-integrity",
+        "infrastructure-sanitizer-executor",
+        "infrastructure-sanitizer-data-contract-executor",
+        "infrastructure-sanitizer-source-snapshot",
+    ),
+    "infrastructure-sanitizer-observer-bundle": (
+        "infrastructure-sanitizer-observer",
+        "infrastructure-sanitizer-observer-runtime",
+        "infrastructure-sanitizer-observer-output",
+        "infrastructure-sanitizer-observer-integrity",
+    ),
+    "infrastructure-sanitizer-connection-plan-bundle": (
+        "infrastructure-sanitizer-observer-connection-plan",
+        "infrastructure-sanitizer-observer-connection-plan-state",
+        "infrastructure-sanitizer-observer-connection-plan-output",
+        "infrastructure-sanitizer-observer-connection-plan-contract",
+    ),
+    "infrastructure-sanitizer-bootstrap-bundle": (
+        "infrastructure-sanitizer-bootstrap-binding",
+        "infrastructure-sanitizer-bootstrap-binding-digest",
+        "infrastructure-sanitizer-bootstrap-binding-ancestry",
+        "infrastructure-sanitizer-bootstrap-binding-state",
+        "infrastructure-sanitizer-bootstrap-binding-output",
+        "infrastructure-sanitizer-bootstrap-binding-duplicate",
+        "infrastructure-sanitizer-bootstrap-binding-tamper",
+        "infrastructure-sanitizer-bootstrap-binding-failure",
+    ),
+    "infrastructure-restore": ("infrastructure-restore",),
+    "integration": ("integration",),
+}
 FILE_SHARDS = tuple(
     shard
     for shard in SHARDS
@@ -691,7 +751,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
-    integration_end = source.index("\n# run tests with", integration_start)
+    integration_end = source.index(
+        "\n# Pull Request Checks consolidates", integration_start
+    )
     integration_recipe = source[integration_start:integration_end]
     infrastructure_general_recipe = source[
         infrastructure_general_start:infrastructure_controller_start
@@ -1468,6 +1530,31 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     ) == set(family)
 
 
+def test_pr_job_bundles_cover_every_logical_shard_exactly_once() -> None:
+    members = [member for group in PR_JOB_SHARDS for member in PR_JOB_MEMBERS[group]]
+    assert tuple(PR_JOB_MEMBERS) == PR_JOB_SHARDS
+    assert sorted(members) == sorted(SHARDS)
+    assert len(members) == len(set(members)) == len(SHARDS)
+
+    source = PYTHON_JUST.read_text(encoding="utf-8")
+    for job_shard, logical_shards in PR_JOB_MEMBERS.items():
+        assert source.count(f"py_test-ci-{job_shard}:") == 1
+        if logical_shards == (job_shard,):
+            continue
+        start = source.index(f"py_test-ci-{job_shard}:")
+        remainder = source[start:]
+        next_script = remainder.find("\n[script]\n", 1)
+        next_banner = remainder.find("\n# run tests with")
+        ends = [index for index in (next_script, next_banner) if index > 0]
+        recipe = source[start : start + min(ends)]
+        invoked = {
+            line.strip()
+            for line in recipe.splitlines()
+            if line.strip().startswith("just py_test-ci-")
+        }
+        assert invoked == {f"just py_test-ci-{logical}" for logical in logical_shards}
+
+
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
 def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> None:
     jobs = _workflow(path)["jobs"]
@@ -1477,12 +1564,17 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
 
     assert quality["name"] in {"Backend quality", "Candidate backend quality"}
     assert quality["timeout-minutes"] == 20
-    assert tests["timeout-minutes"] == 30
+    expected_shards = (
+        PR_JOB_SHARDS if path.name == "pull_request_checks.yml" else SHARDS
+    )
+    assert tests["timeout-minutes"] == (
+        60 if path.name == "pull_request_checks.yml" else 30
+    )
     assert tests["strategy"]["fail-fast"] is False
     matrix = tests["strategy"]["matrix"]["include"]
-    assert [entry["shard"] for entry in matrix] == list(SHARDS)
+    assert [entry["shard"] for entry in matrix] == list(expected_shards)
     assert [entry["apt-packages"] for entry in matrix] == ["zsh"] * (
-        len(SHARDS) - 1
+        len(expected_shards) - 1
     ) + ["zsh libnss3-tools"]
     assert "needs" not in quality or quality["needs"] == "authorize"
     if path.name == "pull_request_checks.yml":
@@ -1560,15 +1652,20 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         ]
     else:
         assert aggregator["needs"] == ["backend-quality", "backend-tests"]
-    if path.name == "build_and_publish_local.yml":
-        assert "always()" in aggregator["if"]
-        assert "inputs.github_hosted_fallback_authorized" in aggregator["if"]
-    elif path.name != "deploy_staging_candidate.yml":
-        assert aggregator["if"] == "${{ always() }}"
-    assert aggregator["timeout-minutes"] == 5
-    assert "continue-on-error" not in quality
-    assert "continue-on-error" not in tests
-    assert "continue-on-error" not in aggregator
+        if path.name == "build_and_publish_local.yml":
+            assert "always()" in aggregator["if"]
+            assert "inputs.github_hosted_fallback_authorized" in aggregator["if"]
+        elif path.name == "pull_request_checks.yml":
+            assert aggregator["if"] == (
+                "${{ always() && (github.event.action != 'labeled' "
+                "|| github.event.label.name == 'ci:full') }}"
+            )
+        elif path.name != "deploy_staging_candidate.yml":
+            assert aggregator["if"] == "${{ always() }}"
+        assert aggregator["timeout-minutes"] == 5
+        assert "continue-on-error" not in quality
+        assert "continue-on-error" not in tests
+        assert "continue-on-error" not in aggregator
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
@@ -1629,13 +1726,22 @@ def test_shards_do_not_weaken_or_recombine_coverage() -> None:
     recipe_source = PYTHON_JUST.read_text(encoding="utf-8")
     shard_source = recipe_source[
         recipe_source.index("py_test-ci-application:") : recipe_source.index(
-            "\n# run tests with"
+            "\n# Pull Request Checks consolidates"
         )
     ]
     assert "--cov-append" not in shard_source
     assert "xdist" not in shard_source
     assert "--deselect" not in shard_source
     assert " -k " not in shard_source
+    bundles = recipe_source[
+        recipe_source.index("\n# Pull Request Checks consolidates") : recipe_source.index(
+            "\n# run tests with"
+        )
+    ]
+    assert "--cov-append" not in bundles
+    assert "xdist" not in bundles
+    assert "--deselect" not in bundles
+    assert " -k " not in bundles
 
     for path in WORKFLOWS:
         tests = _workflow(path)["jobs"]["backend-tests"]

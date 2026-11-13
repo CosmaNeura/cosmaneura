@@ -26,6 +26,7 @@ env:
 
 jobs:
   ci-mode:
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -43,6 +44,7 @@ jobs:
 
   backend-quality:
     name: Backend quality
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -63,70 +65,26 @@ jobs:
   backend-tests:
     name: Backend tests (${{ matrix.shard }})
     needs: [ci-mode]
-    if: needs.ci-mode.outputs.full != 'false'
+    if: ${{ (github.event.action != 'labeled' || github.event.label.name == 'ci:full') && needs.ci-mode.outputs.full != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - shard: application
             apt-packages: zsh
-          - shard: infrastructure-general
+          - shard: infrastructure-core
             apt-packages: zsh
-          - shard: infrastructure-controller
+          - shard: infrastructure-sanitizer-source
             apt-packages: zsh
-          - shard: infrastructure-receipt-io
+          - shard: infrastructure-sanitizer-evidence-exec
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-foundation
+          - shard: infrastructure-sanitizer-observer-bundle
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-state-authority
+          - shard: infrastructure-sanitizer-connection-plan-bundle
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-state-context
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-state-integrity
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-evidence
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-evidence-integrity
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-executor
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-runtime
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-output
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan-state
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan-output
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan-contract
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-digest
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-ancestry
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-state
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-output
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-duplicate
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-tamper
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-failure
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-integrity
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-data-contract-executor
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-snapshot
+          - shard: infrastructure-sanitizer-bootstrap-bundle
             apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
@@ -167,7 +125,7 @@ jobs:
   app:
     name: Backend
     needs: [backend-quality, backend-tests, ci-mode]
-    if: ${{ always() }}
+    if: ${{ always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:full') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -187,6 +145,7 @@ jobs:
 
   web:
     name: Frontend
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

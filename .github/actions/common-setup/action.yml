@@ -76,3 +76,12 @@ runs:
         key: ${{ runner.os }}-node-modules-${{ hashFiles('web/pnpm-lock.yaml') }}
         restore-keys: |
           ${{ runner.os }}-node-modules
+    # uv's package cache (wheels/sdists). mise-action already caches tool
+    # binaries; this avoids re-downloading locked Python deps on every shard.
+    - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      if: inputs.enable_cache == 'true'
+      with:
+        path: ~/.cache/uv
+        key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-uv-

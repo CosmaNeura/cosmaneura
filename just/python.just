@@ -383,6 +383,62 @@ py_test-ci-integration:
 	just _banner_echo "Running Integration"
 	uv run pytest tests/integration --verbosity=2 {{PYTEST_COV_PARAMS}}
 
+# Pull Request Checks consolidates the fine-grained CI recipes above into fewer
+# longer jobs so setup overhead is paid once per bundle. Deploy/release workflows
+# keep the fine-grained matrix. Each bundle calls the same CI-only recipes, so
+# the collected test IDs stay identical to the 31-shard partition.
+[script]
+py_test-ci-infrastructure-core:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-core is CI-only" >&2; exit 1; }
+	just py_test-ci-infrastructure-general
+	just py_test-ci-infrastructure-controller
+	just py_test-ci-infrastructure-receipt-io
+
+[script]
+py_test-ci-infrastructure-sanitizer-source:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source is CI-only" >&2; exit 1; }
+	just py_test-ci-infrastructure-sanitizer-foundation
+	just py_test-ci-infrastructure-sanitizer-source-state-authority
+	just py_test-ci-infrastructure-sanitizer-source-state-context
+	just py_test-ci-infrastructure-sanitizer-source-state-integrity
+
+[script]
+py_test-ci-infrastructure-sanitizer-evidence-exec:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-evidence-exec is CI-only" >&2; exit 1; }
+	just py_test-ci-infrastructure-sanitizer-evidence
+	just py_test-ci-infrastructure-sanitizer-evidence-integrity
+	just py_test-ci-infrastructure-sanitizer-executor
+	just py_test-ci-infrastructure-sanitizer-data-contract-executor
+	just py_test-ci-infrastructure-sanitizer-source-snapshot
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-bundle:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-bundle is CI-only" >&2; exit 1; }
+	just py_test-ci-infrastructure-sanitizer-observer
+	just py_test-ci-infrastructure-sanitizer-observer-runtime
+	just py_test-ci-infrastructure-sanitizer-observer-output
+	just py_test-ci-infrastructure-sanitizer-observer-integrity
+
+[script]
+py_test-ci-infrastructure-sanitizer-connection-plan-bundle:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-connection-plan-bundle is CI-only" >&2; exit 1; }
+	just py_test-ci-infrastructure-sanitizer-observer-connection-plan
+	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-state
+	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-output
+	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-bundle:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-bundle is CI-only" >&2; exit 1; }
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-state
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-output
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper
+	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure
+
 # run tests with the exact same environment that will be used on CI
 [script]
 py_test:
