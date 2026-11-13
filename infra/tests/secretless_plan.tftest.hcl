@@ -1,3 +1,9 @@
+# Keep provider-mocked runs on dark variable defaults. Production plans use
+# use_production_live_settings_pin=true (the variable default) so live pins apply.
+variables {
+  use_production_live_settings_pin = false
+}
+
 mock_provider "azapi" {
   mock_resource "azapi_resource" {
     defaults = {
@@ -283,6 +289,24 @@ run "secretless_static_plan" {
       one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_HANDOFF_ENABLED"]) == "false",
     ])
     error_message = "the production wiring must not activate the unprovisioned external workflow or legacy handoff"
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.app, azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == "false"
+      ]) && alltrue([
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_ENABLED"]) == "false",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED"]) == "false",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED"]) == "false",
+      ]) && alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      alltrue([
+        for name in ["SCRIBE_CANCELLATION_ENABLED", "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED", "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED"] :
+        !contains([for entry in workload.template[0].container[0].env : entry.name], name)
+      ])
+    ])
+    error_message = "cancellation ledger/intake and workflow-client flags must stay dark by default with intake and client flags API-only"
   }
 
   assert {
@@ -996,6 +1020,84 @@ run "scribe_bundle_default_keeps_three_containers_dark" {
   assert {
     condition     = local.scribe_bundle_api_values == { SCRIBE_BUNDLE_API_ENABLED = "false" } && local.scribe_bundle_worker_values == { SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = "false" } && local.scribe_bundle_scheduler_values == local.scribe_bundle_worker_values && length(data.azurerm_user_assigned_identity.scribe_bundle_translation) == 0 && length(azurerm_container_app.worker.identity[0].identity_ids) == 1
     error_message = "default bundle must not attach an identity, stage configuration or activate any of the three Core containers"
+  }
+}
+
+run "production_live_cancellation_and_workflow_client_pin" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    enable_scribe_workflow                         = true
+    scribe_service_base_url                        = "https://app.cosmaneura.com"
+    scribe_service_scope                           = "api://57264fe1-6a4a-4946-8412-e0be18805977/.default"
+    scribe_native_workload_rollout = {
+      enabled                         = true
+      audience                        = "af957741-0342-498b-8496-e93706af9e99"
+      client_id                       = "c7bae168-fbf5-4658-b0d9-dd4b5373a1be"
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = true
+      native_visit_actions_v2_enabled = true
+    }
+    scribe_native_production_rollout = {
+      capture_enabled                       = true
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = true
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = ["https://cosmaneurascribeprod.blob.core.windows.net"]
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+    scribe_cancellation_production_rollout = {
+      ledger_ready  = true
+      enabled       = true
+      grace_days    = 90
+      phi_scope     = "core-and-scribe-clinical-records"
+      policy_sha256 = "0855d28a58941adcf5d8899bb1bcfc670070e24e2b25674fbe5235a77a5f00d8"
+    }
+    scribe_workflow_client_production_rollout = {
+      identity_reuse_enabled = true
+      http_pool_enabled      = true
+    }
+  }
+  assert {
+    condition = alltrue([for name, value in {
+      SCRIBE_CANCELLATION_LEDGER_READY              = "true"
+      SCRIBE_CANCELLATION_ENABLED                   = "true"
+      SCRIBE_CANCELLATION_GRACE_DAYS                = "90"
+      SCRIBE_CANCELLATION_PHI_SCOPE                 = "core-and-scribe-clinical-records"
+      SCRIBE_CANCELLATION_POLICY_SHA256             = "0855d28a58941adcf5d8899bb1bcfc670070e24e2b25674fbe5235a77a5f00d8"
+      SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED        = "true"
+      SCRIBE_WORKFLOW_HTTP_POOL_ENABLED             = "true"
+      SCRIBE_WORKFLOW_ENABLED                       = "true"
+      SCRIBE_SERVICE_BASE_URL                       = "https://app.cosmaneura.com"
+      SCRIBE_SERVICE_SCOPE                          = "api://57264fe1-6a4a-4946-8412-e0be18805977/.default"
+      SCRIBE_NATIVE_WORKLOAD_ENABLED                = "true"
+      SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED        = "true"
+      SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED = "true"
+      SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED        = "true"
+      SCRIBE_CAPTURE_ENABLED                        = "true"
+      SCRIBE_CAPTURE_NOTES_ENABLED                  = "true"
+      SCRIBE_CAPTURE_UPLOAD_ORIGINS                 = "https://cosmaneurascribeprod.blob.core.windows.net"
+    } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
+    error_message = "API must project the live-pinned cancellation, workflow-client, native and capture settings"
+  }
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == "true"
+      ]) && alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      alltrue([
+        for name in ["SCRIBE_CANCELLATION_ENABLED", "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED", "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED", "SCRIBE_CAPTURE_ENABLED"] :
+        !contains([for entry in workload.template[0].container[0].env : entry.name], name)
+      ])
+    ])
+    error_message = "worker and scheduler must keep the shared ledger fence only; intake and workflow-client flags stay API-only"
   }
 }
 
