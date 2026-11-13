@@ -69,7 +69,9 @@ jobs:
     needs: [ci-mode]
     if: ${{ (github.event.action != 'labeled' || github.event.label.name == 'ci:full') && needs.ci-mode.outputs.full != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Coverage-heavy bootstrap recipes take ~15-17m each; two primary/secondary
+    # bundles need headroom above a single 60m job ceiling.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -86,7 +88,9 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-connection-plan-bundle
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-bundle
+          - shard: infrastructure-sanitizer-bootstrap-primary
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-secondary
             apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh

@@ -60,7 +60,8 @@ PR_JOB_SHARDS = (
     "infrastructure-sanitizer-evidence-exec",
     "infrastructure-sanitizer-observer-bundle",
     "infrastructure-sanitizer-connection-plan-bundle",
-    "infrastructure-sanitizer-bootstrap-bundle",
+    "infrastructure-sanitizer-bootstrap-primary",
+    "infrastructure-sanitizer-bootstrap-secondary",
     "infrastructure-restore",
     "integration",
 )
@@ -96,11 +97,13 @@ PR_JOB_MEMBERS = {
         "infrastructure-sanitizer-observer-connection-plan-output",
         "infrastructure-sanitizer-observer-connection-plan-contract",
     ),
-    "infrastructure-sanitizer-bootstrap-bundle": (
+    "infrastructure-sanitizer-bootstrap-primary": (
         "infrastructure-sanitizer-bootstrap-binding",
         "infrastructure-sanitizer-bootstrap-binding-digest",
         "infrastructure-sanitizer-bootstrap-binding-ancestry",
         "infrastructure-sanitizer-bootstrap-binding-state",
+    ),
+    "infrastructure-sanitizer-bootstrap-secondary": (
         "infrastructure-sanitizer-bootstrap-binding-output",
         "infrastructure-sanitizer-bootstrap-binding-duplicate",
         "infrastructure-sanitizer-bootstrap-binding-tamper",
@@ -1568,7 +1571,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         PR_JOB_SHARDS if path.name == "pull_request_checks.yml" else SHARDS
     )
     assert tests["timeout-minutes"] == (
-        60 if path.name == "pull_request_checks.yml" else 30
+        90 if path.name == "pull_request_checks.yml" else 30
     )
     assert tests["strategy"]["fail-fast"] is False
     matrix = tests["strategy"]["matrix"]["include"]
