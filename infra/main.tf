@@ -812,6 +812,11 @@ resource "azurerm_container_app" "app" {
     }
 
     precondition {
+      condition     = local.production_live_effective_settings_valid
+      error_message = "production live settings pin requires default pin inputs plus valid effective cancellation, native/workflow, and bundle JSON/digest contracts"
+    }
+
+    precondition {
       condition     = local.session_prep_production_prerequisites_valid
       error_message = "Session Prep production activation requires the exact Clerk issuer and an existing record-grant signing secret"
     }

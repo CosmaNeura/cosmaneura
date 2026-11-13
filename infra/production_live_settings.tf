@@ -110,4 +110,100 @@ locals {
     ? local.production_live_scribe_core_bundle
     : var.scribe_core_bundle
   )
+
+  # When the pin is on, the nine source-controlled pin inputs must remain at
+  # their dark defaults so plan/apply cannot mix -var overrides with the live
+  # locals. Effective values below are validated independently of the vars.
+  production_live_pin_inputs_remain_default = (
+    !var.use_production_live_settings_pin || (
+      var.enable_scribe_workflow == false &&
+      var.scribe_service_base_url == "" &&
+      var.scribe_service_scope == "" &&
+      var.scribe_service_timeout_seconds == 60 &&
+      var.scribe_cancellation_production_rollout.ledger_ready == false &&
+      var.scribe_cancellation_production_rollout.enabled == false &&
+      var.scribe_cancellation_production_rollout.grace_days == 90 &&
+      var.scribe_cancellation_production_rollout.phi_scope == "core-and-scribe-clinical-records" &&
+      var.scribe_cancellation_production_rollout.policy_sha256 == "" &&
+      var.scribe_workflow_client_production_rollout.identity_reuse_enabled == false &&
+      var.scribe_workflow_client_production_rollout.http_pool_enabled == false &&
+      var.scribe_native_workload_rollout.enabled == false &&
+      var.scribe_native_workload_rollout.audience == "" &&
+      var.scribe_native_workload_rollout.client_id == "" &&
+      var.scribe_native_workload_rollout.provider_context_enabled == false &&
+      var.scribe_native_workload_rollout.existing_patient_visits_enabled == false &&
+      var.scribe_native_workload_rollout.native_visit_actions_v2_enabled == false &&
+      var.scribe_native_production_rollout.capture_enabled == false &&
+      var.scribe_native_production_rollout.capture_long_visits_enabled == false &&
+      var.scribe_native_production_rollout.capture_notes_enabled == false &&
+      var.scribe_native_production_rollout.capture_recovery_enabled == false &&
+      var.scribe_native_production_rollout.capture_source_enabled == false &&
+      length(var.scribe_native_production_rollout.capture_upload_origins) == 0 &&
+      var.scribe_native_production_rollout.capture_working_transcripts_enabled == false &&
+      var.scribe_native_production_rollout.combined_session_preparation_enabled == false &&
+      var.scribe_native_production_rollout.encounter_creation_enabled == false &&
+      var.scribe_native_production_rollout.encounter_prep_enabled == false &&
+      var.scribe_native_production_rollout.zoom_durable_capture_bindings_enabled == false &&
+      var.scribe_core_bundle.api_enabled == false &&
+      var.scribe_core_bundle.captured_worker_enabled == false &&
+      var.scribe_core_bundle.attach_existing_translation_identity == false &&
+      var.scribe_core_bundle.api_configuration_json == "" &&
+      var.scribe_core_bundle.receiver_configuration_json == "" &&
+      var.scribe_core_bundle.receiver_contract_sha256 == "" &&
+      var.scribe_core_bundle.speech_configuration_json == "" &&
+      var.scribe_core_bundle.translation_configuration_json == ""
+    )
+  )
+
+  production_live_effective_cancellation_valid = (
+    !local.effective_scribe_cancellation_production_rollout.enabled || (
+      local.effective_scribe_cancellation_production_rollout.ledger_ready &&
+      local.effective_scribe_cancellation_production_rollout.grace_days >= 30 &&
+      local.effective_scribe_cancellation_production_rollout.grace_days <= 90 &&
+      tostring(local.effective_scribe_cancellation_production_rollout.grace_days) == tostring(floor(local.effective_scribe_cancellation_production_rollout.grace_days)) &&
+      local.effective_scribe_cancellation_production_rollout.phi_scope == "core-and-scribe-clinical-records" &&
+      can(regex("^[0-9a-f]{64}$", local.effective_scribe_cancellation_production_rollout.policy_sha256))
+    )
+  )
+
+  production_live_effective_native_valid = (
+    (
+      !local.effective_scribe_native_production_rollout.capture_enabled || (
+        local.effective_enable_scribe_workflow &&
+        length(local.effective_scribe_native_production_rollout.capture_upload_origins) > 0
+      )
+    ) && (
+      !local.effective_enable_scribe_workflow || (
+        can(regex("^https://", local.effective_scribe_service_base_url)) &&
+        can(regex("^api://.+/\\.default$", local.effective_scribe_service_scope)) &&
+        local.effective_scribe_service_timeout_seconds >= 1 &&
+        local.effective_scribe_service_timeout_seconds <= 60
+      )
+    )
+  )
+
+  production_live_effective_bundle_valid = (
+    (
+      !local.effective_scribe_core_bundle.api_enabled || try(
+        jsondecode(local.effective_scribe_core_bundle.api_configuration_json).schema_version == 1 &&
+        jsondecode(local.effective_scribe_core_bundle.receiver_configuration_json).authority_backend == "core-provider-context-v1" &&
+        can(regex("^[0-9a-f]{64}$", local.effective_scribe_core_bundle.receiver_contract_sha256)),
+        false,
+      )
+    ) && (
+      !local.effective_scribe_core_bundle.captured_worker_enabled || try(
+        local.effective_scribe_core_bundle.attach_existing_translation_identity &&
+        jsondecode(local.effective_scribe_core_bundle.speech_configuration_json).schema_version == 1 &&
+        jsondecode(local.effective_scribe_core_bundle.translation_configuration_json).schema_version == 1,
+        false,
+      )
+    )
+  )
+
+  production_live_effective_settings_valid = (
+    local.production_live_pin_inputs_remain_default &&
+    local.production_live_effective_cancellation_valid &&
+    local.production_live_effective_native_valid &&
+    local.production_live_effective_bundle_valid
+  )
 }

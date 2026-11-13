@@ -1,11 +1,10 @@
-# Source-controlled production pin for Scribe cancellation and Core→Scribe
-# workflow client flags. Values equal the 2026-11-13 14:07 ET live snapshot
-# via production_live_settings.auto.tfvars so a print-only production plan
-# does not remove or flip live settings. Variable defaults stay dark so
-# provider-mocked tests remain additive-safe.
+# Source-controlled Scribe cancellation and Core→Scribe workflow client flags.
+# Variable defaults stay dark so provider-mocked tests remain additive-safe.
+# Production live values come from production_live_settings.tf when
+# use_production_live_settings_pin=true (the default).
 
 variable "scribe_cancellation_production_rollout" {
-  description = "Production Scribe cancellation intake/policy and shared ledger fence. Defaults are dark; production_live_settings.auto.tfvars pins live values."
+  description = "Production Scribe cancellation intake/policy and shared ledger fence. Defaults are dark; the production live settings pin projects live values when enabled."
   type = object({
     ledger_ready  = bool
     enabled       = bool
@@ -41,7 +40,7 @@ variable "scribe_cancellation_production_rollout" {
 }
 
 variable "scribe_workflow_client_production_rollout" {
-  description = "API-only Core→Scribe workflow client capability flags. Defaults are dark; production_live_settings.auto.tfvars pins live values."
+  description = "API-only Core→Scribe workflow client capability flags. Defaults are dark; the production live settings pin projects live values when enabled."
   type = object({
     identity_reuse_enabled = bool
     http_pool_enabled      = bool

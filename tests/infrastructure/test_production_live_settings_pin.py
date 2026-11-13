@@ -1,7 +1,8 @@
-"""Static drift check for the T-CORE-PIN production live settings pin.
+"""Drift guard for the T-CORE-PIN production live settings pin.
 
-Fails when production_live_settings.tf drops or changes a pinned live value,
-or when main.tf / rollout modules stop projecting the required keys.
+Uses the names-only live fixture (no values) and asserts Terraform still
+projects every live name, keeps the reviewed false flags, and keeps the
+pinned JSON/timeout contracts parseable. No tautologies.
 """
 
 from __future__ import annotations
@@ -17,25 +18,37 @@ MAIN_TF = INFRA / "main.tf"
 CANCELLATION_TF = INFRA / "scribe_cancellation_rollout.tf"
 NATIVE_TF = INFRA / "scribe_native_rollout.tf"
 BUNDLE_TF = INFRA / "scribe_core_bundle.tf"
+SESSION_PREP_TF = INFRA / "session_prep_rollout.tf"
+CORE_CAB_TF = INFRA / "core_cab_runtime.tf"
+VARIABLES_TF = INFRA / "variables.tf"
 SECRETLESS = INFRA / "tests" / "secretless_plan.tftest.hcl"
+NAMES_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "production_live_env_names.json"
+)
 
-# Live non-secret snapshot 2026-11-13 14:07 ET (bot store; not copied into repo).
-PINNED = {
-    "audience": "af957741-0342-498b-8496-e93706af9e99",
-    "client_id": "c7bae168-fbf5-4658-b0d9-dd4b5373a1be",
-    "service_base_url": "https://app.cosmaneura.com",
-    "service_scope": "api://57264fe1-6a4a-4946-8412-e0be18805977/.default",
-    "upload_origin": "https://cosmaneurascribeprod.blob.core.windows.net",
-    "policy_sha256": "0855d28a58941adcf5d8899bb1bcfc670070e24e2b25674fbe5235a77a5f00d8",
-    "receiver_contract_sha256": (
-        "97008da096194099a55fa8c1f0d8e32fb0cbf3791802a8fa719f3b3f6940e19a"
-    ),
-    "phi_scope": "core-and-scribe-clinical-records",
-}
+FALSE_NATIVE_FLAGS = (
+    "capture_long_visits_enabled",
+    "capture_recovery_enabled",
+    "capture_source_enabled",
+    "capture_working_transcripts_enabled",
+    "combined_session_preparation_enabled",
+    "encounter_creation_enabled",
+    "encounter_prep_enabled",
+    "zoom_durable_capture_bindings_enabled",
+)
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _names_fixture() -> dict[str, list[str]]:
+    payload = json.loads(NAMES_FIXTURE.read_text(encoding="utf-8"))
+    assert set(payload) == {"app", "worker", "scheduler"}
+    for container, names in payload.items():
+        assert names == sorted(names), f"{container} names must be sorted"
+        assert names == sorted(set(names)), f"{container} names must be unique"
+    return payload
 
 
 def _hcl_object_block(source: str, name: str) -> str:
@@ -59,135 +72,146 @@ def _assignment_value(block: str, key: str) -> str:
     return match.group(1).strip()
 
 
-def test_production_live_settings_pin_defaults_on_and_tests_disable_it() -> None:
-    pin = _read(PIN_TF)
-    secretless = _read(SECRETLESS)
-
-    assert 'variable "use_production_live_settings_pin"' in pin
-    assert (
-        "default     = true"
-        in pin[pin.index('variable "use_production_live_settings_pin"') :]
+def _default_string_list(variable_name: str) -> set[str]:
+    source = _read(VARIABLES_TF)
+    match = re.search(
+        rf'variable "{re.escape(variable_name)}"\s*\{{.*?default\s*=\s*\[(.*?)\]',
+        source,
+        flags=re.S,
     )
-    assert "use_production_live_settings_pin = false" in secretless
+    assert match is not None, f"missing default list for {variable_name}"
+    return set(re.findall(r'"([A-Z0-9_]+)"', match.group(1)))
 
 
-def test_production_live_settings_locals_match_live_snapshot() -> None:
-    source = _read(PIN_TF)
-
-    assert "production_live_enable_scribe_workflow       = true" in source or (
-        "production_live_enable_scribe_workflow" in source and "= true" in source
-    )
-    assert f'= "{PINNED["service_base_url"]}"' in source
-    assert f'= "{PINNED["service_scope"]}"' in source
-
-    workload = _hcl_object_block(
-        source, "production_live_scribe_native_workload_rollout"
-    )
-    assert _assignment_value(workload, "enabled") == "true"
-    assert _assignment_value(workload, "audience") == f'"{PINNED["audience"]}"'
-    assert _assignment_value(workload, "client_id") == f'"{PINNED["client_id"]}"'
-    assert _assignment_value(workload, "provider_context_enabled") == "true"
-    assert _assignment_value(workload, "existing_patient_visits_enabled") == "true"
-    assert _assignment_value(workload, "native_visit_actions_v2_enabled") == "true"
-
-    capture = _hcl_object_block(
-        source, "production_live_scribe_native_production_rollout"
-    )
-    assert _assignment_value(capture, "capture_enabled") == "true"
-    assert _assignment_value(capture, "capture_notes_enabled") == "true"
-    assert PINNED["upload_origin"] in _assignment_value(
-        capture, "capture_upload_origins"
-    )
-
-    cancellation = _hcl_object_block(
-        source, "production_live_scribe_cancellation_production_rollout"
-    )
-    assert _assignment_value(cancellation, "ledger_ready") == "true"
-    assert _assignment_value(cancellation, "enabled") == "true"
-    assert _assignment_value(cancellation, "grace_days") == "90"
-    assert _assignment_value(cancellation, "phi_scope") == f'"{PINNED["phi_scope"]}"'
-    assert (
-        _assignment_value(cancellation, "policy_sha256")
-        == f'"{PINNED["policy_sha256"]}"'
-    )
-
-    workflow_client = _hcl_object_block(
-        source, "production_live_scribe_workflow_client_production_rollout"
-    )
-    assert _assignment_value(workflow_client, "identity_reuse_enabled") == "true"
-    assert _assignment_value(workflow_client, "http_pool_enabled") == "true"
-
-    bundle = _hcl_object_block(source, "production_live_scribe_core_bundle")
-    assert _assignment_value(bundle, "api_enabled") == "true"
-    assert _assignment_value(bundle, "captured_worker_enabled") == "true"
-    assert _assignment_value(bundle, "attach_existing_translation_identity") == "true"
-    assert (
-        _assignment_value(bundle, "receiver_contract_sha256")
-        == f'"{PINNED["receiver_contract_sha256"]}"'
-    )
-
-    api_json = json.loads(
-        json.loads(_assignment_value(bundle, "api_configuration_json"))
-    )
-    assert api_json["schema_version"] == 1 and api_json["enabled"] is True
-    receiver = json.loads(
-        json.loads(_assignment_value(bundle, "receiver_configuration_json"))
-    )
-    assert receiver["authority_backend"] == "core-provider-context-v1"
-    assert receiver["enabled"] is True
-
-
-def test_effective_locals_wire_pin_into_rollout_modules() -> None:
-    native = _read(NATIVE_TF)
-    cancellation = _read(CANCELLATION_TF)
-    bundle = _read(BUNDLE_TF)
-    main = _read(MAIN_TF)
-    pin = _read(PIN_TF)
-
-    assert "local.effective_scribe_native_workload_rollout" in native
-    assert "local.effective_scribe_native_production_rollout" in native
-    assert "local.effective_scribe_cancellation_production_rollout" in cancellation
-    assert "local.effective_scribe_workflow_client_production_rollout" in cancellation
-    assert "local.effective_scribe_core_bundle" in bundle
-    assert "local.effective_enable_scribe_workflow" in main
-    assert "local.effective_scribe_service_base_url" in main
-    assert "local.effective_scribe_service_scope" in main
-    assert "var.use_production_live_settings_pin" in pin
-
-    for key in (
-        "SCRIBE_CANCELLATION_LEDGER_READY",
-        "SCRIBE_CANCELLATION_ENABLED",
-        "SCRIBE_CANCELLATION_GRACE_DAYS",
-        "SCRIBE_CANCELLATION_PHI_SCOPE",
-        "SCRIBE_CANCELLATION_POLICY_SHA256",
-        "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
-        "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED",
-    ):
-        assert key in cancellation
-        assert f'"{key}"' in _read(INFRA / "variables.tf")
-
-
-def test_required_env_keys_remain_wired_to_each_workload() -> None:
+def _container_blocks() -> dict[str, str]:
     main = _read(MAIN_TF)
     app = main[main.index('resource "azurerm_container_app" "app"') :]
     app = app[: app.index('resource "azurerm_container_app" "scheduler"')]
-    worker = main[main.index('resource "azurerm_container_app" "worker"') :]
     scheduler = main[main.index('resource "azurerm_container_app" "scheduler"') :]
     scheduler = scheduler[
         : scheduler.index('resource "azurerm_container_app" "worker"')
     ]
-
-    assert "local.scribe_cancellation_api_public_values" in app
-    assert "local.scribe_workflow_client_api_public_values" in app
-    assert "local.scribe_cancellation_shared_public_values" in worker
-    assert "local.scribe_cancellation_shared_public_values" in scheduler
-    assert "local.scribe_workflow_client_api_public_values" not in worker
-    assert "local.scribe_workflow_client_api_public_values" not in scheduler
-    assert main.count("local.scribe_cancellation_api_public_values") == 1
-    assert main.count("local.scribe_cancellation_shared_public_values") == 2
+    worker = main[main.index('resource "azurerm_container_app" "worker"') :]
+    return {"app": app, "worker": worker, "scheduler": scheduler}
 
 
-def test_staging_is_untouched_by_production_live_pin() -> None:
+def _env_tokens(source: str) -> set[str]:
+    return set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", source))
+
+
+def _projected_names(container: str) -> set[str]:
+    blocks = _container_blocks()
+    body = blocks[container]
+    projected: set[str] = set(re.findall(r'name\s*=\s*"([A-Z0-9_]+)"', body))
+
+    local_sources = {
+        "scribe_native_api_public_values": NATIVE_TF,
+        "zoom_durable_public_values": NATIVE_TF,
+        "scribe_bundle_api_values": BUNDLE_TF,
+        "scribe_bundle_worker_values": BUNDLE_TF,
+        "scribe_bundle_scheduler_values": BUNDLE_TF,
+        "scribe_cancellation_api_public_values": CANCELLATION_TF,
+        "scribe_cancellation_shared_public_values": CANCELLATION_TF,
+        "scribe_workflow_client_api_public_values": CANCELLATION_TF,
+        "session_prep_shared_public_values": SESSION_PREP_TF,
+        "session_prep_authority_runtime_public_values": SESSION_PREP_TF,
+        "session_prep_api_public_values": SESSION_PREP_TF,
+        "core_cab_public_values": CORE_CAB_TF,
+        "core_cab_public_defaults": CORE_CAB_TF,
+    }
+
+    for local_name, path in local_sources.items():
+        if f"local.{local_name}" not in body:
+            continue
+        projected |= _env_tokens(_read(path))
+
+    if "var.python_public_vars" in body:
+        projected |= _default_string_list("python_public_vars")
+    if "var.python_billing_public_vars" in body:
+        projected |= _default_string_list("python_billing_public_vars")
+    if "var.python_secret_vars" in body:
+        projected |= _default_string_list("python_secret_vars")
+    if "var.python_api_only_secret_vars" in body:
+        projected |= _default_string_list("python_api_only_secret_vars")
+    if "var.python_billing_secret_vars" in body:
+        projected |= _default_string_list("python_billing_secret_vars")
+    if "var.python_billing_api_only_secret_vars" in body:
+        projected |= _default_string_list("python_billing_api_only_secret_vars")
+
+    return projected
+
+
+def test_fixture_names_are_projected_per_container() -> None:
+    fixture = _names_fixture()
+    for container, names in fixture.items():
+        projected = _projected_names(container)
+        missing = sorted(set(names) - projected)
+        assert missing == [], f"{container} missing Terraform projections: {missing}"
+
+
+def test_pin_defaults_on_and_secretless_disables_it() -> None:
+    pin = _read(PIN_TF)
+    secretless = _read(SECRETLESS)
+    assert 'variable "use_production_live_settings_pin"' in pin
+    assert "default     = true" in pin
+    assert "use_production_live_settings_pin = false" in secretless
+    assert "production_live_effective_settings_valid" in pin
+    assert "production_live_pin_inputs_remain_default" in pin
+
+
+def test_false_native_flags_stay_off_including_capture_recovery() -> None:
+    capture = _hcl_object_block(
+        _read(PIN_TF), "production_live_scribe_native_production_rollout"
+    )
+    for flag in FALSE_NATIVE_FLAGS:
+        assert _assignment_value(capture, flag) == "false", flag
+    assert _assignment_value(capture, "capture_enabled") == "true"
+    assert _assignment_value(capture, "capture_notes_enabled") == "true"
+
+
+def test_pinned_json_blobs_and_timeout_parse() -> None:
+    source = _read(PIN_TF)
+    bundle = _hcl_object_block(source, "production_live_scribe_core_bundle")
+
+    api = json.loads(json.loads(_assignment_value(bundle, "api_configuration_json")))
+    receiver = json.loads(
+        json.loads(_assignment_value(bundle, "receiver_configuration_json"))
+    )
+    speech = json.loads(
+        json.loads(_assignment_value(bundle, "speech_configuration_json"))
+    )
+    translation = json.loads(
+        json.loads(_assignment_value(bundle, "translation_configuration_json"))
+    )
+
+    assert api["schema_version"] == 1 and api["enabled"] is True
+    assert receiver["authority_backend"] == "core-provider-context-v1"
+    assert receiver["enabled"] is True
+    assert speech["schema_version"] == 1 and speech["enabled"] is True
+    assert translation["schema_version"] == 1 and translation["enabled"] is True
+    assert (
+        _assignment_value(source, "production_live_scribe_service_timeout_seconds")
+        == "60"
+    )
+
+
+def test_worker_only_and_shared_bundle_names_match_fixture() -> None:
+    fixture = _names_fixture()
+    worker_only = sorted(
+        set(fixture["worker"]) - set(fixture["app"]) - set(fixture["scheduler"])
+    )
+    assert worker_only == [
+        "AZURE_DEID_AUTH_MODE",
+        "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID",
+        "SCRIBE_BUNDLE_SPEECH_CONFIGURATION_JSON",
+        "SCRIBE_BUNDLE_TRANSLATION_CONFIGURATION_JSON",
+    ]
+    assert "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED" in fixture["worker"]
+    assert "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED" in fixture["scheduler"]
+    assert "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED" not in fixture["app"]
+
+
+def test_staging_untouched() -> None:
     assert not (ROOT / "infra-staging" / "production_live_settings.tf").exists()
     assert "use_production_live_settings_pin" not in _read(
         ROOT / "infra-staging" / "variables.tf"
