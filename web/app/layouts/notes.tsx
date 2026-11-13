@@ -1,4 +1,10 @@
-import { Outlet, data, href, isRouteErrorResponse } from "react-router"
+import {
+  Outlet,
+  data,
+  href,
+  isRouteErrorResponse,
+  redirect,
+} from "react-router"
 
 import type { Route } from "./+types/notes"
 
@@ -8,6 +14,12 @@ import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { readCurrentBrowserPrincipal } from "~/configuration/clerk"
+import {
+  QueryPrincipalChangedError,
+  QueryPrincipalUnavailableError,
+  withQueryPrincipal,
+} from "~/configuration/query-principal"
 import { queryClient } from "~/configuration/tanstack-query"
 import {
   NOTE_STATUS_LABELS,
@@ -26,16 +38,37 @@ export { loadNotesLayoutData, type NotesLayoutData }
 // Successful lists retain the generated query's cache shape for notes consumers.
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   try {
-    return await withReadDeadline(() => loadNotesLayoutData(), {
-      signal: request.signal,
-      onTimeout: () => {
-        void queryClient.cancelQueries({
-          queryKey: noteListOptions().queryKey,
-          exact: true,
-        })
+    return await withReadDeadline(
+      (signal) =>
+        withQueryPrincipal(
+          readCurrentBrowserPrincipal,
+          // Ancestor loaders run concurrently. Bind before starting this query so
+          // the initial account-cache clear cannot cancel a same-account list.
+          () => {
+            signal.throwIfAborted()
+            return loadNotesLayoutData()
+          },
+        ),
+      {
+        signal: request.signal,
+        onTimeout: () => {
+          void queryClient.cancelQueries({
+            queryKey: noteListOptions().queryKey,
+            exact: true,
+          })
+        },
       },
-    })
+    )
   } catch (error) {
+    if (error instanceof QueryPrincipalUnavailableError) {
+      const url = new URL(request.url)
+      throw redirect(
+        `/sign-in?redirect_url=${encodeURIComponent(url.pathname + url.search)}`,
+      )
+    }
+    if (error instanceof QueryPrincipalChangedError) {
+      throw redirect(href("/onboarding"))
+    }
     if (error instanceof ReadDeadlineError) {
       throw data({ notesLoadFailure: "temporary" }, { status: 503 })
     }

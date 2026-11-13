@@ -175,6 +175,32 @@ describe("view-as request binding", () => {
     )
   })
 
+  it("does not hard-block or reload a changed actor after response parsing yields", async () => {
+    commitViewAsControlTransition({ request_binding: "inactive" })
+    let resolve!: (body: unknown) => void
+    const parsed = new Promise((done) => {
+      resolve = done
+    })
+    const response = new Response(null, { status: 409 })
+    const clone = response.clone()
+    vi.spyOn(response, "clone").mockReturnValue(clone)
+    vi.spyOn(clone, "json").mockReturnValue(parsed)
+    let current = true
+    const guard = () => {
+      if (!current) throw new Error("The signed-in account changed.")
+    }
+    const reload = vi.fn()
+    const pending = enforceViewAsBindingResponse(response, reload, guard)
+    const rejected = expect(pending).rejects.toThrow(
+      "The signed-in account changed.",
+    )
+    current = false
+    resolve({ detail: { code: "VIEW_AS_BINDING_STALE" } })
+    await rejected
+    expect(reload).not.toHaveBeenCalled()
+    await expect(ensureViewAsRequestBinding()).resolves.toBe("inactive")
+  })
+
   it("hard-blocks after a tagged stale response and reloads at most once", async () => {
     const reload = vi.fn()
     const staleResponse = () =>

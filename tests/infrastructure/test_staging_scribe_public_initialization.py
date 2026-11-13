@@ -138,6 +138,85 @@ def target(before, plan, name, recovery=False):
     )
 
 
+@pytest.mark.parametrize("already_empty", [False, True])
+def test_secretref_empty_representation_is_validated_without_rewriting_baseline(
+    sample, already_empty
+):
+    before, _, _ = sample
+    state = before[API]
+    entry = state["template"]["containers"][0]["env"][-1]
+    if already_empty:
+        entry["value"] = ""
+    original = copy.deepcopy(state)
+    assert M["environment"](state)[entry["name"]] == entry
+    assert state == original
+
+
+@pytest.mark.parametrize(
+    "value", [None, False, 0, "literal", "secretref:session-secret-key", b""]
+)
+def test_secretref_never_accepts_nonempty_or_nonstring_literal(sample, value):
+    before, _, _ = sample
+    entry = before[API]["template"]["containers"][0]["env"][-1]
+    entry["value"] = value
+    with pytest.raises(ValueError):
+        M["environment"](before[API])
+
+
+@pytest.mark.parametrize("change", ["extra", "unknown-ref", "null-ref", "owned-ref"])
+def test_empty_secretref_preserves_closed_ref_and_field_grammar(sample, change):
+    before, _, _ = sample
+    entry = before[API]["template"]["containers"][0]["env"][-1]
+    entry["value"] = ""
+    if change == "extra":
+        entry["unowned"] = ""
+    elif change == "unknown-ref":
+        entry["secretRef"] = "unknown-secret"
+    elif change == "null-ref":
+        entry["secretRef"] = None
+    else:
+        entry["name"] = LEDGER
+        entry["secretRef"] = LEDGER.lower().replace("_", "-")
+    with pytest.raises(ValueError):
+        M["environment"](before[API])
+
+
+@pytest.mark.parametrize("name", PHASES)
+@pytest.mark.parametrize("recovery", [False, True])
+def test_target_matches_cli_empty_secretref_payload_and_preserves_all_other_state(
+    sample, name, recovery
+):
+    before, plan, _ = sample
+    state = before[name]
+    entries = state["template"]["containers"][0]["env"]
+    if name == PHASES[0]:
+        entries[-1]["value"] = ""  # The already-updated worker representation.
+    entries.insert(0, {"name": "UNRELATED_PUBLIC", "value": "preserve"})
+    original = copy.deepcopy(state)
+    actual = target(before, plan, name, recovery)
+    section = plan["recovery"] if recovery else plan
+    selected = M["FIELDS"] if name == API else {LEDGER}
+    expected = copy.deepcopy(state)
+    expected["revision"] = actual["revision"]
+    expected["template"]["revisionSuffix"] = actual["revision"].split("--", 1)[1]
+    expected["template"]["containers"][0]["image"] = actual["template"]["containers"][
+        0
+    ]["image"]
+    expected_entries = expected["template"]["containers"][0]["env"]
+    # Azure CLI's retained-container update fills missing values before merging
+    # the explicit public controls. It does not replace the secret reference.
+    for entry in expected_entries:
+        entry.setdefault("value", "")
+    for key in sorted(selected):
+        expected_entries.append({"name": key, "value": section["controls"][key]})
+    assert actual == expected
+    assert M["state_row"](actual) == M["state_row"](expected)
+    assert actual["secret_values"] == original["secret_values"]
+    assert actual["configuration"] == original["configuration"]
+    assert actual["identity"] == original["identity"]
+    assert state == original
+
+
 @pytest.mark.parametrize("presence", ["null", "absent"])
 def test_real_command_null_or_absence_is_preserved_without_normalization(
     sample, presence
@@ -198,7 +277,10 @@ def test_complete_transition_preserves_every_unowned_field_and_raw_absence(sampl
             for row in after["template"]["containers"][0]["env"]
             if row["name"] not in M["FIELDS"]
         ]
-        assert unowned == before[name]["template"]["containers"][0]["env"]
+        assert unowned == [
+            row | {"value": ""} if "secretRef" in row else row
+            for row in before[name]["template"]["containers"][0]["env"]
+        ]
         assert "SESSION_PREP_HEALTH_ALERTS_ENABLED" not in M["environment"](after)
         owned = set(M["environment"](after)) & M["FIELDS"]
         assert owned == (M["FIELDS"] if name == API else {LEDGER})

@@ -21,6 +21,14 @@ assert SPEC and SPEC.loader
 m = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = m
 SPEC.loader.exec_module(m)
+BOUNDARY_SPEC = importlib.util.spec_from_file_location(
+    "staging_environment_boundary_tokens",
+    ROOT / "scripts/staging_environment_boundary.py",
+)
+assert BOUNDARY_SPEC and BOUNDARY_SPEC.loader
+boundary = importlib.util.module_from_spec(BOUNDARY_SPEC)
+sys.modules[BOUNDARY_SPEC.name] = boundary
+BOUNDARY_SPEC.loader.exec_module(boundary)
 CANDIDATE = "a" * 40
 BINARY = b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01INVENTED_NOT_AN_EXECUTABLE"
 
@@ -126,9 +134,12 @@ class PublicInputTests(unittest.TestCase):
         for key, value in (
             ("NODE_ENV", "production"),
             ("OPENAPI_JSON_PATH", "../outside"),
-            ("VITE_PYTHON_URL", "https://app.cosmaneura.com/"),
-            ("VITE_INTAKE_CHAT_DOMAIN", "chat.cosmaneura.com"),
-            ("VITE_CLERK_PUBLIC_KEY", "pk_live_invented"),
+            ("VITE_PYTHON_URL", f"https://{boundary.LIVE_APP_HOST}/"),
+            ("VITE_INTAKE_CHAT_DOMAIN", boundary.LIVE_CHAT_HOST),
+            (
+                "VITE_CLERK_PUBLIC_KEY",
+                f"{boundary.LIVE_PUBLISHABLE_KEY_PREFIX}invented",
+            ),
             ("VITE_CLERK_PUBLIC_KEY", "pk_test_"),
             ("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "yes"),
             ("VITE_POSTHOG_KEY", "invented\npoison"),

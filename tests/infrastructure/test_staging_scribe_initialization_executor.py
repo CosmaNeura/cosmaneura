@@ -621,7 +621,8 @@ def test_persistent_paths_refuse_aliases_permissions_and_shared_files(
         root.chmod(0o755)
     elif kind == "nested_mode":
         parent = root / "nested"
-        parent.mkdir(mode=0o755)
+        parent.mkdir()
+        parent.chmod(0o755)
         path = parent / "release.json"
     elif kind in {"journal_mode", "lock_mode"}:
         target = path if kind == "journal_mode" else path.with_name(path.name + ".lock")

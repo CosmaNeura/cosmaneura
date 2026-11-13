@@ -60,6 +60,7 @@ from .routes.scribe_native_encounters import install as install_scribe_native_en
 from .routes.scribe_provider_context import install as install_scribe_provider_context
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .routes.visit_prep_core import visit_prep_public_api
 from .services.scribe_http_pool import install_scribe_connections
 
 fast_api_args = {}
@@ -97,6 +98,7 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+api_app.include_router(visit_prep_public_api)
 api_app.include_router(cab_authorization_router, include_in_schema=False)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)

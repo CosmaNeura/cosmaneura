@@ -399,7 +399,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
         "deploy-staging-candidate": _workflow_job(candidate_workflow, "deploy"),
     }
 
-    assert "  pull_request: {}" in workflow_scope
+    assert (
+        "  pull_request:\n"
+        "    types: [opened, synchronize, reopened, ready_for_review, labeled]\n"
+    ) in workflow_scope
     assert (
         "VITE_CLERK_PUBLIC_KEY: "
         "pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk" in workflow_scope
@@ -503,6 +506,7 @@ def test_every_pull_request_workflow_is_credential_free() -> None:
         "change-budget.yml",
         "infra_plan.yml",
         "pull_request_checks.yml",
+        "staging_environment_boundary.yml",
     }
     forbidden = (
         "${{ secrets.",
