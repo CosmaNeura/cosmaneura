@@ -1585,7 +1585,13 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     quality_commands = _run_commands(quality)
     test_commands = _run_commands(tests)
     for commands in (quality_commands, test_commands):
-        assert "just up --fast" in commands
+        # PR Checks waits for compose health so db_migrate cannot race a cold
+        # Postgres after a cache-hit py_setup. Deploy workflows keep --fast.
+        if path.name == "pull_request_checks.yml":
+            assert "just up" in commands
+            assert "just up --fast" not in commands
+        else:
+            assert "just up --fast" in commands
         if path.name == "build_and_publish_local.yml":
             assert "if command -v just >/dev/null 2>&1; then just down; fi" in commands
         assert "just py_setup" in commands
