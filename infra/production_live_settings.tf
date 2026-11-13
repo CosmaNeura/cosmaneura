@@ -166,13 +166,61 @@ locals {
     )
   )
 
-  production_live_effective_native_valid = (
+  # Mirrors infra/variables.tf scribe_native_workload_rollout (241-268) and
+  # scribe_native_production_rollout (301-328) against effective_* so the live
+  # pin path cannot bypass those contracts.
+  production_live_effective_native_workload_valid = (
+    (
+      !local.effective_scribe_native_workload_rollout.enabled || (
+        can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", local.effective_scribe_native_workload_rollout.audience)) &&
+        local.effective_scribe_native_workload_rollout.audience != "00000000-0000-0000-0000-000000000000" &&
+        can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", local.effective_scribe_native_workload_rollout.client_id)) &&
+        local.effective_scribe_native_workload_rollout.client_id != "00000000-0000-0000-0000-000000000000" &&
+        local.effective_scribe_native_workload_rollout.client_id != var.session_prep_production_rollout.sovereign_client_id
+      )
+      ) && (
+      !local.effective_scribe_native_workload_rollout.provider_context_enabled ||
+      local.effective_scribe_native_workload_rollout.enabled
+      ) && (
+      !local.effective_scribe_native_workload_rollout.existing_patient_visits_enabled || (
+        local.effective_scribe_native_workload_rollout.enabled &&
+        local.effective_scribe_native_workload_rollout.provider_context_enabled
+      )
+      ) && (
+      !local.effective_scribe_native_workload_rollout.native_visit_actions_v2_enabled || (
+        local.effective_scribe_native_workload_rollout.enabled &&
+        local.effective_scribe_native_workload_rollout.provider_context_enabled &&
+        local.effective_scribe_native_workload_rollout.existing_patient_visits_enabled
+      )
+    )
+  )
+
+  production_live_effective_native_production_valid = (
     (
       !local.effective_scribe_native_production_rollout.capture_enabled || (
         local.effective_enable_scribe_workflow &&
         length(local.effective_scribe_native_production_rollout.capture_upload_origins) > 0
       )
       ) && (
+      local.effective_scribe_native_production_rollout.capture_enabled || !anytrue([
+        local.effective_scribe_native_production_rollout.capture_long_visits_enabled,
+        local.effective_scribe_native_production_rollout.capture_notes_enabled,
+        local.effective_scribe_native_production_rollout.capture_recovery_enabled,
+        local.effective_scribe_native_production_rollout.capture_source_enabled,
+        local.effective_scribe_native_production_rollout.capture_working_transcripts_enabled,
+        local.effective_scribe_native_production_rollout.combined_session_preparation_enabled,
+        local.effective_scribe_native_production_rollout.encounter_prep_enabled,
+      ])
+      ) && alltrue([
+        for origin in local.effective_scribe_native_production_rollout.capture_upload_origins :
+        can(regex("^https://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+(:443)?$", origin))
+    ])
+  )
+
+  production_live_effective_native_valid = (
+    local.production_live_effective_native_workload_valid &&
+    local.production_live_effective_native_production_valid &&
+    (
       !local.effective_enable_scribe_workflow || (
         can(regex("^https://", local.effective_scribe_service_base_url)) &&
         can(regex("^api://.+/\\.default$", local.effective_scribe_service_scope)) &&
