@@ -1140,247 +1140,161 @@ run "production_live_settings_pin_projects_full_env" {
   }
 
   assert {
+    condition = (
+      toset([for entry in azurerm_container_app.app.template[0].container[0].env : entry.name]) ==
+      setunion(
+        toset(jsondecode(file("${path.module}/../tests/infrastructure/fixtures/production_live_env_names.json")).app),
+        toset([
+          "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
+          "SCRIBE_CAPTURE_RECOVERY_ENABLED",
+          "SCRIBE_CAPTURE_SOURCE_ENABLED",
+          "SCRIBE_CAPTURE_WORKING_TRANSCRIPTS_ENABLED",
+          "SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED",
+          "SCRIBE_ENCOUNTER_CREATION_ENABLED",
+          "SCRIBE_ENCOUNTER_PREP_ENABLED",
+          "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+          "SESSION_PREP_PROVIDER_ENABLED",
+          "AUTHORITY_KERNEL_ENABLED",
+          "AGENT_API_ENABLED",
+          "AGENT_API_AUDIENCE",
+          "AGENT_API_SOVEREIGN_CLIENT_IDS",
+          "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
+          "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
+          "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
+          "HELD_MEDICATION_WRITES_ENABLED",
+        ])
+      )
+    )
+    error_message = "app env names must equal the live fixture plus the reviewed 17 dark adds"
+  }
+
+  assert {
+    condition = (
+      toset([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name]) ==
+      setunion(
+        toset(jsondecode(file("${path.module}/../tests/infrastructure/fixtures/production_live_env_names.json")).worker),
+        toset([
+          "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+          "SESSION_PREP_PROVIDER_ENABLED",
+          "AUTHORITY_KERNEL_ENABLED",
+          "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
+          "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
+          "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
+          "HELD_MEDICATION_WRITES_ENABLED",
+        ])
+      )
+    )
+    error_message = "worker env names must equal the live fixture plus the reviewed 7 dark adds"
+  }
+
+  assert {
+    condition = (
+      toset([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.name]) ==
+      setunion(
+        toset(jsondecode(file("${path.module}/../tests/infrastructure/fixtures/production_live_env_names.json")).scheduler),
+        toset([
+          "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+          "SESSION_PREP_PROVIDER_ENABLED",
+          "HELD_MEDICATION_WRITES_ENABLED",
+        ])
+      )
+    )
+    error_message = "scheduler env names must equal the live fixture plus the reviewed 3 dark adds"
+  }
+
+  assert {
     condition = alltrue([
-      for name in [
-        "ALLOWED_HOST_LIST",
-        "API_BASE_URL",
-        "ASSEMBLY_API_KEY",
-        "AUTHORITY_CLERK_ISSUER",
-        "AUTO_MIGRATE_ON_STARTUP",
-        "AZURE_DEID_CLIENT_ID",
-        "AZURE_DEID_CLIENT_SECRET",
-        "AZURE_DEID_ENDPOINT",
-        "AZURE_DEID_TENANT_ID",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_UPLOADS_ACCOUNT_KEY",
-        "AZURE_UPLOADS_ACCOUNT_NAME",
-        "AZURE_UPLOADS_ACCOUNT_URL",
-        "AZURE_UPLOADS_CONTAINER_NAME",
-        "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
-        "CLERK_PRIVATE_KEY",
-        "CORE_CAB_ASYNC_ENABLED",
-        "CORE_CAB_AUDIENCE",
-        "CORE_CAB_AUTHORIZE_AUDIENCE",
-        "CORE_CAB_AUTHORIZE_CALLER_ID",
-        "CORE_CAB_AUTHORIZE_ENABLED",
-        "CORE_CAB_AUTHORIZE_TENANT_ID",
-        "CORE_CAB_BRIDGE_ENABLED",
-        "CORE_CAB_CONTINUATION_ENABLED",
-        "CORE_CAB_MANAGED_IDENTITY_CLIENT_ID",
-        "CORE_CAB_ORIGIN",
-        "COSMANEURA_SCRIBE_PROVIDER_CONFIGURATION_JSON",
-        "COSMANEURA_SCRIBE_PROVIDER_IMAGE_CONTRACT_SHA256",
-        "DATABASE_URL",
-        "DURABLE_WEBHOOK_INBOX_ENABLED",
-        "EMAIL_FROM_ADDRESS",
-        "ENCRYPTION_KEY",
-        "ENTRA_TENANT_ID",
-        "INTAKE_CHAT_DOMAIN",
-        "LOG_LEVEL",
-        "PORT",
-        "RECALL_API_BASE",
-        "RECALL_API_KEY",
-        "RECALL_WEBHOOK_SECRET",
-        "REDIS_URL",
-        "SCRIBE_API_AUDIENCE",
-        "SCRIBE_BUNDLE_API_CONFIGURATION_JSON",
-        "SCRIBE_BUNDLE_API_ENABLED",
-        "SCRIBE_CALLER_CLIENT_ID",
-        "SCRIBE_CANCELLATION_ENABLED",
-        "SCRIBE_CANCELLATION_GRACE_DAYS",
-        "SCRIBE_CANCELLATION_LEDGER_READY",
-        "SCRIBE_CANCELLATION_PHI_SCOPE",
-        "SCRIBE_CANCELLATION_POLICY_SHA256",
-        "SCRIBE_CAPTURE_ENABLED",
-        "SCRIBE_CAPTURE_NOTES_ENABLED",
-        "SCRIBE_CAPTURE_UPLOAD_ORIGINS",
-        "SCRIBE_HANDOFF_ENABLED",
-        "SCRIBE_MANAGED_IDENTITY_CLIENT_ID",
-        "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
-        "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
-        "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
-        "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
-        "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
-        "SCRIBE_NATIVE_WORKLOAD_ENABLED",
-        "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
-        "SCRIBE_SERVICE_BASE_URL",
-        "SCRIBE_SERVICE_SCOPE",
-        "SCRIBE_SERVICE_TIMEOUT_SECONDS",
-        "SCRIBE_WORKFLOW_ENABLED",
-        "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED",
-        "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
-        "SENTRY_DSN",
-        "SESSION_SECRET_KEY",
-        "SMTP_URL",
-        "SOVEREIGN_RECORD_GRANT_SECRET",
-        "STRIPE_ACCOUNT_ID",
-        "STRIPE_API_VERSION",
-        "STRIPE_BILLING_ENABLED",
-        "STRIPE_INTEGRATION_ENABLED",
-        "STRIPE_LIVE_MODE",
-        "STRIPE_PORTAL_CONFIGURATION_ID",
-        "STRIPE_PRICE_ID",
-        "ZOOM_CLIENT_ID",
-        "ZOOM_CLIENT_SECRET",
-        "ZOOM_REDIRECT_URI",
-        "ZOOM_SECRET_TOKEN",
-        "ZOOM_SUCCESS_REDIRECT",
-        "ZOOM_WATCHDOG_ENABLED"
-      ] :
-      contains([for entry in azurerm_container_app.app.template[0].container[0].env : entry.name], name)
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == local.scribe_cancellation_shared_public_values.SCRIBE_CANCELLATION_LEDGER_READY,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_ENABLED"]) == local.scribe_cancellation_api_public_values.SCRIBE_CANCELLATION_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_WORKFLOW_ENABLED"]) == tostring(local.effective_enable_scribe_workflow),
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_NATIVE_WORKLOAD_ENABLED"]) == local.scribe_native_api_public_values.SCRIBE_NATIVE_WORKLOAD_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CAPTURE_ENABLED"]) == local.scribe_native_api_public_values.SCRIBE_CAPTURE_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CAPTURE_NOTES_ENABLED"]) == local.scribe_native_api_public_values.SCRIBE_CAPTURE_NOTES_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CAPTURE_RECOVERY_ENABLED"]) == local.scribe_native_api_public_values.SCRIBE_CAPTURE_RECOVERY_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CAPTURE_LONG_VISITS_ENABLED"]) == local.scribe_native_api_public_values.SCRIBE_CAPTURE_LONG_VISITS_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_API_ENABLED"]) == local.scribe_bundle_api_values.SCRIBE_BUNDLE_API_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SESSION_PREP_PROVIDER_ENABLED"]) == local.session_prep_shared_public_values.SESSION_PREP_PROVIDER_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "CORE_CAB_AUTHORIZE_ENABLED"]) == local.core_cab_public_defaults.CORE_CAB_AUTHORIZE_ENABLED,
+      # Secret-fed public flags stay mock-backed (Container App secrets from 1Password).
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "HELD_MEDICATION_WRITES_ENABLED"]) == data.external.secrets.result.HELD_MEDICATION_WRITES_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_HANDOFF_ENABLED"]) == data.external.secrets.result.SCRIBE_HANDOFF_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "DURABLE_WEBHOOK_INBOX_ENABLED"]) == data.external.secrets.result.DURABLE_WEBHOOK_INBOX_ENABLED,
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "ZOOM_WATCHDOG_ENABLED"]) == data.external.secrets.result.ZOOM_WATCHDOG_ENABLED,
     ])
-    error_message = "production live pin must project every live app env name"
+    error_message = "pinned app values and dark add-only flags must match live pin / non-secret locals"
   }
 
   assert {
     condition = alltrue([
-      for name in [
-        "ALLOWED_HOST_LIST",
-        "API_BASE_URL",
-        "ASSEMBLY_API_KEY",
-        "AUTHORITY_CLERK_ISSUER",
-        "AUTO_MIGRATE_ON_STARTUP",
-        "AZURE_DEID_AUTH_MODE",
-        "AZURE_DEID_CLIENT_ID",
-        "AZURE_DEID_CLIENT_SECRET",
-        "AZURE_DEID_ENDPOINT",
-        "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID",
-        "AZURE_DEID_TENANT_ID",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_UPLOADS_ACCOUNT_KEY",
-        "AZURE_UPLOADS_ACCOUNT_NAME",
-        "AZURE_UPLOADS_ACCOUNT_URL",
-        "AZURE_UPLOADS_CONTAINER_NAME",
-        "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
-        "CLERK_PRIVATE_KEY",
-        "DATABASE_URL",
-        "DURABLE_WEBHOOK_INBOX_ENABLED",
-        "EMAIL_FROM_ADDRESS",
-        "ENCRYPTION_KEY",
-        "ENTRA_TENANT_ID",
-        "INTAKE_CHAT_DOMAIN",
-        "LOG_LEVEL",
-        "PORT",
-        "RECALL_API_BASE",
-        "RECALL_API_KEY",
-        "REDIS_URL",
-        "SCRIBE_API_AUDIENCE",
-        "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED",
-        "SCRIBE_BUNDLE_SPEECH_CONFIGURATION_JSON",
-        "SCRIBE_BUNDLE_TRANSLATION_CONFIGURATION_JSON",
-        "SCRIBE_CALLER_CLIENT_ID",
-        "SCRIBE_CANCELLATION_LEDGER_READY",
-        "SCRIBE_HANDOFF_ENABLED",
-        "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
-        "SENTRY_DSN",
-        "SESSION_SECRET_KEY",
-        "SMTP_URL",
-        "STRIPE_ACCOUNT_ID",
-        "STRIPE_API_VERSION",
-        "STRIPE_BILLING_ENABLED",
-        "STRIPE_INTEGRATION_ENABLED",
-        "STRIPE_LIVE_MODE",
-        "STRIPE_PORTAL_CONFIGURATION_ID",
-        "STRIPE_PRICE_ID",
-        "ZOOM_CLIENT_ID",
-        "ZOOM_CLIENT_SECRET",
-        "ZOOM_REDIRECT_URI",
-        "ZOOM_SECRET_TOKEN",
-        "ZOOM_SUCCESS_REDIRECT",
-        "ZOOM_WATCHDOG_ENABLED"
-      ] :
-      contains([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name], name)
-    ])
-    error_message = "production live pin must project every live worker env name"
-  }
-
-  assert {
-    condition = alltrue([
-      for name in [
-        "ALLOWED_HOST_LIST",
-        "API_BASE_URL",
-        "ASSEMBLY_API_KEY",
-        "AUTHORITY_CLERK_ISSUER",
-        "AUTO_MIGRATE_ON_STARTUP",
-        "AZURE_DEID_CLIENT_ID",
-        "AZURE_DEID_CLIENT_SECRET",
-        "AZURE_DEID_ENDPOINT",
-        "AZURE_DEID_TENANT_ID",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_UPLOADS_ACCOUNT_KEY",
-        "AZURE_UPLOADS_ACCOUNT_NAME",
-        "AZURE_UPLOADS_ACCOUNT_URL",
-        "AZURE_UPLOADS_CONTAINER_NAME",
-        "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
-        "CLERK_PRIVATE_KEY",
-        "DATABASE_URL",
-        "DURABLE_WEBHOOK_INBOX_ENABLED",
-        "EMAIL_FROM_ADDRESS",
-        "ENCRYPTION_KEY",
-        "ENTRA_TENANT_ID",
-        "INTAKE_CHAT_DOMAIN",
-        "LOG_LEVEL",
-        "PORT",
-        "RECALL_API_BASE",
-        "RECALL_API_KEY",
-        "REDIS_URL",
-        "SCRIBE_API_AUDIENCE",
-        "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED",
-        "SCRIBE_CALLER_CLIENT_ID",
-        "SCRIBE_CANCELLATION_LEDGER_READY",
-        "SCRIBE_HANDOFF_ENABLED",
-        "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
-        "SENTRY_DSN",
-        "SESSION_SECRET_KEY",
-        "SMTP_URL",
-        "ZOOM_CLIENT_ID",
-        "ZOOM_CLIENT_SECRET",
-        "ZOOM_REDIRECT_URI",
-        "ZOOM_SECRET_TOKEN",
-        "ZOOM_SUCCESS_REDIRECT",
-        "ZOOM_WATCHDOG_ENABLED"
-      ] :
-      contains([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.name], name)
-    ])
-    error_message = "production live pin must project every live scheduler env name"
-  }
-
-  assert {
-    condition = alltrue([for name, value in {
-      SCRIBE_CANCELLATION_LEDGER_READY   = "true"
-      SCRIBE_CANCELLATION_ENABLED        = "true"
-      SCRIBE_WORKFLOW_ENABLED            = "true"
-      SCRIBE_NATIVE_WORKLOAD_ENABLED     = "true"
-      SCRIBE_CAPTURE_ENABLED             = "true"
-      SCRIBE_CAPTURE_NOTES_ENABLED       = "true"
-      SCRIBE_CAPTURE_RECOVERY_ENABLED    = "false"
-      SCRIBE_CAPTURE_LONG_VISITS_ENABLED = "false"
-      SCRIBE_BUNDLE_API_ENABLED          = "true"
-      SESSION_PREP_PROVIDER_ENABLED      = "false"
-      HELD_MEDICATION_WRITES_ENABLED     = "false"
-      CORE_CAB_AUTHORIZE_ENABLED         = "false"
-      SCRIBE_HANDOFF_ENABLED             = "false"
-      DURABLE_WEBHOOK_INBOX_ENABLED      = "false"
-      ZOOM_WATCHDOG_ENABLED              = "false"
-    } : one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value])
-    error_message = "pinned app values and dark add-only flags must match the live pin"
-  }
-
-  assert {
-    condition = alltrue([
-      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == "true",
-      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == local.scribe_cancellation_shared_public_values.SCRIBE_CANCELLATION_LEDGER_READY,
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED"]) == local.scribe_bundle_worker_values.SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED,
       one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "AZURE_DEID_AUTH_MODE"]) == "client_secret",
-      one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == "true",
-      one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == local.scribe_cancellation_shared_public_values.SCRIBE_CANCELLATION_LEDGER_READY,
+      one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED"]) == local.scribe_bundle_scheduler_values.SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED,
       length(azurerm_container_app.worker.identity[0].identity_ids) == 2,
       length(azurerm_container_app.scheduler.identity) == 0,
     ])
     error_message = "worker/scheduler pin values and worker translation identity attachment must match live"
   }
+}
+
+run "reject_effective_native_deps_without_enabled" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled                         = false
+      audience                        = ""
+      client_id                       = ""
+      provider_context_enabled        = true
+      existing_patient_visits_enabled = true
+      native_visit_actions_v2_enabled = true
+    }
+  }
+
+  expect_failures = [var.scribe_native_workload_rollout]
+}
+
+run "reject_effective_native_wildcard_upload_origin" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = ["https://*.blob.core.windows.net"]
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_effective_native_non_uuid_client_id" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_workload_rollout = {
+      enabled   = true
+      audience  = "10000000-0000-4000-8000-000000000001"
+      client_id = "not-a-uuid"
+    }
+  }
+
+  expect_failures = [var.scribe_native_workload_rollout]
 }
 
 run "reject_non_default_pin_input_while_live_pin_enabled" {
