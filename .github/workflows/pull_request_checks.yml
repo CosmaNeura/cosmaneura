@@ -69,9 +69,10 @@ jobs:
     needs: [ci-mode]
     if: ${{ (github.event.action != 'labeled' || github.event.label.name == 'ci:full') && needs.ci-mode.outputs.full != 'false' }}
     runs-on: ubuntu-24.04
-    # Coverage-heavy bootstrap recipes take ~15-17m each; two primary/secondary
-    # bundles need headroom above a single 60m job ceiling.
-    timeout-minutes: 90
+    # Keep <=60: repo contract test_every_workflow_job_has_a_finite_timeout.
+    # Coverage-heavy bootstrap recipes take ~15-17m each, so they stay in
+    # 2-recipe pairs rather than one long bundle.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -88,9 +89,13 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-connection-plan-bundle
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-primary
+          - shard: infrastructure-sanitizer-bootstrap-binding-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-secondary
+          - shard: infrastructure-sanitizer-bootstrap-ancestry-pair
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-output-pair
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-integrity-pair
             apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh

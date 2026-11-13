@@ -60,8 +60,10 @@ PR_JOB_SHARDS = (
     "infrastructure-sanitizer-evidence-exec",
     "infrastructure-sanitizer-observer-bundle",
     "infrastructure-sanitizer-connection-plan-bundle",
-    "infrastructure-sanitizer-bootstrap-primary",
-    "infrastructure-sanitizer-bootstrap-secondary",
+    "infrastructure-sanitizer-bootstrap-binding-pair",
+    "infrastructure-sanitizer-bootstrap-ancestry-pair",
+    "infrastructure-sanitizer-bootstrap-output-pair",
+    "infrastructure-sanitizer-bootstrap-integrity-pair",
     "infrastructure-restore",
     "integration",
 )
@@ -97,15 +99,19 @@ PR_JOB_MEMBERS = {
         "infrastructure-sanitizer-observer-connection-plan-output",
         "infrastructure-sanitizer-observer-connection-plan-contract",
     ),
-    "infrastructure-sanitizer-bootstrap-primary": (
+    "infrastructure-sanitizer-bootstrap-binding-pair": (
         "infrastructure-sanitizer-bootstrap-binding",
         "infrastructure-sanitizer-bootstrap-binding-digest",
+    ),
+    "infrastructure-sanitizer-bootstrap-ancestry-pair": (
         "infrastructure-sanitizer-bootstrap-binding-ancestry",
         "infrastructure-sanitizer-bootstrap-binding-state",
     ),
-    "infrastructure-sanitizer-bootstrap-secondary": (
+    "infrastructure-sanitizer-bootstrap-output-pair": (
         "infrastructure-sanitizer-bootstrap-binding-output",
         "infrastructure-sanitizer-bootstrap-binding-duplicate",
+    ),
+    "infrastructure-sanitizer-bootstrap-integrity-pair": (
         "infrastructure-sanitizer-bootstrap-binding-tamper",
         "infrastructure-sanitizer-bootstrap-binding-failure",
     ),
@@ -1571,7 +1577,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         PR_JOB_SHARDS if path.name == "pull_request_checks.yml" else SHARDS
     )
     assert tests["timeout-minutes"] == (
-        90 if path.name == "pull_request_checks.yml" else 30
+        60 if path.name == "pull_request_checks.yml" else 30
     )
     assert tests["strategy"]["fail-fast"] is False
     matrix = tests["strategy"]["matrix"]["include"]

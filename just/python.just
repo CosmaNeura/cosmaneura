@@ -428,18 +428,26 @@ py_test-ci-infrastructure-sanitizer-connection-plan-bundle:
 	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract
 
 [script]
-py_test-ci-infrastructure-sanitizer-bootstrap-primary:
-	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-primary is CI-only" >&2; exit 1; }
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-ancestry-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-ancestry-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-state
 
 [script]
-py_test-ci-infrastructure-sanitizer-bootstrap-secondary:
-	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-secondary is CI-only" >&2; exit 1; }
+py_test-ci-infrastructure-sanitizer-bootstrap-output-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-output-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-output
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-integrity-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-integrity-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper
 	just py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure
 
