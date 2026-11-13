@@ -1734,9 +1734,9 @@ def test_shards_do_not_weaken_or_recombine_coverage() -> None:
     assert "--deselect" not in shard_source
     assert " -k " not in shard_source
     bundles = recipe_source[
-        recipe_source.index("\n# Pull Request Checks consolidates") : recipe_source.index(
-            "\n# run tests with"
-        )
+        recipe_source.index(
+            "\n# Pull Request Checks consolidates"
+        ) : recipe_source.index("\n# run tests with")
     ]
     assert "--cov-append" not in bundles
     assert "xdist" not in bundles
