@@ -172,7 +172,7 @@ locals {
         local.effective_enable_scribe_workflow &&
         length(local.effective_scribe_native_production_rollout.capture_upload_origins) > 0
       )
-    ) && (
+      ) && (
       !local.effective_enable_scribe_workflow || (
         can(regex("^https://", local.effective_scribe_service_base_url)) &&
         can(regex("^api://.+/\\.default$", local.effective_scribe_service_scope)) &&
@@ -190,7 +190,7 @@ locals {
         can(regex("^[0-9a-f]{64}$", local.effective_scribe_core_bundle.receiver_contract_sha256)),
         false,
       )
-    ) && (
+      ) && (
       !local.effective_scribe_core_bundle.captured_worker_enabled || try(
         local.effective_scribe_core_bundle.attach_existing_translation_identity &&
         jsondecode(local.effective_scribe_core_bundle.speech_configuration_json).schema_version == 1 &&
