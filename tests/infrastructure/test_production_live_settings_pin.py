@@ -64,9 +64,10 @@ def test_production_live_settings_pin_defaults_on_and_tests_disable_it() -> None
     secretless = _read(SECRETLESS)
 
     assert 'variable "use_production_live_settings_pin"' in pin
-    assert "default     = true" in pin[
-        pin.index('variable "use_production_live_settings_pin"') :
-    ]
+    assert (
+        "default     = true"
+        in pin[pin.index('variable "use_production_live_settings_pin"') :]
+    )
     assert "use_production_live_settings_pin = false" in secretless
 
 
@@ -79,7 +80,9 @@ def test_production_live_settings_locals_match_live_snapshot() -> None:
     assert f'= "{PINNED["service_base_url"]}"' in source
     assert f'= "{PINNED["service_scope"]}"' in source
 
-    workload = _hcl_object_block(source, "production_live_scribe_native_workload_rollout")
+    workload = _hcl_object_block(
+        source, "production_live_scribe_native_workload_rollout"
+    )
     assert _assignment_value(workload, "enabled") == "true"
     assert _assignment_value(workload, "audience") == f'"{PINNED["audience"]}"'
     assert _assignment_value(workload, "client_id") == f'"{PINNED["client_id"]}"'
@@ -87,10 +90,14 @@ def test_production_live_settings_locals_match_live_snapshot() -> None:
     assert _assignment_value(workload, "existing_patient_visits_enabled") == "true"
     assert _assignment_value(workload, "native_visit_actions_v2_enabled") == "true"
 
-    capture = _hcl_object_block(source, "production_live_scribe_native_production_rollout")
+    capture = _hcl_object_block(
+        source, "production_live_scribe_native_production_rollout"
+    )
     assert _assignment_value(capture, "capture_enabled") == "true"
     assert _assignment_value(capture, "capture_notes_enabled") == "true"
-    assert PINNED["upload_origin"] in _assignment_value(capture, "capture_upload_origins")
+    assert PINNED["upload_origin"] in _assignment_value(
+        capture, "capture_upload_origins"
+    )
 
     cancellation = _hcl_object_block(
         source, "production_live_scribe_cancellation_production_rollout"
@@ -166,7 +173,9 @@ def test_required_env_keys_remain_wired_to_each_workload() -> None:
     app = app[: app.index('resource "azurerm_container_app" "scheduler"')]
     worker = main[main.index('resource "azurerm_container_app" "worker"') :]
     scheduler = main[main.index('resource "azurerm_container_app" "scheduler"') :]
-    scheduler = scheduler[: scheduler.index('resource "azurerm_container_app" "worker"')]
+    scheduler = scheduler[
+        : scheduler.index('resource "azurerm_container_app" "worker"')
+    ]
 
     assert "local.scribe_cancellation_api_public_values" in app
     assert "local.scribe_workflow_client_api_public_values" in app
