@@ -37,7 +37,7 @@ CANDIDATE_ONLY_PREFIXES = (
 )
 AUDITED_DEPENDENCIES_PATH = "scripts/canonical_staging_control_dependencies.json"
 AUDITED_DEPENDENCIES_SHA256 = (
-    "2377bdcdeabd827504a50cf3a6ded3c6afaf0d429869ddd8911db56e090a0672"
+    "97b0bcfa1172d01f2ba21a06430534890cefbb36e5b263b8a8796e59d94c5af0"
 )
 REQUIRED_CONTROL_PATHS = frozenset(
     {
