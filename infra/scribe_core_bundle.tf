@@ -31,7 +31,7 @@ variable "scribe_core_bundle" {
 }
 
 data "azurerm_user_assigned_identity" "scribe_bundle_translation" {
-  count               = var.scribe_core_bundle.attach_existing_translation_identity ? 1 : 0
+  count               = local.effective_scribe_core_bundle.attach_existing_translation_identity ? 1 : 0
   name                = "cosmaneura-scribe-production-runtime"
   resource_group_name = "cosmaneura-scribe-production"
   lifecycle {
@@ -44,20 +44,20 @@ data "azurerm_user_assigned_identity" "scribe_bundle_translation" {
 
 locals {
   scribe_bundle_api_values = merge({
-    SCRIBE_BUNDLE_API_ENABLED = tostring(var.scribe_core_bundle.api_enabled)
-    }, var.scribe_core_bundle.api_enabled ? {
-    SCRIBE_BUNDLE_API_CONFIGURATION_JSON             = var.scribe_core_bundle.api_configuration_json
-    COSMANEURA_SCRIBE_PROVIDER_CONFIGURATION_JSON    = var.scribe_core_bundle.receiver_configuration_json
-    COSMANEURA_SCRIBE_PROVIDER_IMAGE_CONTRACT_SHA256 = var.scribe_core_bundle.receiver_contract_sha256
+    SCRIBE_BUNDLE_API_ENABLED = tostring(local.effective_scribe_core_bundle.api_enabled)
+    }, local.effective_scribe_core_bundle.api_enabled ? {
+    SCRIBE_BUNDLE_API_CONFIGURATION_JSON             = local.effective_scribe_core_bundle.api_configuration_json
+    COSMANEURA_SCRIBE_PROVIDER_CONFIGURATION_JSON    = local.effective_scribe_core_bundle.receiver_configuration_json
+    COSMANEURA_SCRIBE_PROVIDER_IMAGE_CONTRACT_SHA256 = local.effective_scribe_core_bundle.receiver_contract_sha256
   } : {})
   scribe_bundle_worker_values = merge({
-    SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = tostring(var.scribe_core_bundle.captured_worker_enabled)
-    }, var.scribe_core_bundle.captured_worker_enabled ? {
-    SCRIBE_BUNDLE_SPEECH_CONFIGURATION_JSON      = var.scribe_core_bundle.speech_configuration_json
-    SCRIBE_BUNDLE_TRANSLATION_CONFIGURATION_JSON = var.scribe_core_bundle.translation_configuration_json
+    SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = tostring(local.effective_scribe_core_bundle.captured_worker_enabled)
+    }, local.effective_scribe_core_bundle.captured_worker_enabled ? {
+    SCRIBE_BUNDLE_SPEECH_CONFIGURATION_JSON      = local.effective_scribe_core_bundle.speech_configuration_json
+    SCRIBE_BUNDLE_TRANSLATION_CONFIGURATION_JSON = local.effective_scribe_core_bundle.translation_configuration_json
   } : {})
   scribe_bundle_scheduler_values = {
-    SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = tostring(var.scribe_core_bundle.captured_worker_enabled)
+    SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED = tostring(local.effective_scribe_core_bundle.captured_worker_enabled)
   }
   scribe_bundle_controlled_names = toset([
     "SCRIBE_BUNDLE_API_ENABLED", "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED",
