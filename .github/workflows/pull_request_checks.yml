@@ -26,7 +26,6 @@ env:
 
 jobs:
   ci-mode:
-    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -44,7 +43,6 @@ jobs:
 
   backend-quality:
     name: Backend quality
-    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -56,6 +54,7 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: zsh
+          enable_uv_cache: "true"
       # Wait for compose healthchecks. `--fast` races db_migrate once uv cache
       # makes py_setup finish before Postgres accepts connections.
       - run: just up
@@ -67,7 +66,7 @@ jobs:
   backend-tests:
     name: Backend tests (${{ matrix.shard }})
     needs: [ci-mode]
-    if: ${{ (github.event.action != 'labeled' || github.event.label.name == 'ci:full') && needs.ci-mode.outputs.full != 'false' }}
+    if: needs.ci-mode.outputs.full != 'false'
     runs-on: ubuntu-24.04
     # Keep <=60: repo contract test_every_workflow_job_has_a_finite_timeout.
     # Coverage-heavy bootstrap recipes take ~15-17m each, so they stay in
@@ -110,6 +109,7 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: ${{ matrix.apt-packages }}
+          enable_uv_cache: "true"
       - name: Install SHA-verified Localias
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
@@ -138,7 +138,7 @@ jobs:
   app:
     name: Backend
     needs: [backend-quality, backend-tests, ci-mode]
-    if: ${{ always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:full') }}
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -158,7 +158,6 @@ jobs:
 
   web:
     name: Frontend
-    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -169,6 +168,7 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: zsh
+          enable_uv_cache: "true"
       - run: just js_setup
       - name: Generate OpenAPI client
         run: cd web && pnpm run openapi

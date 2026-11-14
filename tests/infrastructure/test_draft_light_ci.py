@@ -31,22 +31,15 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
     assert jobs["ci-mode"]["runs-on"] == "ubuntu-24.04"
     assert jobs["ci-mode"]["outputs"]["full"] == "${{ steps.decide.outputs.full }}"
 
-    label_gate = (
-        "github.event.action != 'labeled' || github.event.label.name == 'ci:full'"
-    )
-
     backend_tests = jobs["backend-tests"]
     assert backend_tests["needs"] == ["ci-mode"]
-    assert backend_tests["if"] == (
-        "${{ (" + label_gate + ") && needs.ci-mode.outputs.full != 'false' }}"
-    )
+    assert backend_tests["if"] == "needs.ci-mode.outputs.full != 'false'"
 
-    assert jobs["ci-mode"]["if"] == "${{ " + label_gate + " }}"
-    assert jobs["web"]["if"] == "${{ " + label_gate + " }}"
-    assert jobs["backend-quality"]["if"] == "${{ " + label_gate + " }}"
+    assert "if" not in jobs["web"]
+    assert "if" not in jobs["backend-quality"]
     assert "ci-mode.outputs.full" not in str(jobs["web"])
     assert "ci-mode.outputs.full" not in str(jobs["backend-quality"])
-    assert jobs["app"]["if"] == "${{ always() && (" + label_gate + ") }}"
+    assert jobs["app"]["if"] == "${{ always() }}"
     assert "ci-mode.outputs.full" not in str(jobs["app"]["if"])
     # PyYAML parses the workflow key `on` as boolean True.
     assert (
@@ -97,3 +90,53 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
         assert job_id in jobs
         assert jobs[job_id]["name"] == MASTER_JOB_NAMES[job_id]
     assert set(jobs) == set(MASTER_JOB_IDS) | {"ci-mode"}
+
+
+def test_required_backend_frontend_cannot_skip_on_label_or_noop_events() -> None:
+    """Required Backend/Frontend must not be skipped by event/label conditions.
+
+    A labeled event that skips every job is a no-op that still cancels an
+    in-flight full run through the concurrency group. Keep master behaviour:
+    labeled events run the suite; Backend and Frontend always participate.
+    """
+    source = WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+
+    skip_markers = (
+        "labeled",
+        "label.name",
+        "github.event.action",
+        "github.event.label",
+    )
+
+    for job_id, required_name in (("app", "Backend"), ("web", "Frontend")):
+        job = jobs[job_id]
+        assert job["name"] == required_name
+        job_if = str(job.get("if", ""))
+        for marker in skip_markers:
+            assert marker not in job_if, (
+                f"{required_name} job `if` must not skip on {marker!r}: {job_if!r}"
+            )
+
+    assert "if" not in jobs["web"]
+    assert "if" not in jobs["backend-quality"]
+    assert "if" not in jobs["ci-mode"]
+    assert jobs["app"]["if"] == "${{ always() }}"
+    assert "github.event.action != 'labeled'" not in source
+    assert "github.event.label.name == 'ci:full'" not in source
+
+    # Labeled remains a real trigger (not a silent no-op). Concurrency may
+    # cancel prior PR runs only because every labeled event still executes the
+    # required Backend/Frontend jobs above.
+    assert workflow[True]["pull_request"]["types"] == [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "labeled",
+    ]
+    assert (
+        workflow["concurrency"]["cancel-in-progress"]
+        == "${{ github.event_name == 'pull_request' }}"
+    )
