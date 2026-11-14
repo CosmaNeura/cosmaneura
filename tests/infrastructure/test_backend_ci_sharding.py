@@ -1667,20 +1667,37 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         ]
     else:
         assert aggregator["needs"] == ["backend-quality", "backend-tests"]
-        if path.name == "build_and_publish_local.yml":
-            assert "always()" in aggregator["if"]
-            assert "inputs.github_hosted_fallback_authorized" in aggregator["if"]
-        elif path.name == "pull_request_checks.yml":
-            assert aggregator["if"] == (
-                "${{ always() && (github.event.action != 'labeled' "
-                "|| github.event.label.name == 'ci:full') }}"
-            )
-        elif path.name != "deploy_staging_candidate.yml":
-            assert aggregator["if"] == "${{ always() }}"
-        assert aggregator["timeout-minutes"] == 5
-        assert "continue-on-error" not in quality
-        assert "continue-on-error" not in tests
-        assert "continue-on-error" not in aggregator
+    if path.name == "build_and_publish_local.yml":
+        assert "always()" in aggregator["if"]
+        assert "inputs.github_hosted_fallback_authorized" in aggregator["if"]
+    elif path.name != "deploy_staging_candidate.yml":
+        assert aggregator["if"] == "${{ always() }}"
+    assert aggregator["timeout-minutes"] == 5
+    assert "continue-on-error" not in quality
+    assert "continue-on-error" not in tests
+    assert "continue-on-error" not in aggregator
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
+def test_backend_aggregator_timeout_and_fail_closed_on_every_workflow(
+    path: Path,
+) -> None:
+    """Prove timeout/continue-on-error assertions run for all three workflows."""
+    jobs = _workflow(path)["jobs"]
+    quality = jobs["backend-quality"]
+    tests = jobs["backend-tests"]
+    aggregator = jobs["app"]
+    assert aggregator["timeout-minutes"] == 5
+    assert "continue-on-error" not in quality
+    assert "continue-on-error" not in tests
+    assert "continue-on-error" not in aggregator
+    if path.name == "pull_request_checks.yml":
+        assert aggregator["if"] == "${{ always() }}"
+    elif path.name == "deploy_staging_candidate.yml":
+        assert "always()" in aggregator["if"]
+        assert "recovery_verified" in aggregator["if"]
+    else:
+        assert "always()" in aggregator["if"]
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
