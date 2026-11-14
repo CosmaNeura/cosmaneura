@@ -80,13 +80,17 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-core
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-source
+          - shard: infrastructure-sanitizer-source-foundation-pair
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-pair
             apt-packages: zsh
           - shard: infrastructure-sanitizer-evidence-exec
             apt-packages: zsh
           - shard: infrastructure-sanitizer-observer-bundle
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-connection-plan-bundle
+          - shard: infrastructure-sanitizer-connection-plan-state-pair
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-connection-plan-output-pair
             apt-packages: zsh
           - shard: infrastructure-sanitizer-bootstrap-binding-pair
             apt-packages: zsh
@@ -168,7 +172,6 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: zsh
-          enable_uv_cache: "true"
       - run: just js_setup
       - name: Generate OpenAPI client
         run: cd web && pnpm run openapi

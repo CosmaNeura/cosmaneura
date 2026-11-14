@@ -56,10 +56,12 @@ SHARDS = (
 PR_JOB_SHARDS = (
     "application",
     "infrastructure-core",
-    "infrastructure-sanitizer-source",
+    "infrastructure-sanitizer-source-foundation-pair",
+    "infrastructure-sanitizer-source-state-pair",
     "infrastructure-sanitizer-evidence-exec",
     "infrastructure-sanitizer-observer-bundle",
-    "infrastructure-sanitizer-connection-plan-bundle",
+    "infrastructure-sanitizer-connection-plan-state-pair",
+    "infrastructure-sanitizer-connection-plan-output-pair",
     "infrastructure-sanitizer-bootstrap-binding-pair",
     "infrastructure-sanitizer-bootstrap-ancestry-pair",
     "infrastructure-sanitizer-bootstrap-output-pair",
@@ -74,9 +76,11 @@ PR_JOB_MEMBERS = {
         "infrastructure-controller",
         "infrastructure-receipt-io",
     ),
-    "infrastructure-sanitizer-source": (
+    "infrastructure-sanitizer-source-foundation-pair": (
         "infrastructure-sanitizer-foundation",
         "infrastructure-sanitizer-source-state-authority",
+    ),
+    "infrastructure-sanitizer-source-state-pair": (
         "infrastructure-sanitizer-source-state-context",
         "infrastructure-sanitizer-source-state-integrity",
     ),
@@ -93,9 +97,11 @@ PR_JOB_MEMBERS = {
         "infrastructure-sanitizer-observer-output",
         "infrastructure-sanitizer-observer-integrity",
     ),
-    "infrastructure-sanitizer-connection-plan-bundle": (
+    "infrastructure-sanitizer-connection-plan-state-pair": (
         "infrastructure-sanitizer-observer-connection-plan",
         "infrastructure-sanitizer-observer-connection-plan-state",
+    ),
+    "infrastructure-sanitizer-connection-plan-output-pair": (
         "infrastructure-sanitizer-observer-connection-plan-output",
         "infrastructure-sanitizer-observer-connection-plan-contract",
     ),

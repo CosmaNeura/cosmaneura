@@ -54,6 +54,20 @@ def test_only_pull_request_checks_enables_uv_cache() -> None:
     assert enabled_in, "expected Pull Request Checks to opt into uv cache"
     assert set(enabled_in) == {"pull_request_checks.yml"}
 
+    # Frontend (web) is JS-only and must not pay for the uv package cache.
+    pr = yaml.safe_load(
+        (WORKFLOWS_DIR / "pull_request_checks.yml").read_text(encoding="utf-8")
+    )
+    web = pr["jobs"]["web"]
+    web_setup = next(
+        step
+        for step in web["steps"]
+        if step.get("uses") == "./.github/actions/common-setup"
+    )
+    assert str((web_setup.get("with") or {}).get("enable_uv_cache", "false")).lower() != (
+        "true"
+    )
+
 
 def test_deploy_release_and_infra_workflows_do_not_enable_uv_cache() -> None:
     for path in sorted(WORKFLOWS_DIR.glob("*.yml")):

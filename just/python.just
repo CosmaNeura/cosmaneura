@@ -395,10 +395,14 @@ py_test-ci-infrastructure-core:
 	just py_test-ci-infrastructure-receipt-io
 
 [script]
-py_test-ci-infrastructure-sanitizer-source:
-	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source is CI-only" >&2; exit 1; }
+py_test-ci-infrastructure-sanitizer-source-foundation-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-foundation-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-foundation
 	just py_test-ci-infrastructure-sanitizer-source-state-authority
+
+[script]
+py_test-ci-infrastructure-sanitizer-source-state-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-state-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-source-state-context
 	just py_test-ci-infrastructure-sanitizer-source-state-integrity
 
@@ -420,10 +424,14 @@ py_test-ci-infrastructure-sanitizer-observer-bundle:
 	just py_test-ci-infrastructure-sanitizer-observer-integrity
 
 [script]
-py_test-ci-infrastructure-sanitizer-connection-plan-bundle:
-	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-connection-plan-bundle is CI-only" >&2; exit 1; }
+py_test-ci-infrastructure-sanitizer-connection-plan-state-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-connection-plan-state-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-observer-connection-plan
 	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-state
+
+[script]
+py_test-ci-infrastructure-sanitizer-connection-plan-output-pair:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-connection-plan-output-pair is CI-only" >&2; exit 1; }
 	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-output
 	just py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract
 
