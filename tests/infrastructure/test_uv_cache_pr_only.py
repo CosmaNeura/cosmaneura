@@ -64,9 +64,9 @@ def test_only_pull_request_checks_enables_uv_cache() -> None:
         for step in web["steps"]
         if step.get("uses") == "./.github/actions/common-setup"
     )
-    assert str((web_setup.get("with") or {}).get("enable_uv_cache", "false")).lower() != (
-        "true"
-    )
+    assert str(
+        (web_setup.get("with") or {}).get("enable_uv_cache", "false")
+    ).lower() != ("true")
 
 
 def test_deploy_release_and_infra_workflows_do_not_enable_uv_cache() -> None:
