@@ -1,11 +1,18 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
-import { getClient } from "~/configuration/clerk"
+import { getClient, useBrowserPrincipal } from "~/configuration/clerk"
 import type { PriorNoteOverview } from "~/configuration/client"
 import { appointmentDateFormat } from "~/lib/date"
+import { withReadDeadline } from "~/lib/read-deadline"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import {
+  type CitationDisplay,
+  type CitationDisplayOptions,
+  citationHref,
+  loadCitationDisplay,
+} from "./SovereignCitationDisplay"
 import {
   HistoryAccessDeniedError,
   type SovereignHistory,
@@ -52,6 +59,11 @@ type PanelMountOptions = {
     recordId: string,
     options: { signal: AbortSignal },
   ) => Promise<SovereignHistory>
+  loadCitationHistory: (
+    recordId: string,
+    options: CitationDisplayOptions,
+  ) => Promise<CitationDisplay>
+  citationHref: (reference: string) => string
   onSessionPrepStateChange?: (state: SessionPrepUiState) => void
   shiftContent: boolean
   fabBottom?: string
@@ -72,8 +84,16 @@ type MountContextCredential = {
   expiresAt: number
 }
 
+type AuthenticationReader = <T>(
+  read: () => Promise<T>,
+  signal?: AbortSignal,
+) => Promise<T>
+
 type MountContextTokenProvider = {
-  getToken: (request?: AuthTokenRequest) => Promise<string>
+  getToken: (
+    request?: AuthTokenRequest,
+    signal?: AbortSignal,
+  ) => Promise<string>
   discard: () => void
 }
 
@@ -255,13 +275,21 @@ function loadPinnedPanel(signal: AbortSignal): Promise<PanelApi> {
   })
 }
 
-async function platformSessionToken(): Promise<string> {
-  const clerk = await getClient()
+async function platformSessionToken(
+  checkPrincipal: (signal?: AbortSignal) => Promise<void>,
+  authenticate: AuthenticationReader,
+  signal?: AbortSignal,
+): Promise<string> {
+  await checkPrincipal(signal)
+  const clerk = await authenticate(() => getClient(), signal)
+  await checkPrincipal(signal)
   if (!clerk?.user || !clerk.session) {
     throw new Error("Provider session unavailable")
   }
-  const token = await clerk.session.getToken()
+  const session = clerk.session
+  const token = await authenticate(() => session.getToken(), signal)
   if (!token) throw new Error("Provider session unavailable")
+  await checkPrincipal(signal)
   return token
 }
 
@@ -347,6 +375,8 @@ async function requestProviderMountContext(
 
 function createProviderMountContextTokenProvider(
   appointmentId: string,
+  checkPrincipal: (signal?: AbortSignal) => Promise<void>,
+  authenticate: AuthenticationReader,
 ): MountContextTokenProvider {
   let credential: MountContextCredential | null = null
   let pending: {
@@ -361,8 +391,12 @@ function createProviderMountContextTokenProvider(
     if (pending?.serial === serial) pending = null
   }
 
-  const getToken = async (request?: AuthTokenRequest): Promise<string> => {
+  const getToken = async (
+    request?: AuthTokenRequest,
+    signal?: AbortSignal,
+  ): Promise<string> => {
     const forceRefresh = requestedForceRefresh(request)
+    await checkPrincipal(signal)
     if (discarded) throw new Error("Provider authority is unavailable")
     const now = Date.now()
     if (pending) {
@@ -390,6 +424,9 @@ function createProviderMountContextTokenProvider(
 
     const current = credential
     const controller = new AbortController()
+    const abortRead = () => controller.abort(signal?.reason)
+    signal?.addEventListener("abort", abortRead, { once: true })
+    if (signal?.aborted) abortRead()
     const serial = ++requestSerial
     const operation = (async () => {
       try {
@@ -402,10 +439,11 @@ function createProviderMountContextTokenProvider(
             )
           : await requestProviderMountContext(
               "exchange",
-              await platformSessionToken(),
+              await platformSessionToken(checkPrincipal, authenticate, signal),
               appointmentId,
               controller.signal,
             )
+        await checkPrincipal(signal)
         if (discarded) throw new Error("Provider authority is unavailable")
         credential = next
         return next.contextToken
@@ -417,6 +455,7 @@ function createProviderMountContextTokenProvider(
         }
         throw error
       } finally {
+        signal?.removeEventListener("abort", abortRead)
         clearPending(serial)
       }
     })()
@@ -477,6 +516,7 @@ export function SovereignPanelHost({
   onSessionPrepStateChange?: (state: SessionPrepUiState) => void
 }) {
   const config = resolveSovereignProviderConfig()
+  const { isLoaded, userId, sessionId, identity } = useBrowserPrincipal()
   const panelRef = useRef<PanelInstance | null>(null)
   const [panelReady, setPanelReady] = useState(false)
   const [presentationTarget, setPresentationTarget] =
@@ -526,13 +566,36 @@ export function SovereignPanelHost({
     setPanelReady(false)
     setPresentationTarget(null)
     sourceSnapshot.current = null
+    if (!isLoaded || !userId || !sessionId) {
+      setRecovery("unavailable")
+      return
+    }
     let cancelled = false
     let accessWasGranted = false
     let accessLost = false
     let mounted: PanelInstance | null = null
     const statusController = new AbortController()
-    const mountTokenProvider =
-      createProviderMountContextTokenProvider(appointmentId)
+    const readAuthentication = new Map<
+      AbortSignal,
+      { pending: number; failed: boolean }
+    >()
+    const authenticate: AuthenticationReader = async (read, signal) => {
+      const state = signal ? readAuthentication.get(signal) : undefined
+      if (state) state.pending++
+      try {
+        return await read()
+      } catch (error) {
+        if (state) state.failed = true
+        throw error
+      } finally {
+        if (state) state.pending--
+      }
+    }
+    const mountTokenProvider = createProviderMountContextTokenProvider(
+      appointmentId,
+      checkPrincipal,
+      authenticate,
+    )
     setRecovery(mountAttempt > 0 ? "connecting" : null)
     const finishBootstrap = () => clearTimeout(bootstrapTimeout)
     const discardMounted = () => {
@@ -547,6 +610,35 @@ export function SovereignPanelHost({
       if (panelRef.current === previous) panelRef.current = null
       if (previous) resetAndDestroy(previous)
     }
+    let readSdkPrincipal:
+      | (() => ReturnType<typeof identity.current>)
+      | undefined
+    const matches = (principal: ReturnType<typeof identity.current>) =>
+      principal.isLoaded &&
+      principal.userId === userId &&
+      principal.sessionId === sessionId
+    function assertPrincipal() {
+      if (cancelled || accessLost)
+        throw new Error("Provider authority is unavailable")
+      if (
+        !matches(identity.current()) ||
+        (readSdkPrincipal && !matches(readSdkPrincipal()))
+      ) {
+        discardMounted()
+        setRecovery("unavailable")
+        throw new DOMException("Provider principal changed", "AbortError")
+      }
+    }
+    async function checkPrincipal(signal?: AbortSignal) {
+      signal?.throwIfAborted()
+      assertPrincipal()
+      readSdkPrincipal = await authenticate(
+        () => identity.readCurrent(),
+        signal,
+      )
+      signal?.throwIfAborted()
+      assertPrincipal()
+    }
     // Bound the whole handshake, including script loading, authority exchange,
     // and welcome. A timed-out generation can never complete a later retry.
     const bootstrapTimeout = setTimeout(() => {
@@ -554,6 +646,13 @@ export function SovereignPanelHost({
       discardMounted()
       setRecovery("unavailable")
     }, 30_000)
+
+    const unsubscribeAuth = identity.subscribe((principal) => {
+      if (!matches(principal)) {
+        discardMounted()
+        setRecovery("unavailable")
+      }
+    })
 
     // Fail closed before loading the platform context-token path. A Clerk
     // session token is accepted only by the same-origin exchange endpoint and
@@ -575,13 +674,58 @@ export function SovereignPanelHost({
           embedVersion: EMBED_VERSION,
           getAuthToken: (request) => mountTokenProvider.getToken(request),
           getContext: async () => {
-            if (cancelled || accessLost) {
+            if (cancelled || accessLost)
               throw new Error("Open record changed while context was resolving")
+            const controller = new AbortController()
+            const authentication = { pending: 0, failed: false }
+            let readSignal: AbortSignal | undefined
+            const abort = () => controller.abort()
+            statusController.signal.addEventListener("abort", abort, {
+              once: true,
+            })
+            if (statusController.signal.aborted) abort()
+            try {
+              return await withReadDeadline(
+                async (signal) => {
+                  readSignal = signal
+                  readAuthentication.set(signal, authentication)
+                  signal.throwIfAborted()
+                  if (cancelled || accessLost)
+                    throw new Error(
+                      "Open record changed while context was resolving",
+                    )
+                  await checkPrincipal(signal)
+                  signal.throwIfAborted()
+                  if (cancelled || accessLost)
+                    throw new Error(
+                      "Open record changed while context was resolving",
+                    )
+                  // The record-bound token remains the only authority input.
+                  // No chart content crosses this browser bridge.
+                  return { clientId: appointmentId }
+                },
+                { signal: controller.signal },
+              )
+            } catch (error) {
+              // Timed panel reads use this bridge directly, so they need the
+              // same terminal SDK failure fence as the governed history reads.
+              if (authentication.pending > 0 || authentication.failed) {
+                if (!cancelled && !accessLost) {
+                  discardMounted()
+                  setRecovery("unavailable")
+                }
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.name = error instanceof Error ? error.name : "Error"
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              throw error
+            } finally {
+              if (readSignal) readAuthentication.delete(readSignal)
+              statusController.signal.removeEventListener("abort", abort)
             }
-            // The record-bound mount token is the only authority input. No raw
-            // history, note, patient, labs content, or Session Prep handle
-            // crosses this browser bridge.
-            return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,
           onSessionPrepStateChange: (state) => {
@@ -589,6 +733,8 @@ export function SovereignPanelHost({
           },
           loadHistory: async (recordId, { signal }) => {
             const controller = new AbortController()
+            const authentication = { pending: 0, failed: false }
+            let readSignal: AbortSignal | undefined
             const abort = () => controller.abort()
             const signals = [signal, statusController.signal]
             signals.forEach((source) =>
@@ -596,21 +742,54 @@ export function SovereignPanelHost({
             )
             if (signals.some((source) => source.aborted)) abort()
             const assertCurrent = () => {
+              assertPrincipal()
               controller.signal.throwIfAborted()
               if (cancelled || accessLost || recordId !== appointmentId) {
                 throw new DOMException("Open record changed", "AbortError")
               }
             }
             try {
-              const history = await loadSovereignHistory({
-                origin: config.origin,
-                getToken: () => mountTokenProvider.getToken(),
-                signal: controller.signal,
-                assertCurrent,
-              })
-              assertCurrent()
-              return history
+              return await withReadDeadline(
+                async (signal) => {
+                  readSignal = signal
+                  readAuthentication.set(signal, authentication)
+                  const check = () => {
+                    signal.throwIfAborted()
+                    assertCurrent()
+                  }
+                  check()
+                  await checkPrincipal(signal)
+                  check()
+                  const history = await loadSovereignHistory({
+                    origin: config.origin,
+                    getToken: () =>
+                      mountTokenProvider.getToken(undefined, signal),
+                    signal,
+                    assertCurrent: check,
+                  })
+                  await checkPrincipal(signal)
+                  check()
+                  return history
+                },
+                { signal: controller.signal },
+              )
             } catch (error) {
+              if (authentication.pending > 0 || authentication.failed) {
+                if (!cancelled && !accessLost) {
+                  discardMounted()
+                  setRecovery("unavailable")
+                }
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.name = error instanceof Error ? error.name : "Error"
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              // A verified transport/map failure keeps its existing fallback,
+              // but cannot bypass a synchronously changed live/SDK principal.
+              if (controller.signal.aborted) throw error
+              assertPrincipal()
               if (
                 !cancelled &&
                 !accessLost &&
@@ -621,6 +800,87 @@ export function SovereignPanelHost({
               }
               throw error
             } finally {
+              if (readSignal) readAuthentication.delete(readSignal)
+              signals.forEach((source) =>
+                source.removeEventListener("abort", abort),
+              )
+            }
+          },
+          citationHref,
+          loadCitationHistory: async (recordId, options) => {
+            const controller = new AbortController()
+            const authentication = { pending: 0, failed: false }
+            let readSignal: AbortSignal | undefined
+            const abort = () => controller.abort()
+            const signals = [options.signal, statusController.signal]
+            signals.forEach((source) =>
+              source.addEventListener("abort", abort, { once: true }),
+            )
+            if (signals.some((source) => source.aborted)) abort()
+            const assertCurrent = () => {
+              assertPrincipal()
+              controller.signal.throwIfAborted()
+              if (cancelled || accessLost || recordId !== appointmentId)
+                throw new DOMException("Open record changed", "AbortError")
+            }
+            try {
+              return await withReadDeadline(
+                async (signal) => {
+                  readSignal = signal
+                  readAuthentication.set(signal, authentication)
+                  const check = () => {
+                    signal.throwIfAborted()
+                    assertCurrent()
+                  }
+                  check()
+                  await checkPrincipal(signal)
+                  check()
+                  const display = await loadCitationDisplay({
+                    origin: config.origin,
+                    getToken: () =>
+                      mountTokenProvider.getToken(undefined, signal),
+                    assertCurrent: check,
+                    options: { ...options, signal },
+                  })
+                  await checkPrincipal(signal)
+                  check()
+                  return display
+                },
+                { signal: controller.signal },
+              )
+            } catch (error) {
+              if (authentication.pending > 0 || authentication.failed) {
+                if (!cancelled && !accessLost) {
+                  discardMounted()
+                  setRecovery("unavailable")
+                }
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.name = error instanceof Error ? error.name : "Error"
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              // A verified transport/map failure keeps its existing fallback,
+              // but cannot bypass a synchronously changed live/SDK principal.
+              if (controller.signal.aborted) throw error
+              assertPrincipal()
+              if (
+                !cancelled &&
+                !accessLost &&
+                error instanceof HistoryAccessDeniedError
+              ) {
+                discardMounted()
+                setRecovery("unavailable")
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              throw error
+            } finally {
+              if (readSignal) readAuthentication.delete(readSignal)
               signals.forEach((source) =>
                 source.removeEventListener("abort", abort),
               )
@@ -655,6 +915,7 @@ export function SovereignPanelHost({
         // Cleanup owns destruction once the effect has been cancelled. Do not
         // dereference `mounted` here: cleanup deliberately nulls it while an
         // asynchronous initial bind may still be resolving.
+        await checkPrincipal()
         if (cancelled || accessLost) return
         finishBootstrap()
         panelRef.current = candidate
@@ -670,19 +931,41 @@ export function SovereignPanelHost({
         // is unavailable. The panel itself renders network errors per turn.
       })
 
-    return discardMounted
-  }, [appointmentId, config?.origin, mountAttempt])
+    return () => {
+      unsubscribeAuth()
+      discardMounted()
+    }
+  }, [
+    appointmentId,
+    config?.origin,
+    mountAttempt,
+    identity,
+    isLoaded,
+    userId,
+    sessionId,
+  ])
 
   return config ? (
     <>
       <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
       {presentationTarget &&
-        patientName &&
+        (patientName ||
+          priorNotes?.newer_prior_note_awaiting_review === true) &&
         createPortal(
           <div className="py-3">
-            <p className="font-semibold">{patientName}</p>
+            {patientName && <p className="font-semibold">{patientName}</p>}
             {appointmentDate && (
               <p>Visit · {appointmentDateFormat(appointmentDate)}</p>
+            )}
+            {priorNotes?.newer_prior_note_awaiting_review === true && (
+              <p
+                role="status"
+                className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+              >
+                A newer prior-visit note is awaiting your review. Session Prep
+                still shows earlier reviewed history. Review the newer note,
+                then refresh Session Prep to include it.
+              </p>
             )}
             {includedNotes.length > 0 && (
               <details className="mt-2">

@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "source_commit": "1f6e0e089fe06cabfb4f49861a5ba80018ecdf56",
+  "source_path": "app/panel.js",
+  "source_blob": "82fc1a2d198cf4d3d99252a8fec655e9c052741a",
+  "source_sha256": "6beeb21ac571090c46efdb6782d5553e2f10eaa6bdc37236ab4c99af96d5f3ed",
+  "delivery_path": "app/panel.delivery.js",
+  "delivery_sha256": "0c04de969fe0a82fc70dbf1cfa520a78c01d5e6f3b33b4be3a7d8b6fd58d7855",
+  "compiler": "esbuild",
+  "compiler_version": "0.25.12",
+  "compiler_lock_sha256": "ae312f69d18c0a80b06e28c9cf5f0fa432c483171e6108c719ed958bfbde5c31",
+  "compiler_package_sha256": "b33803c043507c2a4f331a176667ec84c58c9c90fdf229999e5adb4aa1433090",
+  "options": {
+    "loader": "js",
+    "minify": true,
+    "target": "es2020",
+    "charset": "utf8",
+    "legalComments": "none",
+    "sourcemap": false
+  }
+}

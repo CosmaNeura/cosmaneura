@@ -2,6 +2,7 @@ import { webcrypto } from "node:crypto"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  cabDraft,
   cabProviderExport,
   changeCabCodes,
   editableCabHeader,
@@ -20,6 +21,19 @@ beforeEach(() => {
 })
 
 describe("Core provider header response", () => {
+  it("preserves nonempty JSON code mappings and rejects a scalar mapping", () => {
+    const draft = editableCabHeader(header())
+    const mapping = { source: "synthetic", details: { score: 1 }, reason: null }
+    draft.codes[0].mapping = mapping
+    expect(cabDraft.parse(draft).codes[0].mapping).toEqual(mapping)
+    expect(
+      cabDraft.safeParse({
+        ...draft,
+        codes: [{ ...draft.codes[0], mapping: "unconfirmed" }],
+      }).success,
+    ).toBe(false)
+  })
+
   it("accepts exact projected-note evidence and preserves original source", async () => {
     const response = reply("read", header())
     const before = JSON.stringify(response)

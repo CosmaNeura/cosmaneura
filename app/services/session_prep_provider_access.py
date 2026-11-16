@@ -1,11 +1,9 @@
-"""One strict, current access decision for provider Session Prep.
+"""Session Prep is included for every active provider account.
 
-The platform's legacy pilot grant intentionally preserves broad product access,
-but it is not sufficient authority for Session Prep.  This feature can expose
-longitudinal chart context, so every discovery and execution boundary requires
-completed onboarding plus a live practice membership, BAA, and platform
-entitlement.  The global rollout switch is deliberately kept outside this
-predicate so turning it on can never manufacture account authority.
+Account activation is independent of practice setup, onboarding, billing and
+legacy grant snapshots. Explicit account stops remain effective. Record and
+note ownership are checked separately on every read or action; availability
+never grants access to another account's charts.
 """
 
 from __future__ import annotations
@@ -14,21 +12,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 
-from app.services.organization_access import member_authorization_basis
+from app.services.scribe_cancellation_access import doctor_cancellation_denial
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
-from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import (
-    SEAT_HOLDING_ACCESS_STATES,
-    Practice,
-    PracticeMember,
-    member_access_state,
-)
+from app.models.practice import Practice, PracticeMember
 from sqlmodel import Session, col, select
 
 SessionPrepProviderAccessDenial = Literal[
     "provider_unavailable",
+    # Retain denial-result compatibility for existing callers. The resolver
+    # below does not use legacy enrollment metadata as an eligibility gate.
     "pilot_grant_revoked",
     "onboarding_incomplete",
     "practice_membership_required",
@@ -36,6 +30,8 @@ SessionPrepProviderAccessDenial = Literal[
     "practice_access_not_authorized",
     "baa_not_in_force",
     "entitlement_not_in_force",
+    "scribe_cancelled_read_only",
+    "scribe_export_period_expired",
 ]
 
 
@@ -58,7 +54,12 @@ def resolve_session_prep_provider_access(
     session: Session | None = None,
     at: datetime | None = None,
 ) -> SessionPrepProviderAccessDecision:
-    """Resolve current account authority without accepting pilot-only access."""
+    """Read fresh account state without a Session Prep enrollment requirement.
+
+    The optional practice is a compatibility namespace for already-bound records,
+    not an eligibility requirement. Accounts without one use their own authority
+    namespace when an authenticated owned-record exchange is requested.
+    """
 
     current_at = at or datetime.now(UTC)
     if session is None:
@@ -69,63 +70,24 @@ def resolve_session_prep_provider_access(
                 at=current_at,
             )
 
-    active_pilot_grant = (
-        select(col(PilotAccessGrandfatherGrant.id))
-        .where(
-            PilotAccessGrandfatherGrant.clerk_id == doctor.clerk_id,
-            PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
-        )
-        .correlate(None)
-        .exists()
-    )
-    revoked_pilot_grant = (
-        select(col(PilotAccessGrandfatherGrant.id))
-        .where(
-            PilotAccessGrandfatherGrant.clerk_id == doctor.clerk_id,
-            PilotAccessGrandfatherGrant.revoked_at != None,  # noqa: E711
-            ~active_pilot_grant,
-        )
-        .order_by(col(PilotAccessGrandfatherGrant.revoked_at).desc())
-        .limit(1)
-        .correlate(None)
-        .scalar_subquery()
-    )
     rows = session.exec(
-        select(Doctor, PracticeMember, Practice, PilotAccessGrandfatherGrant)
+        select(Doctor, PracticeMember, Practice)
         .select_from(Doctor)
         .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
         .outerjoin(Practice, col(Practice.id) == col(PracticeMember.practice_id))
-        .outerjoin(
-            PilotAccessGrandfatherGrant,
-            col(PilotAccessGrandfatherGrant.id) == revoked_pilot_grant,
-        )
         .where(Doctor.id == doctor.id, Doctor.clerk_id == doctor.clerk_id)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if rows is None:
         return _denied("provider_unavailable")
-    current_doctor, member, practice, revoked_pilot = rows
+    current_doctor, _member, practice = rows
     if current_doctor.deleted_at is not None:
         return _denied("provider_unavailable")
-    if revoked_pilot is not None:
-        return _denied("pilot_grant_revoked")
-    if current_doctor.onboarding_completed_at is None:
-        return _denied("onboarding_incomplete")
-    if member is None or practice is None:
-        return _denied("practice_membership_required")
-    if member_access_state(member, at=current_at) not in SEAT_HOLDING_ACCESS_STATES:
-        return _denied("practice_membership_inactive")
-    if member_authorization_basis(member, at=current_at, practice=practice) not in (
-        "organization_roster",
-        "workforce_attestation",
-    ):
-        return _denied("practice_access_not_authorized")
-    if not practice.baa_in_force(at=current_at):
-        return _denied("baa_not_in_force")
-    # A legacy pilot grant can count as broad product entitlement. Session Prep
-    # deliberately requires the practice's ordinary, current entitlement.
-    if not practice.entitled(at=current_at):
-        return _denied("entitlement_not_in_force")
+    cancellation = doctor_cancellation_denial(
+        current_doctor, session=session, at=current_at
+    )
+    if cancellation is not None:
+        return _denied(cancellation)
     return SessionPrepProviderAccessDecision(
         allowed=True,
         denial_reason=None,

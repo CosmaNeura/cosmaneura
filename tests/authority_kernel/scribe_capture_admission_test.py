@@ -108,12 +108,13 @@ class FakeScribe(DisabledScribeWorkflowClient):
         return receipt
 
 
-@pytest.fixture
-def admission_case(capture_engine):
+def admission_case_data(capture_engine, *, normal_provider_record=False):
     with Session(capture_engine, expire_on_commit=False) as session:
         context = _session_context.set(session)
         try:
-            case = make_scope_case(session)
+            case = make_scope_case(
+                session, normal_provider_record=normal_provider_record
+            )
             binding = resolve_capture_binding(**case.arguments)
             caller = admission.CaptureCaller(
                 **{
@@ -140,6 +141,11 @@ def admission_case(capture_engine):
             )
         finally:
             _session_context.reset(context)
+
+
+@pytest.fixture
+def admission_case(capture_engine):
+    yield from admission_case_data(capture_engine)
 
 
 def call_arguments(fixture, *, resume=False) -> CaptureAdmissionArguments:

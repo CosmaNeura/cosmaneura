@@ -150,7 +150,9 @@ variable "python_public_vars" {
     "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
     # capability authorization remains independent of Authority Kernel rollout
     "AUTHORITY_CLERK_ISSUER",
-    "DURABLE_WEBHOOK_INBOX_ENABLED"
+    "DURABLE_WEBHOOK_INBOX_ENABLED",
+    # Explicit default-off production input, shared by API/worker/scheduler.
+    "HELD_MEDICATION_WRITES_ENABLED"
   ]
 
   validation {
@@ -164,7 +166,14 @@ variable "python_public_vars" {
       "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
       "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
       "SESSION_PREP_PROVIDER_ENABLED",
+      "AUTO_MIGRATE_ON_STARTUP",
       "SCRIBE_CAPTURE_ENABLED",
+      "SCRIBE_NATIVE_WORKLOAD_ENABLED",
+      "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
+      "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
+      "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
+      "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
+      "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
       "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
       "SCRIBE_CAPTURE_NOTES_ENABLED",
       "SCRIBE_CAPTURE_RECOVERY_ENABLED",
@@ -175,8 +184,15 @@ variable "python_public_vars" {
       "SCRIBE_ENCOUNTER_CREATION_ENABLED",
       "SCRIBE_ENCOUNTER_PREP_ENABLED",
       "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+      "SCRIBE_CANCELLATION_LEDGER_READY",
+      "SCRIBE_CANCELLATION_ENABLED",
+      "SCRIBE_CANCELLATION_GRACE_DAYS",
+      "SCRIBE_CANCELLATION_PHI_SCOPE",
+      "SCRIBE_CANCELLATION_POLICY_SHA256",
+      "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
+      "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED",
     ]))) == 0
-    error_message = "Session Prep, native Scribe, and durable Zoom rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
+    error_message = "Session Prep, native Scribe, durable Zoom, cancellation, and workflow-client rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
   }
 }
 
@@ -202,6 +218,53 @@ variable "session_prep_production_rollout" {
       var.session_prep_production_rollout.agent_api_audience != "00000000-0000-0000-0000-000000000000"
     )
     error_message = "Session Prep production activation requires nonzero canonical Entra audience and Sovereign client UUIDs"
+  }
+}
+
+variable "scribe_native_workload_rollout" {
+  description = "Default-off singleton Scribe native-facade caller and Core audience with optional native context, existing-patient visit and full native v2 gates. Does not enable Session Prep, global Agent API/Authority Kernel or capture gates."
+  type = object({
+    enabled                         = bool
+    audience                        = string
+    client_id                       = string
+    provider_context_enabled        = optional(bool, false)
+    existing_patient_visits_enabled = optional(bool, false)
+    native_visit_actions_v2_enabled = optional(bool, false)
+  })
+  nullable = false
+  default = {
+    enabled   = false
+    audience  = ""
+    client_id = ""
+  }
+
+  validation {
+    condition = !var.scribe_native_workload_rollout.enabled || (
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.scribe_native_workload_rollout.audience)) &&
+      var.scribe_native_workload_rollout.audience != "00000000-0000-0000-0000-000000000000" &&
+      can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.scribe_native_workload_rollout.client_id)) &&
+      var.scribe_native_workload_rollout.client_id != "00000000-0000-0000-0000-000000000000" &&
+      var.scribe_native_workload_rollout.client_id != var.session_prep_production_rollout.sovereign_client_id
+    )
+    error_message = "native workload activation requires one canonical nonzero Core audience and distinct Scribe receiver client UUID"
+  }
+  validation {
+    condition     = !var.scribe_native_workload_rollout.provider_context_enabled || var.scribe_native_workload_rollout.enabled
+    error_message = "native provider context reads require the dedicated native workload boundary"
+  }
+  validation {
+    condition = !var.scribe_native_workload_rollout.existing_patient_visits_enabled || (
+      var.scribe_native_workload_rollout.enabled && var.scribe_native_workload_rollout.provider_context_enabled
+    )
+    error_message = "native existing-patient visits require current provider context and the dedicated native workload boundary"
+  }
+  validation {
+    condition = !var.scribe_native_workload_rollout.native_visit_actions_v2_enabled || (
+      var.scribe_native_workload_rollout.enabled &&
+      var.scribe_native_workload_rollout.provider_context_enabled &&
+      var.scribe_native_workload_rollout.existing_patient_visits_enabled
+    )
+    error_message = "full native v2 visit actions require the dedicated workload, current provider context and existing native visit gates"
   }
 }
 

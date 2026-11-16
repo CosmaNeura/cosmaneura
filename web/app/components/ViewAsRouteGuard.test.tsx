@@ -607,6 +607,7 @@ describe("requiresViewAsProtection", () => {
   it.each([
     "/onboarding",
     "/notes",
+    "/session-prep/citations/conversation_final_phase_01m00000000000000000000000.1",
     "/notes/note_123",
     "/intake/intake_123",
     "/schedule/meeting_123",

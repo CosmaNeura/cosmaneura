@@ -139,7 +139,10 @@ def catalog_rows(session, rows, *, doctor_id, subject, link):
         .outerjoin(Doctor, col(Doctor.id) == col(ProviderRecordAuthority.doctor_id))
         .outerjoin(
             ProviderPracticeAuthority,
-            col(ProviderPracticeAuthority.practice_id) == link.practice_id,
+            (col(ProviderPracticeAuthority.tenant_id) == link.tenant_id)
+            & provider_record_authority._scribe_mapping_owner_predicate(
+                practice_id=link.practice_id, doctor_id=doctor_id
+            ),
         )
         .outerjoin(
             AuthorityPerson,
@@ -314,7 +317,10 @@ def _validate_unmapped_record(
         or mapping is None
         or origin is None
         or practice.id != link.practice_id
-        or mapping.practice_id != practice.id
+        or not (
+            (mapping.practice_id == practice.id and mapping.doctor_id is None)
+            or (mapping.practice_id is None and mapping.doctor_id == doctor_id)
+        )
         or mapping.tenant_id != link.tenant_id
         or appointment.doctor_id != doctor_id
         or appointment.patient_id != patient.id
@@ -347,7 +353,12 @@ def validate_unmapped_record(
     )
     mapping = session.exec(
         select(ProviderPracticeAuthority)
-        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .where(
+            ProviderPracticeAuthority.tenant_id == link.tenant_id,
+            provider_record_authority._scribe_mapping_owner_predicate(
+                practice_id=practice.id, doctor_id=doctor_id
+            ),
+        )
         .execution_options(populate_existing=True)
     ).one_or_none()
     origin = (

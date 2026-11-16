@@ -120,8 +120,9 @@ def production_configuration(config: dict[str, str]) -> None:
     require("staging" not in issuer and not issuer.endswith(".accounts.dev"))
 
 
-def context(source_sha: str) -> dict[str, str]:
+def _expected_context(source_sha: str, run_id: str) -> dict[str, str]:
     require(re.fullmatch(r"[0-9a-f]{40}", source_sha))
+    require(re.fullmatch(r"[1-9][0-9]{0,19}", run_id))
     expected = {
         "GITHUB_ACTOR": "JohnClem",
         "GITHUB_TRIGGERING_ACTOR": "JohnClem",
@@ -130,11 +131,14 @@ def context(source_sha: str) -> dict[str, str]:
         "GITHUB_REPOSITORY": "CosmaNeura/cosmaneura",
         "GITHUB_WORKFLOW_REF": WORKFLOW_REF,
         "GITHUB_SHA": source_sha,
+        "GITHUB_RUN_ID": run_id,
     }
+    return expected
+
+
+def context(source_sha: str) -> dict[str, str]:
+    expected = _expected_context(source_sha, os.environ.get("GITHUB_RUN_ID", ""))
     require(all(os.environ.get(key) == value for key, value in expected.items()))
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
-    require(re.fullmatch(r"[1-9][0-9]{0,19}", run_id))
-    expected["GITHUB_RUN_ID"] = run_id
     return expected
 
 
@@ -198,6 +202,28 @@ def verify(raw: bytes, admission_path: Path, source_sha: str) -> None:
         canonical(decode(read_file(admission_path)))
         == canonical(receipt(config, source_sha))
     )
+
+
+def verify_authenticated_receipt(
+    admission: object, public_configuration_sha256: str, source_sha: str, run_id: int
+) -> None:
+    """Bind archived admission to independently authenticated producer facts.
+
+    This pure comparison supplies no run authentication or activation authority;
+    the immutable consumer must first authenticate GitHub's producer evidence.
+    Fresh promotion still calls verify() with its own current founder context.
+    """
+
+    require(re.fullmatch(r"[0-9a-f]{64}", public_configuration_sha256))
+    require(type(run_id) is int)
+    expected = {
+        "version": 1,
+        "purpose": "session-prep-frontend-build-only",
+        "source_sha": source_sha,
+        "public_configuration_sha256": public_configuration_sha256,
+        "manual_workflow_context": _expected_context(source_sha, str(run_id)),
+    }
+    require(canonical(admission) == canonical(expected))
 
 
 def main() -> int:

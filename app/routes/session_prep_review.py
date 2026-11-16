@@ -1,13 +1,28 @@
 """Clinician action binding Session Prep eligibility to the displayed revision."""
 
 from datetime import UTC, datetime
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import BaseModel, Field, StrictStr, field_validator
 
 import app.configuration.session_prep as configuration
+from app.configuration.authority import AuthorityKernelSettings
+from app.routes.agent import get_agent_authority_settings
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
+from app.services.authority import AuthorityRequestDeniedError
+from app.services.authority_conversation import ConversationInvariantError
+from app.services.authority_conversation_display import read_retained_citation
+from app.services.authority_conversation_read import (
+    ConversationContextChanged,
+    SessionPrepSourceBusy,
+)
+from app.services.provider_record_authority import ProviderRecordScopeDenied
+from app.services.reviewed_excerpt_citations import (
+    CitationDenied,
+    DisplayCitation,
+)
+from app.services.session_prep import SessionPrepScopeDenied
 from app.services.session_prep_capture_freshness import (
     note_has_saved_capture_correction,
 )
@@ -31,9 +46,64 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 session_prep_review_api = APIRouter()
+
+
+class RetainedCitationSection(BaseModel, extra="forbid"):
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(max_length=18_000)
+
+
+class RetainedCitationResponse(BaseModel, extra="forbid"):
+    schema_version: Literal["1.0.0"]
+    citation: DisplayCitation
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    sections: list[RetainedCitationSection] = Field(min_length=1, max_length=64)
+
+
+@session_prep_review_api.get("/session-prep/citations/{final_ref}/{ordinal}")
+def retained_session_prep_citation(
+    request: Request,
+    response: Response,
+    final_ref: Annotated[TypeIDType, Path()],
+    ordinal: Annotated[int, Path(ge=1, le=64)],
+    settings: Annotated[AuthorityKernelSettings, Depends(get_agent_authority_settings)],
+) -> RetainedCitationResponse:
+    deny_view_as_browser_activity(request)
+    response.headers["Cache-Control"] = "no-store"
+    doctor: Doctor = request.state.doctor
+    if final_ref.prefix != "conversation_final_phase":
+        raise HTTPException(status_code=404, detail="Source is unavailable.")
+    try:
+        with get_session() as managed:
+            return RetainedCitationResponse.model_validate(
+                read_retained_citation(
+                    session=cast(Session, managed),
+                    doctor=doctor,
+                    final_ref=final_ref,
+                    ordinal=ordinal,
+                    settings=settings,
+                )
+            )
+    except (SQLAlchemyError, SessionPrepSourceBusy):
+        raise HTTPException(
+            status_code=503, detail="Source is temporarily unavailable."
+        ) from None
+    except (
+        CitationDenied,
+        ProviderRecordScopeDenied,
+        NoteSourceDenied,
+        ConversationContextChanged,
+        ConversationInvariantError,
+        AuthorityRequestDeniedError,
+        SessionPrepScopeDenied,
+        ValueError,
+        IndexError,
+    ):
+        raise HTTPException(status_code=404, detail="Source is unavailable.") from None
 
 
 class SessionPrepNoteReview(BaseModel, extra="forbid"):

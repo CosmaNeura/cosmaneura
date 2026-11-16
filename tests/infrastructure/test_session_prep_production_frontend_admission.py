@@ -320,14 +320,17 @@ def test_true_without_receipt_or_with_extra_builder_key_is_refused(
 
 
 @pytest.mark.parametrize("enabled", ["false", "true"])
+@pytest.mark.parametrize("job", ["production-candidate", "deploy"])
 def test_actual_workflow_resolver_projects_dark_then_admits_explicit_choice(
-    tmp_path: Path, enabled: str
+    tmp_path: Path, enabled: str, job: str
 ) -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     resolver = next(
         step
-        for step in workflow["jobs"]["deploy"]["steps"]
-        if step.get("name") == "Resolve production frontend build configuration"
+        for step in workflow["jobs"][job]["steps"]
+        if step.get("name", "").startswith(
+            ("Resolve production frontend", "Resolve fresh production frontend")
+        )
     )
     # Substitute only the secret resolver command. Execute the tracked shell,
     # real jq projection, helper and subsequent real build-argument recipe.
@@ -422,19 +425,20 @@ def test_manual_workflow_keeps_existing_gates_and_default_dark_projection() -> N
             "github.ref == 'refs/heads/master'",
             "github.actor == 'JohnClem'",
             "github.triggering_actor == 'JohnClem'",
-            "needs.authorize-production.result == 'success'",
+            "needs.release-gates.result == 'success'",
         )
     )
     steps = deploy["steps"]
     resolver = next(
         s
         for s in steps
-        if s.get("name") == "Resolve production frontend build configuration"
+        if s.get("name")
+        == "Resolve fresh production frontend configuration for comparison"
     )
     builder = next(
         s
-        for s in steps
-        if s.get("name") == "Build production images from resolved public configuration"
+        for s in workflow["jobs"]["production-candidate"]["steps"]
+        if s.get("name") == "Build the combined production frontend and Core image"
     )
     cleanup = next(
         s
@@ -447,7 +451,7 @@ def test_manual_workflow_keeps_existing_gates_and_default_dark_projection() -> N
     assert "SESSION_PREP_FRONTEND_ENABLED" not in builder["env"]
     assert "OP_SERVICE_ACCOUNT_TOKEN" not in builder["env"]
     assert cleanup["if"] == "always()"
-    assert "$JAVASCRIPT_SESSION_PREP_ADMISSION_JSON" in cleanup["run"]
+    assert "$RUNNER_TEMP/production-session-prep-admission.json" in cleanup["run"]
     assert (
         "scripts/session_prep_production_frontend_admission.py"
         in source[

@@ -486,4 +486,39 @@ describe("terminal meeting bot status", () => {
       await screen.findByText("Zoom recording permission denied"),
     ).toBeInTheDocument()
   })
+
+  it.each(["permission_denied", "failed", "ended"] as const)(
+    "opens the linked visit immediately after %s while Zoom is still active",
+    async (capture_status) => {
+      renderMeeting({
+        ...meeting,
+        status: "started",
+        appointment_id: appointment.id,
+        capture_authorized: true,
+        capture_status,
+      })
+
+      expect(
+        await screen.findByRole("link", { name: "Open linked visit" }),
+      ).toHaveAttribute("href", `/notes/${appointment.id}`)
+      expect(authorizeZoomCapture).not.toHaveBeenCalled()
+    },
+  )
+
+  it("does not offer a visit link when the failed capture has no linked visit", async () => {
+    renderMeeting({
+      ...meeting,
+      status: "started",
+      appointment_id: null,
+      capture_authorized: true,
+      capture_status: "failed",
+    })
+
+    expect(
+      await screen.findByText("Meeting bot could not continue"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("link", { name: "Open linked visit" }),
+    ).not.toBeInTheDocument()
+  })
 })

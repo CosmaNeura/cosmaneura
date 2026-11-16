@@ -1,7 +1,7 @@
 import hashlib
 import secrets
-from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable, Iterable
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
 import httpx
@@ -43,6 +43,7 @@ from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration import session_prep as session_prep_configuration
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+from app.configuration.medication import held_medication_writes_enabled
 from app.configuration.redis import get_redis
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
 from app.configuration.stripe import (
@@ -51,6 +52,7 @@ from app.configuration.stripe import (
     stripe_webhook_configured,
 )
 from app.routes.scribe_visit_extras import router as scribe_visit_extras_api
+from app.routes.visit_prep_core import visit_prep_provider_api
 from app.services import lab_ranges as lab_ranges_service
 from app.services.billing_header_contract import BillingHeaderSource
 from app.services.biomarkers import (
@@ -64,6 +66,7 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
+from app.services.default_note_template import provision_default_note_template
 from app.services.doctor_access import (
     DoctorAccessDecision,
     practice_members_access_in_force,
@@ -123,6 +126,8 @@ from app.services.reference_links import (
     resource_links_for,
 )
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
+from app.services.scribe_activation_events import activate_scribe_after_commit
+from app.services.scribe_cancellation_access import doctor_cancellation_denial
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
     RecordGrantConfigurationError,
@@ -255,6 +260,7 @@ internal_api_app.include_router(billing_header_api)
 internal_api_app.include_router(cab_bff_router)
 internal_api_app.include_router(note_template_fields_api)
 internal_api_app.include_router(scribe_visit_extras_api)
+internal_api_app.include_router(visit_prep_provider_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -1095,8 +1101,8 @@ class SessionPrepSettingsData(BaseModel, extra="forbid"):
     """PHI-free discovery state for the current provider context.
 
     This is intentionally narrower than an execution authorization.
-    ``can_review_sources`` reflects the same current provider/practice/BAA/
-    entitlement gate as review execution. Session Prep read and review routes
+    ``can_review_sources`` reflects the same current active-account decision
+    as review execution. Session Prep read and review routes
     still re-resolve record and note ownership at request time.
     """
 
@@ -1166,7 +1172,9 @@ def _platform_admin_capability_active(request: Request) -> bool:
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     view_as_active = getattr(request.state, "view_as", None) is not None
-    access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    access_decision = resolve_doctor_access(
+        doctor, require_entitlement=False, purpose="read"
+    )
     session_prep_access_decision = (
         session_prep_provider_access.resolve_session_prep_provider_access(doctor)
     )
@@ -1230,6 +1238,7 @@ def settings_data(request: Request) -> SettingsData:
         practice_ready=_practice_ready(doctor, decision=access_decision),
         billing_recovery_required=(
             access_decision.allowed
+            and doctor_cancellation_denial(doctor) is None
             and access_decision.authorization_basis != "pilot_grant"
             and not access_decision.entitlement_in_force
         ),
@@ -1438,6 +1447,22 @@ def _practice_payload(
         and access_decision.allowed
         and access_decision.authorization_basis == "pilot_grant"
     )
+    self_attestation_available = bool(
+        include_join_code
+        and doctor is not None
+        and doctor.deleted_at is None
+        and member.attested_at is None
+        and member_access_state(member, at=datetime.now(UTC))
+        is MemberAccessState.active
+        and practice.organization_id is None
+        and not practice.negotiated_baa_required
+        and member.organization_roster_approval_id is None
+        and member.organization_authorized_at is None
+        and practice.baa_in_force()
+        and email_matches_domain(doctor.email or "", practice.email_domain)
+        and not uses_managed_organization_path(doctor)
+        and not doctor_has_managed_roster_assignment(doctor)
+    )
     return PracticeStatus(
         legal_name=practice.legal_name,
         # Administratively reserved and organization-managed practices use the
@@ -1458,6 +1483,13 @@ def _practice_payload(
         baa_accepted=practice.baa_in_force(),
         role=member.role,
         attested=member.attested_at is not None,
+        self_attestation_available=self_attestation_available,
+        attestation_practice_ref=str(practice.id)
+        if self_attestation_available
+        else None,
+        attestation_baa_reference=(
+            practice.baa_version if self_attestation_available else None
+        ),
         access_authorized=authorization_basis is not None,
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
@@ -1543,6 +1575,10 @@ class PracticeStatus(BaseModel, extra="forbid"):
     baa_accepted: bool
     role: str
     attested: bool
+    self_attestation_available: bool = False
+    "Advisory own-member form availability; mutation rechecks every gate."
+    attestation_practice_ref: str | None = None
+    attestation_baa_reference: str | None = None
     access_authorized: bool
     authorization_basis: str | None
     access_revoked: bool
@@ -2693,6 +2729,128 @@ class JoinPracticeBody(BaseModel, extra="forbid"):
     checks: list[str]
 
 
+class CurrentPracticeAttestationBody(BaseModel, extra="forbid"):
+    practice_ref: str = Field(min_length=35, max_length=35)
+    baa_reference: str = Field(min_length=1, max_length=120)
+    attestation_name: str = Field(min_length=2, max_length=120)
+    checks: list[str] = Field(max_length=4)
+
+
+def _attest_current_practice_member(
+    request: Request,
+    data: JoinPracticeBody | CurrentPracticeAttestationBody,
+    practice: Practice,
+    member: PracticeMember,
+) -> PracticeStatus:
+    """Record real acknowledgements without changing memberships, seats, or grants."""
+
+    doctor: Doctor = request.state.doctor
+    if getattr(request.state, "view_as", None) is not None:
+        raise HTTPException(status_code=403, detail="Use your own account to attest.")
+    name = data.attestation_name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Your full name is required.")
+    if not {"workforce", "not-party", "direction", "phi"}.issubset(set(data.checks)):
+        raise HTTPException(
+            status_code=400, detail="All workforce acknowledgements are required."
+        )
+    # Snapshot request ownership before fresh locked reads replace ORM values.
+    doctor_id, subject, email = doctor.id, doctor.clerk_id, doctor.email
+    practice_id, member_id = practice.id, member.id
+    recorded = False
+    with get_session() as session:
+        locked_practice = lock_practice_for_active_seat_mutation(session, practice_id)
+        lock_roster_enrollment_email(session, (email or "").strip().lower())
+        locked_doctor = session.exec(
+            select(Doctor)
+            .where(Doctor.id == doctor_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one()
+        if (
+            locked_doctor.deleted_at is not None
+            or locked_doctor.clerk_id != subject
+            or locked_doctor.email != email
+        ):
+            raise HTTPException(status_code=409, detail="The account changed. Retry.")
+        verified_email = _verified_legacy_enrollment_email(locked_doctor)
+        if uses_managed_organization_path(
+            locked_doctor, verified_primary_email=verified_email
+        ) or doctor_has_managed_roster_assignment(locked_doctor, session=session):
+            raise HTTPException(
+                status_code=409, detail="Use organization-managed enrollment."
+            )
+        locked_member = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == doctor_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if (
+            locked_member is None
+            or locked_member.id != member_id
+            or locked_member.practice_id != locked_practice.id
+        ):
+            raise HTTPException(status_code=409, detail=ACCOUNT_IN_ANOTHER_PRACTICE)
+        if isinstance(data, JoinPracticeBody):
+            _refuse_join_code_of_another_practice(locked_practice, data.join_code)
+        elif (
+            data.practice_ref != str(locked_practice.id)
+            or data.baa_reference != locked_practice.baa_version
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="The practice agreement changed. Review it again.",
+            )
+        if (
+            locked_practice.organization_id is not None
+            or locked_practice.negotiated_baa_required
+            or locked_member.organization_roster_approval_id is not None
+            or locked_member.organization_authorized_at is not None
+        ):
+            raise HTTPException(
+                status_code=409, detail="Use organization-managed enrollment."
+            )
+        if (
+            member_access_state(locked_member, at=datetime.now(UTC))
+            != MemberAccessState.active
+        ):
+            raise HTTPException(status_code=403, detail="Practice access is inactive.")
+        if not email_matches_domain(verified_email, locked_practice.email_domain):
+            raise HTTPException(status_code=403, detail="Your work email must match.")
+        if not locked_practice.baa_in_force():
+            raise HTTPException(
+                status_code=409,
+                detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
+            )
+        if locked_member.attested_at is None:
+            locked_member.attested_at = datetime.now(UTC)
+            locked_member.attestation_name = name
+            session.add(locked_member)
+            recorded = True
+        session.commit()
+        session.refresh(locked_member)
+        payload = _practice_payload(locked_practice, locked_member)
+        assert payload
+    if recorded:
+        activate_scribe_after_commit(trigger="membership", doctor_ref=doctor_id)
+    return payload
+
+
+@internal_api_app.post("/practice/attestation", name="attest_current_practice_member")
+def attest_current_practice_member(
+    request: Request, data: CurrentPracticeAttestationBody
+) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    practice = Practice.get(id=member.practice_id) if member is not None else None
+    if practice is None or member is None:
+        raise HTTPException(
+            status_code=409, detail="Current practice membership is required."
+        )
+    return _attest_current_practice_member(request, data, practice, member)
+
+
 @internal_api_app.post("/practice/join", name="join_practice")
 def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
     doctor: Doctor = request.state.doctor
@@ -2741,6 +2899,9 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 ),
             )
         _refuse_join_code_of_another_practice(practice, data.join_code)
+        if existing.attested_at is None:
+            assert practice
+            return _attest_current_practice_member(request, data, practice, existing)
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
@@ -2811,6 +2972,10 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                     status_code=status.HTTP_409_CONFLICT,
                     detail=ACCOUNT_IN_ANOTHER_PRACTICE,
                 )
+            if existing.attested_at is None:
+                return _attest_current_practice_member(
+                    request, data, locked_practice, existing
+                )
             session.commit()
             session.refresh(existing)
             payload = _practice_payload(locked_practice, existing)
@@ -2861,6 +3026,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         session.refresh(locked_practice)
         session.refresh(member)
         practice = locked_practice
+    activate_scribe_after_commit(trigger="membership", doctor_ref=doctor.id)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -2885,8 +3051,14 @@ def complete_onboarding(request: Request) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
         )
+    doctor_ref = doctor.id
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
-    doctor.save()
+    with get_session() as session:
+        session.add(doctor)
+        provision_default_note_template(session, doctor_ref)
+        session.commit()
+        session.refresh(doctor)
+    activate_scribe_after_commit(trigger="onboarding", doctor_ref=doctor_ref)
 
 
 class BillingCheckoutBody(BaseModel, extra="forbid"):
@@ -3338,6 +3510,8 @@ class MedicationData(BaseModel, extra="forbid"):
     confirmed: bool
     appointment_id: str | None = None
     source_appointment_date: datetime | None = None
+    confirmed_at: datetime | None = None
+    list_updated_at: datetime | None = None
 
 
 def _medication_data(row: PatientMedication) -> MedicationData:
@@ -3364,6 +3538,8 @@ def _medication_data(row: PatientMedication) -> MedicationData:
         source=row.source,
         dosage=row.dosage,
         confirmed=row.confirmed,
+        confirmed_at=row.confirmed_at,
+        list_updated_at=row.updated_at,
         appointment_id=str(source.id) if source is not None else None,
         source_appointment_date=source.appointment_date if source is not None else None,
     )
@@ -3386,11 +3562,56 @@ def _owned_medication_or_404(doctor: Doctor, medication_id: str) -> PatientMedic
     if not reference_toolkit_enabled_for(doctor.email):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    row = PatientMedication.get(id=medication_id, doctor_id=doctor.id)
-    if row is None or row.deleted_at is not None:
+    # The request-wide session holds this owner-scoped lock through save/delete.
+    # Refresh a cached identity before checking representation compatibility so
+    # an old active snapshot cannot overwrite a concurrently committed hold.
+    with get_session() as session:
+        row = session.exec(
+            select(PatientMedication)
+            .where(
+                PatientMedication.id == medication_id,
+                PatientMedication.doctor_id == doctor.id,
+                col(PatientMedication.deleted_at).is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     return row
+
+
+MEDICATION_READER_HEADER = "X-Cosmaneura-Medication-Reader"
+MEDICATION_READER_CAPABILITY = "held-v1"
+
+
+def _require_new_medication_hold(new_status: MedicationStatus | None) -> None:
+    if new_status == MedicationStatus.held and not held_medication_writes_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "HELD_MEDICATION_WRITES_DISABLED",
+                "message": "New medication holds are not available.",
+            },
+        )
+
+
+def _require_medication_reader(
+    request: Request, statuses: Iterable[MedicationStatus | None]
+) -> None:
+    """A representation declaration, never a substitute for owner/access checks."""
+    if (
+        request.headers.get(MEDICATION_READER_HEADER) != MEDICATION_READER_CAPABILITY
+        and MedicationStatus.held in statuses
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "MEDICATION_READER_UPGRADE_REQUIRED",
+                "message": "This medication list requires an updated reader.",
+            },
+        )
 
 
 @internal_api_app.get("/patients/{patient_id}/medications", name="medication_list")
@@ -3410,7 +3631,9 @@ def medication_list(
         .all()
     )
 
-    return [_medication_data(r) for r in cast(list[PatientMedication], rows)]
+    owned_rows = cast(list[PatientMedication], list(rows))
+    _require_medication_reader(request, (row.status for row in owned_rows))
+    return [_medication_data(r) for r in owned_rows]
 
 
 class CreateMedication(BaseModel, extra="forbid"):
@@ -3426,6 +3649,8 @@ def medication_create(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     patient = _reference_patient_or_404(doctor, patient_id)
+    _require_medication_reader(request, (data.status,))
+    _require_new_medication_hold(data.status)
 
     row = PatientMedication(
         doctor_id=doctor.id,
@@ -3463,6 +3688,9 @@ def medication_update(
 ) -> MedicationData:
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
+    _require_medication_reader(request, (row.status, data.status))
+    if row.status != MedicationStatus.held:
+        _require_new_medication_hold(data.status)
 
     if data.name is not None:
         row.name = data.name.strip()
@@ -3495,6 +3723,7 @@ def medication_update(
 def medication_delete(request: Request, medication_id: Annotated[str, Path()]) -> None:
     doctor: Doctor = request.state.doctor
     row = _owned_medication_or_404(doctor, medication_id)
+    _require_medication_reader(request, (row.status,))
     row.delete()
 
 
@@ -3532,6 +3761,7 @@ class MedicationResources(BaseModel, extra="forbid"):
 
 class PatientResourcePanel(BaseModel, extra="forbid"):
     has_natmed_subscription: bool
+    held_medication_writes_enabled: bool
     directory: list[ResourceLink]
     medications: list[MedicationResources]
 
@@ -3560,6 +3790,7 @@ def patient_reference_resources(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed))
     medications = [
         MedicationResources(
             medication=_medication_data(row),
@@ -3574,6 +3805,7 @@ def patient_reference_resources(
 
     return PatientResourcePanel(
         has_natmed_subscription=doctor.has_natmed_subscription,
+        held_medication_writes_enabled=held_medication_writes_enabled(),
         directory=PROVIDER_RESOURCE_DIRECTORY,
         medications=medications,
     )
@@ -3628,6 +3860,7 @@ def medication_drug_reference(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed_drugs))
     entries: list[MedicationDrugReference] = []
     for med in confirmed_drugs:
         key = (med.normalized_name or med.name).strip().lower()
@@ -3708,6 +3941,7 @@ def medication_nutrient_depletions(
         ),
     )
 
+    _require_medication_reader(request, (row.status for row in confirmed_drugs))
     medications: list[MedicationDepletions] = []
     for med in confirmed_drugs:
         found = depletions_for(med.normalized_name or med.name)

@@ -51,11 +51,16 @@ from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
+from .routes.scribe_activation import install as install_scribe_activation
+from .routes.scribe_cancellation import install as install_scribe_cancellation
 from .routes.scribe_capture_deadline import install_capture_boundaries
 from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.scribe_native_capture import native_capture_api_app
+from .routes.scribe_native_encounters import install as install_scribe_native_encounters
+from .routes.scribe_provider_context import install as install_scribe_provider_context
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .routes.visit_prep_core import visit_prep_public_api
 from .services.scribe_http_pool import install_scribe_connections
 
 fast_api_args = {}
@@ -93,6 +98,7 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+api_app.include_router(visit_prep_public_api)
 api_app.include_router(cab_authorization_router, include_in_schema=False)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)
@@ -136,6 +142,10 @@ install_companion_records(api_app)
 install_companion_encounters(api_app)
 install_companion_appointment_setup(api_app)
 install_scribe_encounters(api_app)
+install_scribe_provider_context(api_app)
+install_scribe_cancellation(api_app)
+install_scribe_activation(api_app)
+install_scribe_native_encounters(api_app)
 install_capture_boundaries(api_app)
 install_scribe_connections(
     api_app,

@@ -451,11 +451,24 @@ def test_default_builder_bytes_preserved_and_indexing_preserves_speaker_labels()
     plain = notes.summarize.build_structured_prompt(
         transcript, None, schema, customization, action_items="", doctor=doctor
     )
-    # Captured by executing the unchanged c48b940 builder against these exact
-    # synthetic inputs; no live model, database or dynamic Git read in this test.
+    # Legacy output now drafts from the recording; the indexed capture branch
+    # retains its established source-grounding prompt rather than this footer.
     assert (
-        hashlib.sha256(plain.encode()).hexdigest()
-        == "3867749b0eb78ec61889f10c43a09fc7a046a4283084283fa20596b0962c5557"
+        "You are drafting an unreviewed clinical note from a recorded encounter. "
+        "The recorded clinician biography is context for this draft:" in plain
+    )
+    assert (
+        "Draft an unreviewed clinical note from the supplied recording of an "
+        "encounter with a patient, for the recorded doctor to review." in plain
+    )
+    assert "Legacy recorded-note source fidelity:" in plain
+    assert (
+        "Do not assert that you conducted, personally reviewed, signed or attested "
+        "this encounter, or that its actions are medically necessary." in plain
+    )
+    assert (
+        "document it as attributed reported speech, not as a completed system "
+        "signature." in plain
     )
     indexed = notes.summarize.build_structured_prompt(
         transcript,
@@ -469,7 +482,14 @@ def test_default_builder_bytes_preserved_and_indexing_preserves_speaker_labels()
     for index, text in enumerate(FIXTURE["transcript"], 1):
         assert f"Unknown: [source {index}] {text}" in indexed
         indexed = indexed.replace(f"[source {index}] ", "")
-    assert indexed == plain
+    assert "Legacy recorded-note source fidelity:" not in indexed
+    # Captured by executing the unchanged c48b940 builder against these exact
+    # synthetic inputs. Remove only the source markers above; the original
+    # golden still binds every remaining indexed-capture byte.
+    assert (
+        hashlib.sha256(indexed.encode()).hexdigest()
+        == "3867749b0eb78ec61889f10c43a09fc7a046a4283084283fa20596b0962c5557"
+    )
 
 
 @pytest.mark.asyncio

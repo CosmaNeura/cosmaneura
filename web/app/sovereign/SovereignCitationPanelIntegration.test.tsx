@@ -1,0 +1,914 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import {
+  citationFixture,
+  excerptAnswer,
+  finalReference,
+} from "./SovereignCitationDisplay.fixture"
+import { syntheticClerk } from "./SovereignClerk.fixture"
+import { emptyHistory } from "./SovereignHistory.fixture"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
+
+const authority = vi.hoisted(() => ({
+  getClient: vi.fn(),
+  getViewAsStatus: vi.fn(),
+}))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: authority.getClient,
+  useBrowserPrincipal: () => syntheticClerk.principal(authority.getClient),
+}))
+vi.mock("~/lib/view-as-api", () => ({
+  getViewAsStatus: authority.getViewAsStatus,
+}))
+type Options = Parameters<NonNullable<Window["CosmaNeuraPanel"]>["mount"]>[0]
+const headers = {
+  "Content-Type": "application/json",
+  "X-Cosmaneura-Embed-Version": "1.0",
+}
+const json = (value: unknown, status = 200) =>
+  new Response(JSON.stringify(value), { status, headers })
+
+function isTimedTurn(request: { url: string; init: RequestInit }) {
+  return (
+    request.url.endsWith("/embed/history-timed") &&
+    JSON.parse(String(request.init.body)).mode === "turn"
+  )
+}
+
+function useDisplayTimers() {
+  const wall = Date.now(),
+    mono = performance.now()
+  vi.useFakeTimers()
+  // These host-deadline tests model ordinary elapsed time, not OS sleep.
+  vi.spyOn(performance, "now").mockImplementation(
+    () => mono + Date.now() - wall,
+  )
+}
+
+async function fixture(
+  first = async () => json(citationFixture()),
+  sessionToken = async () => "synthetic-session",
+  sdkRead?: () => Promise<unknown>,
+  autoOpen = true,
+) {
+  vi.resetModules()
+  vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+  vi.stubEnv("VITE_SOVEREIGN_PROVIDER_URL", "https://provider.example")
+  vi.spyOn(document, "hidden", "get").mockReturnValue(false)
+  authority.getViewAsStatus.mockResolvedValue({ active: false })
+  authority.getClient.mockResolvedValue(
+    syntheticClerk.bindResource({
+      user: { id: "synthetic-user" },
+      session: {
+        id: "synthetic-session-id",
+        getToken: sessionToken,
+      },
+    }),
+  )
+  if (sdkRead) authority.getClient.mockImplementation(sdkRead)
+  const control = {
+    retained: first,
+    fresh: async () => json(citationFixture("1.1.0")),
+    answer: excerptAnswer,
+    exchange: null as (() => Promise<Response>) | null,
+    rotate: null as (() => Promise<Response>) | null,
+    observedAt: new Date(Date.now()).toISOString(),
+    // A saved receipt's expiry is fixed across reads; verification does not renew it.
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  }
+  const timed = async (response: Response) => {
+    if (!response.ok) return response
+    const value = await response.json()
+    control.observedAt = new Date(Date.now()).toISOString()
+    return json({
+      ...value,
+      schema_version: "1.3.0",
+      observed_at: control.observedAt,
+      history: {
+        ...value.history,
+        messages: value.history.messages.map(
+          (message: Record<string, unknown>) => ({
+            ...message,
+            reviewed_citations:
+              message.role === "user" ? null : message.reviewed_citations,
+            display_state:
+              message.role === "user"
+                ? null
+                : (message.display_state ?? "historical"),
+            expires_at: message.role === "user" ? null : control.expiresAt,
+          }),
+        ),
+      },
+    })
+  }
+  const requests: Array<{ url: string; init: RequestInit }> = []
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init: RequestInit) => {
+      const url = String(input)
+      requests.push({ url, init })
+      if (url === "/embed/v1/context-tokens/exchange") {
+        if (control.exchange) return control.exchange()
+        const now = Date.now()
+        return json(
+          {
+            context_token: "mctx_" + "a".repeat(48),
+            token_type: "Bearer",
+            issued_at: new Date(now - 1000).toISOString(),
+            refresh_after: new Date(now + 300000).toISOString(),
+            expires_at: new Date(now + 900000).toISOString(),
+          },
+          201,
+        )
+      }
+      if (url === "/embed/v1/context-tokens/rotate" && control.rotate)
+        return control.rotate()
+      if (url.endsWith("/welcome"))
+        return json({
+          persona: "provider",
+          partner_name: "Synthetic",
+          greeting: "Synthetic welcome",
+          paths: [],
+          disclaimer: "Synthetic provider disclaimer.",
+        })
+      if (url.endsWith("/embed/history")) return json(emptyHistory())
+      if (url.endsWith("/embed/history-retained")) return control.retained()
+      if (url.endsWith("/embed/history-with-citations")) return control.fresh()
+      if (url.endsWith("/embed/history-timed")) {
+        expect(init.method).toBe("POST")
+        const body = JSON.parse(String(init.body))
+        expect(Object.keys(body).sort()).toEqual([
+          "client_turn_id",
+          "mode",
+          "schema_version",
+        ])
+        expect(body.schema_version).toBe("1.3.0")
+        expect(["recent", "turn"]).toContain(body.mode)
+        const restoredTurn = citationFixture().turns[0].client_turn_id
+        return timed(
+          await (body.mode === "recent" || body.client_turn_id === restoredTurn
+            ? control.retained()
+            : control.fresh()),
+        )
+      }
+      if (url.endsWith("/chat"))
+        return json({
+          client_turn_id: JSON.parse(String(init.body)).client_turn_id,
+          answer: control.answer,
+          presentation: { mode: "standard", suppress: [], human_contact: null },
+          citations: [],
+          structured: {},
+          doctrinal_review: null,
+        })
+      throw new Error("Unexpected synthetic request")
+    }),
+  )
+  const { SOVEREIGN_PANEL_ASSET_PATH } = await import("./SovereignPanelAsset")
+  const source = readFileSync(
+    join(process.cwd(), "public", SOVEREIGN_PANEL_ASSET_PATH),
+    "utf8",
+  )
+  const mounts: Options[] = []
+  vi.spyOn(document.head, "appendChild").mockImplementation(
+    <T extends Node>(node: T): T => {
+      if (node instanceof HTMLScriptElement) {
+        window.eval(source)
+        const original = window.CosmaNeuraPanel!.mount
+        window.CosmaNeuraPanel!.mount = (options) => {
+          mounts.push(options)
+          return original(options)
+        }
+        queueMicrotask(() => node.onload?.call(node, new Event("load")))
+      }
+      return node
+    },
+  )
+  const { SovereignPanelHost: Host } = await import("./SovereignPanelHost")
+  const view = render(<Host appointmentId="appointment_synthetic_a" />)
+  const open = async () => {
+    await waitFor(() =>
+      expect(
+        document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
+      ).toBe(false),
+    )
+    const button = document.querySelector<HTMLButtonElement>(".cnp-fab")!
+    expect(button.hidden).toBe(false)
+    if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button)
+  }
+  if (autoOpen) await open()
+  return { control, requests, mounts, view, Host, open }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+  syntheticClerk.bind(null)
+  vi.clearAllMocks()
+  delete window.CosmaNeuraPanel
+})
+describe("real byte-pinned panel with accepted Core maps", () => {
+  it("restores a superseded answer then sends only the new question envelope, never retained history or maps", async () => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    expect(document.body.textContent).toContain(
+      "Historical answer · its reviewed sources have since changed",
+    )
+    const question = "A new complete factual question about reviewed history."
+    document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value = question
+    f.control.fresh = async () => {
+      const request = f.requests.find((item) => item.url.endsWith("/chat"))!
+      const id = JSON.parse(String(request.init.body)).client_turn_id
+      const response = citationFixture("1.1.0")
+      response.turns[0].client_turn_id = id
+      response.history.messages.forEach((message) => {
+        message.client_turn_id = id
+      })
+      return json(response)
+    }
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+    await waitFor(() => expect(f.requests.some(isTimedTurn)).toBe(true))
+    const requests = f.requests.filter((item) => item.url.endsWith("/chat"))
+    expect(requests).toHaveLength(1)
+    const wire = String(requests[0].init.body),
+      body = JSON.parse(wire)
+    expect(Object.keys(body).sort()).toEqual([
+      "client_turn_id",
+      "message",
+      "metadata",
+    ])
+    expect(body.message).toBe(question)
+    expect(body.metadata).toEqual({
+      output_format: "chat",
+      clientId: "appointment_synthetic_a",
+    })
+    for (const excluded of [
+      "reviewed_citations",
+      "display_state",
+      finalReference,
+      "Synthetic identical recorded text.",
+      "Synthetic recorded question",
+      excerptAnswer,
+    ])
+      expect(wire).not.toContain(excluded)
+    expect(Object.keys(body.metadata)).not.toContain("history")
+    expect(f.requests.filter(isTimedTurn)).toHaveLength(1)
+  })
+
+  it("uses a neutral historical label when a quoted answer has no verified accepted map", async () => {
+    const value = citationFixture()
+    value.history.messages[1].reviewed_citations = []
+    value.history.messages[1].display_state = "historical"
+    await fixture(async () => json(value))
+    await screen.findByText("Historical answer.")
+    await screen.findByText(
+      "Reviewed-source links could not be verified. Attributed export is unavailable.",
+    )
+    expect(document.body.textContent).not.toContain(
+      "reviewed-source attribution preserved",
+    )
+    expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Save answer .md" })).toBeNull()
+  })
+
+  it("restores superseded same-day identical quotes, original references and dated export without current-source reads", async () => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    const links = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>(".cnp-reviewed-citation"),
+    )
+    expect(links.map((link) => link.href)).toEqual(
+      [1, 2].map(
+        (ordinal) =>
+          `${window.location.origin}/session-prep/citations/${finalReference}.${ordinal}`,
+      ),
+    )
+    expect(links.map((link) => link.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining("reviewed")]),
+    )
+    expect(
+      links.every((link) => !link.textContent!.includes(finalReference)),
+    ).toBe(true)
+    expect(links[0].textContent).toContain("[1] Open reviewed source")
+    expect(links[0].textContent).toContain("reviewed 2026-10-02 10:00:00 UTC")
+    expect(links[1].textContent).toContain("reviewed 2026-10-02 11:00:00 UTC")
+    expect(links[0].textContent).not.toBe(links[1].textContent)
+    expect(document.body.textContent).toContain(
+      "Historical answer · its reviewed sources have since changed",
+    )
+    expect(document.querySelectorAll(".cnp-evidence-body")[0].textContent).toBe(
+      document.querySelectorAll(".cnp-evidence-body")[1].textContent,
+    )
+    const save = vi.fn((_blob: Blob | MediaSource) => "blob:synthetic-answer")
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = save
+      },
+    )
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
+    fireEvent.click(screen.getByRole("button", { name: "Save answer .md" }))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    const exported = await (save.mock.calls[0][0] as Blob).text()
+    const start = exported.indexOf(excerptAnswer)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(exported.slice(start, start + excerptAnswer.length)).toBe(
+      excerptAnswer,
+    )
+    expect(exported).toContain("Answer recorded: 2026-09-28T12:00:00Z")
+    expect(exported).toContain(`Export verified: ${f.control.observedAt}`)
+    expect(exported).toContain(`Available until: ${f.control.expiresAt}`)
+    expect(exported).toContain("Historical answer — sources superseded.")
+    expect(exported).toContain(
+      "Visit 2026-10-01T09:00:00Z; reviewed 2026-10-02T10:00:00Z",
+    )
+    expect(exported).toContain(`${finalReference}.1`)
+    expect(exported).toContain(`${finalReference}.2`)
+    expect(
+      f.requests.filter((request) =>
+        request.url.endsWith("/embed/history-retained"),
+      ),
+    ).toHaveLength(1)
+    expect(f.requests.filter(isTimedTurn)).toHaveLength(1)
+    expect(
+      f.requests.some((request) =>
+        /\/chat$|history-with-citations|\/notes\//.test(request.url),
+      ),
+    ).toBe(false)
+  })
+  it.each(["exact", "different"])(
+    "adds no live link before final read; handles the %s stored answer",
+    async (mode) => {
+      const empty = citationFixture()
+      empty.history.messages = []
+      empty.turns = []
+      const f = await fixture(async () => json(empty))
+      await waitFor(() =>
+        expect(
+          document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
+        ).toBe(false),
+      )
+      let resolve!: (value: Response) => void
+      f.control.fresh = () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        })
+      const input = document.querySelector<HTMLTextAreaElement>(".cnp-in")!
+      input.value = "Original complete factual question."
+      fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+      await waitFor(() => expect(f.requests.some(isTimedTurn)).toBe(true))
+      expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+      const fresh = citationFixture(
+        "1.1.0",
+        mode === "exact" ? excerptAnswer : "A different retained answer",
+      )
+      const id = JSON.parse(
+        String(
+          f.requests.find((request) => request.url.endsWith("/chat"))!.init
+            .body,
+        ),
+      ).client_turn_id
+      fresh.turns[0].client_turn_id = id
+      fresh.history.messages.forEach((message) => {
+        message.client_turn_id = id
+      })
+      await act(async () => resolve(json(fresh)))
+      if (mode === "exact") {
+        await waitFor(() =>
+          expect(
+            document.querySelectorAll(".cnp-reviewed-citation"),
+          ).toHaveLength(2),
+        )
+        expect(
+          f.requests.filter((request) => request.url.endsWith("/chat")),
+        ).toHaveLength(1)
+        return
+      }
+      await screen.findByText(
+        "The recorded answer’s availability could not be verified. Your draft is preserved.",
+      )
+      expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+      expect(
+        screen.queryByRole("button", { name: "Save answer .md" }),
+      ).toBeNull()
+      expect(document.body.textContent).not.toContain(
+        "A different retained answer",
+      )
+    },
+  )
+  it("clears old maps on record change and discards a noncooperative late response", async () => {
+    let resolve!: (value: Response) => void
+    const f = await fixture(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
+      undefined,
+      undefined,
+      false,
+    )
+    await waitFor(() =>
+      expect(
+        f.requests.some((request) => request.url.endsWith("history-retained")),
+      ).toBe(true),
+    )
+    const current = citationFixture("1.2.0", "Current authorized record answer")
+    current.history.messages[1].reviewed_citations = []
+    f.control.retained = async () => json(current)
+    f.view.rerender(<f.Host appointmentId="appointment_synthetic_b" />)
+    await f.open()
+    await screen.findByText("Current authorized record answer")
+    await act(async () => resolve(json(citationFixture())))
+    expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+    expect(document.body.textContent).not.toContain(
+      "Synthetic identical recorded text",
+    )
+    const before = f.requests.length
+    await expect(
+      f.mounts[1].loadCitationHistory("appointment_synthetic_a", {
+        version: "1.2.0",
+        mode: "recent",
+        clientTurnId: null,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(f.requests).toHaveLength(before)
+  })
+  it.each([401, 403])(
+    "denies retained display %s with no old answer or link",
+    async (status) => {
+      const f = await fixture(
+        async () => json({ private: "not-display" }, status),
+        undefined,
+        undefined,
+        false,
+      )
+      await screen.findByRole("button", { name: "Reconnect assistant" })
+      expect(document.querySelector(".cnp-root")).toBeNull()
+      expect(document.body.textContent).not.toContain("not-display")
+      expect(f.requests.some((request) => request.url.endsWith("/chat"))).toBe(
+        false,
+      )
+    },
+  )
+})
+
+function replacePrincipal(kind: string, notify = true) {
+  const client =
+    kind === "signout"
+      ? { loaded: true, user: null, session: null }
+      : {
+          loaded: true,
+          user: {
+            id: kind === "session" ? "synthetic-user" : "synthetic-user-b",
+          },
+          session: {
+            id: "synthetic-session-b",
+            getToken: async () => "synthetic-session-b",
+          },
+        }
+  authority.getClient.mockResolvedValue(client)
+  if (kind !== "SDK-only") syntheticClerk.bind(client, notify)
+}
+const readOnlyDisplay = {
+  version: "1.2.0" as const,
+  mode: "recent" as const,
+  clientTurnId: null,
+  signal: new AbortController().signal,
+}
+it.each(["account", "session", "signout", "missed-listener", "SDK-only"])(
+  "same-record Host rejects a late retained200 after %s replacement",
+  async (kind) => {
+    let resolve!: (response: Response) => void
+    const f = await fixture(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
+      undefined,
+      undefined,
+      false,
+    )
+    await waitFor(() =>
+      expect(f.requests.some((r) => r.url.endsWith("history-retained"))).toBe(
+        true,
+      ),
+    )
+    const old = f.mounts[0]
+    f.control.retained = async () => json({}, 403)
+    act(() => replacePrincipal(kind, kind !== "missed-listener"))
+    if (kind !== "missed-listener" && kind !== "SDK-only")
+      f.view.rerender(<f.Host appointmentId="appointment_synthetic_a" />)
+    await act(async () => resolve(json(citationFixture())))
+    await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+    expect(document.body.textContent).not.toContain(
+      "Synthetic identical recorded text",
+    )
+    expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
+    const count = f.requests.length
+    await expect(old.getAuthToken()).rejects.toThrow()
+    await expect(
+      old.loadCitationHistory("appointment_synthetic_a", readOnlyDisplay),
+    ).rejects.toThrow()
+    expect(f.requests).toHaveLength(count)
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+      ),
+    ).toBe(false)
+  },
+)
+it.each(["account", "session", "signout"])(
+  "same-record Host discards displayed retained bytes and cached token on %s replacement",
+  async (kind) => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    const old = f.mounts[0]
+    f.control.retained = async () => json({}, 403)
+    act(() => replacePrincipal(kind))
+    expect(document.querySelector(".cnp-root")).toBeNull()
+    expect(document.body.textContent).not.toContain(
+      "Synthetic identical recorded text",
+    )
+    await expect(old.getAuthToken()).rejects.toThrow()
+    await expect(old.getAuthToken({ forceRefresh: true })).rejects.toThrow()
+    f.view.rerender(<f.Host appointmentId="appointment_synthetic_a" />)
+    await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+      ),
+    ).toBe(false)
+  },
+)
+it("same-record Host fences a late platform token before any old exchange or display", async () => {
+  let resolve!: (token: string) => void
+  const f = await fixture(
+    async () => json({}, 403),
+    () =>
+      new Promise<string>((r) => {
+        resolve = r
+      }),
+    undefined,
+    false,
+  )
+  await waitFor(() => expect(resolve).toBeTypeOf("function"))
+  const old = f.mounts[0]
+  f.control.exchange = async () => json({}, 403)
+  act(() => replacePrincipal("account"))
+  await act(async () => resolve("synthetic-old-platform-token"))
+  await expect(old.getAuthToken()).rejects.toThrow()
+  expect(
+    f.requests.some(
+      (r) =>
+        r.url === "/embed/v1/context-tokens/exchange" &&
+        new Headers(r.init.headers).get("Authorization") ===
+          "Bearer synthetic-old-platform-token",
+    ),
+  ).toBe(false)
+  await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+})
+it("same-record Host fences a late exchange credential and never replays that logical mount", async () => {
+  // First establish this original principal and an explicitly refreshed logical mount.
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  let resolve!: (response: Response) => void
+  f.control.exchange = () =>
+    new Promise<Response>((r) => {
+      resolve = r
+    })
+  f.view.rerender(<f.Host appointmentId="appointment_synthetic_b" />)
+  await waitFor(() => expect(resolve).toBeTypeOf("function"))
+  const old = f.mounts[1]
+  f.control.exchange = async () => json({}, 403)
+  act(() => replacePrincipal("account"))
+  const now = Date.now()
+  await act(async () =>
+    resolve(
+      json(
+        {
+          context_token: "mctx_" + "c".repeat(48),
+          token_type: "Bearer",
+          issued_at: new Date(now - 1000).toISOString(),
+          refresh_after: new Date(now + 300000).toISOString(),
+          expires_at: new Date(now + 900000).toISOString(),
+        },
+        201,
+      ),
+    ),
+  )
+  await expect(old.getAuthToken()).rejects.toThrow()
+  await waitFor(() => expect(document.querySelector(".cnp-root")).toBeNull())
+  expect(
+    f.requests.some(
+      (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+    ),
+  ).toBe(false)
+})
+
+const originalPrincipal = () => ({
+  loaded: true,
+  user: { id: "synthetic-user" },
+  session: {
+    id: "synthetic-session-id",
+    getToken: async () => "synthetic-session",
+  },
+})
+it.each([
+  ["retained", "first"],
+  ["retained", "final"],
+  ["legacy", "first"],
+  ["legacy", "final"],
+])(
+  "%s read owns one30s deadline around %s SDK await after completed bootstrap",
+  async (lane, phase) => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    // Initial bootstrap has already finished; only this read's deadline can pass.
+    useDisplayTimers()
+    let resolve!: (value: unknown) => void,
+      calls = 0
+    authority.getClient.mockImplementation(async () => {
+      calls++
+      if (calls === (phase === "first" ? 1 : 3))
+        return new Promise((r) => {
+          resolve = r
+        })
+      return originalPrincipal()
+    })
+    const before = f.requests.length
+    let outcome: unknown
+    const caller = new AbortController()
+    const pending =
+      lane === "retained"
+        ? f.mounts[0].loadCitationHistory("appointment_synthetic_a", {
+            ...readOnlyDisplay,
+            signal: caller.signal,
+          })
+        : f.mounts[0].loadHistory("appointment_synthetic_a", {
+            signal: caller.signal,
+          })
+    void pending.then(
+      (value) => {
+        outcome = value
+      },
+      (error) => {
+        outcome = error
+      },
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29999)
+    })
+    expect(resolve).toBeTypeOf("function")
+    expect(outcome).toBeUndefined()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+    const count = f.requests.length
+    expect(count - before).toBe(phase === "first" ? 0 : 1)
+    await act(async () => resolve(originalPrincipal()))
+    expect(f.requests).toHaveLength(count)
+    expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/chat") || r.url.endsWith("/rotate"),
+      ),
+    ).toBe(false)
+  },
+)
+it("shorter15s caller cancellation bounds a stalled actualSDK read with no late request", async () => {
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  useDisplayTimers()
+  let resolve!: (value: unknown) => void, outcome: unknown
+  authority.getClient.mockImplementation(
+    () =>
+      new Promise((r) => {
+        resolve = r
+      }),
+  )
+  const caller = new AbortController(),
+    before = f.requests.length
+  const pending = f.mounts[0].loadCitationHistory("appointment_synthetic_a", {
+    ...readOnlyDisplay,
+    signal: caller.signal,
+  })
+  void pending.then(
+    (value) => {
+      outcome = value
+    },
+    (error) => {
+      outcome = error
+    },
+  )
+  setTimeout(
+    () => caller.abort(new DOMException("Caller cancelled", "AbortError")),
+    15000,
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000)
+  })
+  expect(outcome).toMatchObject({ name: "AbortError" })
+  await act(async () => resolve(originalPrincipal()))
+  expect(f.requests).toHaveLength(before)
+  expect(outcome).toMatchObject({ name: "AbortError" })
+})
+it("bootstrap30s cap fences actualSDK completion that arrives after the mount expired", async () => {
+  useDisplayTimers()
+  let resolve!: (value: unknown) => void
+  const f = await fixture(
+    async () => json(citationFixture()),
+    async () => "synthetic-session",
+    () =>
+      new Promise((r) => {
+        resolve = r
+      }),
+    false,
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(resolve).toBeTypeOf("function")
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30000)
+  })
+  expect(document.querySelector(".cnp-root")).toBeNull()
+  const count = f.requests.length
+  await act(async () => resolve(originalPrincipal()))
+  expect(f.requests).toHaveLength(count)
+  expect(
+    f.requests.some((r) => r.url === "/embed/v1/context-tokens/exchange"),
+  ).toBe(false)
+  expect(document.querySelector(".cnp-root")).toBeNull()
+})
+
+it("read deadline cancels rotation and cannot install its late credential", async () => {
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  useDisplayTimers()
+  const start = Date.now()
+  vi.setSystemTime(start + 300001)
+  let resolve!: (response: Response) => void, outcome: unknown
+  f.control.rotate = () =>
+    new Promise((r) => {
+      resolve = r
+    })
+  const pending = f.mounts[0].loadCitationHistory("appointment_synthetic_a", {
+    ...readOnlyDisplay,
+    signal: new AbortController().signal,
+  })
+  void pending.then(
+    (value) => {
+      outcome = value
+    },
+    (error) => {
+      outcome = error
+    },
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(resolve).toBeTypeOf("function")
+  const rotation = f.requests.find((r) => r.url.endsWith("/rotate"))!
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30000)
+  })
+  expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+  expect(rotation.init.signal?.aborted).toBe(true)
+  const now = Date.now()
+  await act(async () =>
+    resolve(
+      json(
+        {
+          context_token: "mctx_" + "c".repeat(48),
+          token_type: "Bearer",
+          issued_at: new Date(now - 1000).toISOString(),
+          refresh_after: new Date(now + 300000).toISOString(),
+          expires_at: new Date(now + 900000).toISOString(),
+        },
+        201,
+      ),
+    ),
+  )
+  vi.setSystemTime(start)
+  expect(await f.mounts[0].getAuthToken()).toBe("mctx_" + "a".repeat(48))
+  expect(outcome).toMatchObject({ name: "ReadDeadlineError" })
+})
+
+it.each(["stall", "reject"])(
+  "actual pinned post-chat %s principal lookup is terminal, with no canonical answer fallback",
+  async (kind) => {
+    const f = await fixture()
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(
+        2,
+      ),
+    )
+    useDisplayTimers()
+    const answer =
+      "Synthetic canonical answer withheld until principal verification."
+    f.control.answer = answer
+    let resolve!: (value: unknown) => void
+    f.control.fresh = async () => {
+      const request = f.requests.find((r) => r.url.endsWith("/chat"))!
+      const id = JSON.parse(String(request.init.body)).client_turn_id
+      const response = citationFixture("1.1.0", answer)
+      response.turns[0].client_turn_id = id
+      response.history.messages.forEach((m) => {
+        m.client_turn_id = id
+      })
+      authority.getClient.mockImplementation(() =>
+        kind === "reject"
+          ? Promise.reject(new Error("Synthetic SDK unavailable"))
+          : new Promise((r) => {
+              resolve = r
+            }),
+      )
+      return json(response)
+    }
+    document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value =
+      "A complete synthetic factual question."
+    await act(async () => {
+      fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
+    if (kind === "stall") {
+      expect(resolve).toBeTypeOf("function")
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000)
+      })
+    }
+    expect(document.querySelector(".cnp-root")).toBeNull()
+    expect(document.body.textContent).not.toContain(answer)
+    await expect(f.mounts[0].getAuthToken()).rejects.toThrow()
+    if (kind === "stall") await act(async () => resolve(originalPrincipal()))
+    expect(document.body.textContent).not.toContain(answer)
+    expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
+    expect(f.requests.some((r) => r.url.endsWith("/rotate"))).toBe(false)
+  },
+)
+it("actual pinned post-chat timed-read timeout refuses unverified answer display and preserves the draft", async () => {
+  const f = await fixture()
+  await waitFor(() =>
+    expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
+  )
+  useDisplayTimers()
+  const answer =
+    "Synthetic canonical answer after a verified map transport failure."
+  f.control.answer = answer
+  f.control.fresh = () => new Promise<Response>(() => {})
+  const question = "A complete synthetic factual question."
+  document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value = question
+  await act(async () => {
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(f.requests.some(isTimedTurn)).toBe(true)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000)
+  })
+  expect(document.querySelector(".cnp-root")).not.toBeNull()
+  expect(document.body.textContent).not.toContain(answer)
+  expect(document.body.textContent).toContain(
+    "The recorded answer’s availability could not be verified. Your draft is preserved.",
+  )
+  expect(document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value).toBe(
+    question,
+  )
+  expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
+})

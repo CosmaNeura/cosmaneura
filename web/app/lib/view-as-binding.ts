@@ -229,7 +229,9 @@ export function isViewAsControlRequest(
 export async function enforceViewAsBindingResponse(
   response: Response,
   reload: () => void = defaultReload,
+  assertCurrent?: () => void,
 ) {
+  assertCurrent?.()
   if (response.status !== 409) return response
   let code: unknown
   try {
@@ -238,8 +240,10 @@ export async function enforceViewAsBindingResponse(
     }
     code = body.detail?.code
   } catch {
+    assertCurrent?.()
     return response
   }
+  assertCurrent?.()
   if (code !== VIEW_AS_BINDING_STALE_CODE) return response
   throw hardBlockViewAsBinding(reload)
 }

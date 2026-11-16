@@ -35,11 +35,9 @@ deliberately absent.
 account allowlist, chart data, or authorization token. It reports only the
 current doctor context selected by the existing authenticated dependency chain.
 Both booleans remain false during support view-as. When the global switch is on,
-an ordinary provider becomes eligible automatically only while the same current
-doctor/practice/BAA/entitlement decision used by the review route is in force.
-That includes existing accounts and new accounts immediately after onboarding
-reaches the authorized state; incomplete, revoked, inactive, or unentitled
-accounts remain ineligible. All review, exchange, and read endpoints continue
+every active authenticated account qualifies automatically without enrollment.
+Deleted accounts and effective cancellation remain unavailable. All review,
+exchange, and read endpoints continue
 to enforce their existing live record and note ownership checks, including the
 provider-own-visit boundary; this response is not an execution grant.
 
@@ -48,7 +46,7 @@ build-time Sovereign integration flag. It renders neither the Session Prep
 panel nor prior-visit controls until Core says the current provider is eligible
 and can currently review sources. Missing or older cached discovery state fails
 closed; the next successful settings read exposes the feature automatically
-after a new provider finishes onboarding.
+after an active existing or new account refreshes its settings.
 
 ## Read-only preflight
 
@@ -101,9 +99,8 @@ Before any activation proposal:
 
 The founder must still choose and authorize all of the following in one release
 record. Enabling the global switch makes Session Prep available to every
-existing or future provider whose current persisted authorization satisfies the
-strict provider/practice/BAA/entitlement predicate; email domain or a legacy
-pilot grant alone never qualifies an account.
+existing or future active authenticated account for its own records. No
+onboarding, practice enrollment or feature-specific user list is required.
 
 - aggregate-only production eligibility evidence, including zero integrity
   violations and an acknowledged eligible-provider count;
@@ -123,33 +120,36 @@ pilot grant alone never qualifies an account.
 ## Activation and recovery order
 
 Keep the rollout object disabled while images, schema, identity, frontend, and
-recovery evidence are prepared. For an approved cutover, apply schema first if
-needed; update/drain Core worker and scheduler before Core API; deploy the paired
-Sovereign service and frontend only under the same release record; then run the
-provider-owned synthetic acceptance. Existing and new providers become eligible
-automatically as their current account, practice, BAA, and entitlement records
-enter the approved states; no feature-specific user-list update or deployment is
-required.
+recovery evidence are prepared. Keep `AUTO_MIGRATE_ON_STARTUP=false` and apply
+`ddd6261fa36f` before starting any new ORM runtime; deploy compatible Core
+worker/scheduler readers and drain old revisions before API. Deploy the matching
+provider/frontend pair, verify it, then enable `session_prep_production_rollout.enabled`.
+Existing and new active accounts then qualify automatically for their own visits.
 
-Fast stop is a reviewed plan setting `session_prep_production_rollout.enabled`
-back to `false`, which closes new review, exchange, worker, and real-record read
-paths together while retaining additive schema and audit/receipt history.
-Recover application images only to a migration-compatible retained Core and
-Sovereign pair. Never lower correction frontiers or delete Session Prep records
-as rollback.
+Use `.github/workflows/build_and_publish_local.yml` with `release_action=prepare`,
+then `release_action=promote`. Both dispatches include
+`github_hosted_fallback_authorized=true`, the applicable `terraform_apply_run_id`,
+`provider_signed_recall_callback_verified=true`,
+`production_session_prep_frontend_enabled=true`, and
+`production_session_prep_reviewed_core_sha` equal to the final reviewed master SHA.
+Promotion also supplies that successful `producer_run_id`, `producer_run_attempt`
+and `candidate_artifact_id`, without rebuilding. The one-time
+`production_release_verified.yml` is not this release path.
+
+Setting `session_prep_production_rollout.enabled=false` also disables the shared
+Authority Kernel and Agent API gates; it is not a Prep-only stop and can interrupt
+Scribe receiver flows that use those gates. Preserve the receiver and shared
+configuration during image recovery. Recover only account-namespace-compatible
+Core images and matching Sovereign assets; retain additive schema, ownership and
+audit history. Never lower correction frontiers, delete records or assume an
+automatic old-image rollback.
 
 ## Current automatic authorization
 
-One resolver combines Doctor lifecycle, active seat-holding practice membership,
-organization-roster or workforce-attestation authority, an in-force BAA, and
-ordinary current practice entitlement. Discovery and every provider-data
-execution boundary revalidate that decision; record ownership and view-as
-restrictions remain additional independent checks. A revoked legacy pilot grant
-is a denial tombstone unless a current active replacement exists, and a pilot
-grant can never substitute for practice entitlement. The retired
-`SESSION_PREP_PROVIDER_CLERK_SUBJECTS` variable is accepted only under a bounded
-legacy grammar during staging recovery inspection and is removed during the
-deployment; exact post-state evidence rejects it.
+One resolver admits every active persisted Doctor account without enrollment.
+Deleted accounts and effective cancellation remain unavailable. Record
+ownership, actor/identity/tenant revocation and view-as are independent checks.
+The retired `SESSION_PREP_PROVIDER_CLERK_SUBJECTS` input grants no access.
 
 ## Shared provider exchange and Scribe continuity
 
@@ -159,5 +159,6 @@ view-as refusal and fresh authorization; a valid legacy pilot can retain only
 that capture access. Optional Prep provisioning runs in a savepoint, and only
 policy-specific unavailability may fall back to capture, without a Prep
 capability or context. All lineage, identity, membership and offboarding
-conflicts still deny; Prep workers and reads remain strict. This adds no token,
-schema or external service. Recovery is the prior image, without data rollback.
+conflicts still deny; Prep workers and reads retain those ownership fences.
+Recovery preserves Scribe receiver/shared configuration and retains
+account-namespace-compatible readers and schema.

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { completedHistory } from "./SovereignHistory.fixture"
 import {
   act,
@@ -16,7 +17,10 @@ const authority = vi.hoisted(() => ({
   getClient: vi.fn(),
   getViewAsStatus: vi.fn(),
 }))
-vi.mock("~/configuration/clerk", () => ({ getClient: authority.getClient }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: authority.getClient,
+  useBrowserPrincipal: () => syntheticClerk.principal(authority.getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({
   getViewAsStatus: authority.getViewAsStatus,
 }))
@@ -40,10 +44,12 @@ async function fixture(
   vi.spyOn(document, "hidden", "get").mockReturnValue(false)
   authority.getViewAsStatus.mockResolvedValue({ active: false })
   const getToken = vi.fn(async () => "synthetic_clerk_session")
-  authority.getClient.mockResolvedValue({
-    user: { id: "user_synthetic_history" },
-    session: { getToken },
-  })
+  authority.getClient.mockResolvedValue(
+    syntheticClerk.bindResource({
+      user: { id: "user_synthetic_history" },
+      session: { id: "session_synthetic_history", getToken },
+    }),
+  )
   const control = { history: first }
   const requests: Array<{ url: string; init: RequestInit }> = []
   const tokens: string[] = []
@@ -77,7 +83,9 @@ async function fixture(
     throw new Error("Unexpected synthetic request")
   })
   vi.stubGlobal("fetch", fetch)
-  const { SOVEREIGN_PANEL_ASSET_PATH } = await import("./SovereignPanelAsset")
+  // Original read1.0 contract regressions continue against the retained legacy asset.
+  const SOVEREIGN_PANEL_ASSET_PATH =
+    "/vendor/cosmaneura-panel.v1.1b24151bb15c9d2968a5567a42c6dd94f24087a177b722725bbd881bdbcae59c.js"
   const source = readFileSync(
     join(process.cwd(), "public", SOVEREIGN_PANEL_ASSET_PATH),
     "utf8",
@@ -120,6 +128,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  syntheticClerk.bind(null)
   vi.clearAllMocks()
   delete window.CosmaNeuraPanel
 })

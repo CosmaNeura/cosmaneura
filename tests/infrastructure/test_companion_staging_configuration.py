@@ -17,7 +17,7 @@ COMPANION = {
 }
 
 
-def project(release):
+def project(release, extra_inherited=None):
     deploy = (ROOT / "infra-staging/deploy.sh").read_text()
     start = deploy.index("# Keep the provider-v7 runtime gates synchronized")
     configure = deploy[start : deploy.index("if ! jq -e '", start)]
@@ -38,6 +38,7 @@ def project(release):
         "AGENT_API_SCRIBE_RECEIVER_CLIENT_ID": "22222222-2222-2222-2222-222222222222",
         "AGENT_API_SOVEREIGN_CLIENT_IDS": "11111111-1111-1111-1111-111111111111",
     }
+    inherited.update(extra_inherited or {})
     result = subprocess.run(
         ["bash", "-c", script],
         env={

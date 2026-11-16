@@ -29,15 +29,20 @@ SPEC.loader.exec_module(GUARD)
         ("synthetic-safe", "/etc/ssl/certs/ca.pem", "synthetic-safe"),
     ],
 )
-@pytest.mark.parametrize("release_v2", [False, True])
+@pytest.mark.parametrize(
+    ("identity_mode", "release_v2"),
+    [("founder-user", False), ("founder-user", True), ("service-principal", False)],
+)
 def test_actual_job_preserves_startup_url_then_escapes_only_alembic_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     password: str,
     certificate: str,
     decoded_password: str,
+    identity_mode: str,
     release_v2: bool,
 ) -> None:
+    current_environment = release_v2 or identity_mode == "service-principal"
     raw = (
         f"postgresql+psycopg://synthetic:{password}@db.example.test/staging"
         f"?sslmode=verify-full&sslrootcert={certificate}"
@@ -48,9 +53,9 @@ def test_actual_job_preserves_startup_url_then_escapes_only_alembic_config(
     capture = tmp_path / "create-arguments.json"
     script = r"""
 set -eu
-GIT_SHA=866bd4bc01e0e7be32c59eccdaf9dac3f495c7de
+GIT_SHA=$TEST_CANDIDATE_SHA
 FOUNDER_CANDIDATE_SHA=$GIT_SHA
-STAGING_IMAGE_DIGEST=sha256:6fa75d4093590b83dc2f50962f1979481a8c3d3d9d1dd9f647b7f407de0690a5
+STAGING_IMAGE_DIGEST=$TEST_IMAGE_DIGEST
 FOUNDER_CANDIDATE_IMAGE_DIGEST=$STAGING_IMAGE_DIGEST
 STAGING_IMAGE_REFERENCE="registry.example/test@$STAGING_IMAGE_DIGEST"
 MIGRATION_JOB=cosmaneura-staging-migrate
@@ -82,6 +87,13 @@ az() {
         ),
         "CAPTURE": str(capture),
         "RELEASE_V2_JSON": '{"version":2}' if release_v2 else "",
+        "STAGING_DEPLOYMENT_IDENTITY_MODE": identity_mode,
+        "TEST_CANDIDATE_SHA": "c" * 40
+        if identity_mode == "service-principal"
+        else "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de",
+        "TEST_IMAGE_DIGEST": "sha256:" + "d" * 64
+        if identity_mode == "service-principal"
+        else "sha256:6fa75d4093590b83dc2f50962f1979481a8c3d3d9d1dd9f647b7f407de0690a5",
     }
     result = subprocess.run(
         ["bash", "-c", script + function + "\nrun_migrations\n"],
@@ -99,7 +111,10 @@ az() {
     assert "AUTO_MIGRATE_ON_STARTUP=false" in arguments
     command = arguments[arguments.index("--args") + 1]
     assert (
-        command == (GUARD.ALEMBIC_ARGS if release_v2 else GUARD.STAGING_ALEMBIC_ARGS)[0]
+        command
+        == (GUARD.ALEMBIC_ARGS if current_environment else GUARD.STAGING_ALEMBIC_ARGS)[
+            0
+        ]
     )
     helper_start = deploy.index("verify_migration_job_template() {")
     helper = deploy[helper_start : deploy.index("\n}", helper_start) + 2]
@@ -107,8 +122,7 @@ az() {
         "containers": [
             {
                 "name": "cosmaneura-staging-migrate",
-                "image": "registry.example/test@"
-                + "sha256:6fa75d4093590b83dc2f50962f1979481a8c3d3d9d1dd9f647b7f407de0690a5",
+                "image": "registry.example/test@" + test_env["TEST_IMAGE_DIGEST"],
                 "command": None,
                 "args": [command],
                 "env": [
@@ -126,7 +140,11 @@ az() {
     for wrong_command in (False, True):
         if wrong_command:
             template["containers"][0]["args"] = [
-                (GUARD.STAGING_ALEMBIC_ARGS if release_v2 else GUARD.ALEMBIC_ARGS)[0]
+                (
+                    GUARD.STAGING_ALEMBIC_ARGS
+                    if current_environment
+                    else GUARD.ALEMBIC_ARGS
+                )[0]
             ]
         verified = subprocess.run(
             [
@@ -141,7 +159,7 @@ az() {
         )
         assert (verified.returncode != 0) is wrong_command
     invocation = shlex.split(command)
-    if release_v2:
+    if current_environment:
         assert invocation == ["/opt/venv/bin/alembic", "upgrade", "head"]
     else:
         assert invocation[:2] == ["/opt/venv/bin/python", "-c"]
@@ -162,7 +180,7 @@ az() {
         assert startup["sslrootcert"] == "/etc/ssl/certs/ca.pem"
 
         config = Config()
-        if release_v2:
+        if current_environment:
             # Execute the actual candidate's configuration expression, then
             # inspect real driver arguments; no database credentials or I/O.
             tree = ast.parse((ROOT / "migrations/env.py").read_text())
@@ -204,7 +222,7 @@ az() {
         observed.append(True)
 
     monkeypatch.setattr(CommandLine, "main", migration_main)
-    if release_v2:
+    if current_environment:
         CommandLine().main(argv=invocation[1:])
     else:
         exec(compile(invocation[2], "staging-alembic-bootstrap", "exec"), {})
