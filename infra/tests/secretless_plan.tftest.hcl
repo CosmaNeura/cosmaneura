@@ -162,16 +162,17 @@ override_data {
       RECALL_API_KEY                             = "not-a-secret"
       # Deliberately fake, non-production key with the required Recall/Svix
       # whsec_ + base64 syntax so the static plan exercises the shape guard.
-      RECALL_WEBHOOK_SECRET              = "whsec_c3RhdGljLXRlc3Qta2V5IQ=="
-      REDIS_URL                          = "redis://placeholder.invalid/1"
-      SCRIBE_API_AUDIENCE                = "00000000-0000-0000-0000-000000000000"
-      SCRIBE_CALLER_CLIENT_ID            = ""
-      SCRIBE_HANDOFF_ENABLED             = "false"
-      SCRIBE_RECONCILER_CALLER_CLIENT_ID = ""
-      SCRIBE_CAPTURE_ENABLED             = "forbidden-generic-override"
-      SENTRY_DSN                         = ""
-      SESSION_SECRET_KEY                 = "not-a-secret"
-      SMTP_URL                           = "smtp://placeholder.invalid:1025"
+      RECALL_WEBHOOK_SECRET                     = "whsec_c3RhdGljLXRlc3Qta2V5IQ=="
+      REDIS_URL                                 = "redis://placeholder.invalid/1"
+      SCRIBE_API_AUDIENCE                       = "00000000-0000-0000-0000-000000000000"
+      SCRIBE_CALLER_CLIENT_ID                   = ""
+      SCRIBE_HANDOFF_ENABLED                    = "false"
+      SCRIBE_RECONCILER_CALLER_CLIENT_ID        = ""
+      SCRIBE_CAPTURE_ENABLED                    = "forbidden-generic-override"
+      SENTRY_DSN                                = ""
+      SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED = "false"
+      SESSION_SECRET_KEY                        = "not-a-secret"
+      SMTP_URL                                  = "smtp://placeholder.invalid:1025"
       # Canonical 32-byte Fernet test key (43 URL-safe base64 characters plus
       # one pad). This is fixed non-production test material.
       SOVEREIGN_RECORD_GRANT_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -273,6 +274,14 @@ run "secretless_static_plan" {
   }
 
   assert {
+    condition = one([
+      for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value
+      if entry.name == "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"
+    ]) == "false"
+    error_message = "the production Session Prep worker heartbeat must remain dark by default"
+  }
+
+  assert {
     condition = alltrue([
       for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
       alltrue([
@@ -324,8 +333,9 @@ run "session_prep_activation_projects_complete_worker_runtime" {
   command = plan
 
   variables {
-    adopt_existing_production_postgres_egress_rule = false
-    production_container_apps_egress_ipv4          = "198.51.100.10"
+    adopt_existing_production_postgres_egress_rule  = false
+    enable_session_prep_production_worker_heartbeat = true
+    production_container_apps_egress_ipv4           = "198.51.100.10"
     session_prep_production_rollout = {
       enabled             = true
       sovereign_client_id = "11111111-1111-1111-1111-111111111111"
@@ -370,6 +380,42 @@ run "session_prep_activation_projects_complete_worker_runtime" {
     )
     error_message = "Agent API identity and record-grant capability must remain API-only"
   }
+
+  assert {
+    condition = one([
+      for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value
+      if entry.name == "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"
+    ]) == "true"
+    error_message = "the heartbeat may activate only alongside the global Session Prep rollout"
+  }
+}
+
+run "reject_session_prep_heartbeat_without_global_rollout" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule  = false
+    enable_session_prep_production_worker_heartbeat = true
+    production_container_apps_egress_ipv4           = "198.51.100.10"
+  }
+
+  expect_failures = [azurerm_container_app.worker]
+}
+
+run "reject_session_prep_heartbeat_name_in_api_only_secrets" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_api_only_secret_vars = [
+      "RECALL_WEBHOOK_SECRET",
+      "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED",
+      "SOVEREIGN_RECORD_GRANT_SECRET",
+    ]
+  }
+
+  expect_failures = [azurerm_container_app.worker]
 }
 
 run "reject_generic_startup_migration_override" {
@@ -1176,6 +1222,7 @@ run "production_live_settings_pin_projects_full_env" {
         toset([
           "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
           "SESSION_PREP_PROVIDER_ENABLED",
+          "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED",
           "AUTHORITY_KERNEL_ENABLED",
           "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
           "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
@@ -1184,7 +1231,7 @@ run "production_live_settings_pin_projects_full_env" {
         ])
       )
     )
-    error_message = "worker env names must equal the live fixture plus the reviewed 7 dark adds"
+    error_message = "worker env names must equal the live fixture plus the reviewed 8 dark adds"
   }
 
   assert {
@@ -1229,6 +1276,7 @@ run "production_live_settings_pin_projects_full_env" {
       one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == local.scribe_cancellation_shared_public_values.SCRIBE_CANCELLATION_LEDGER_READY,
       one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED"]) == local.scribe_bundle_worker_values.SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED,
       one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "AZURE_DEID_AUTH_MODE"]) == "client_secret",
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"]) == "false",
       one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CANCELLATION_LEDGER_READY"]) == local.scribe_cancellation_shared_public_values.SCRIBE_CANCELLATION_LEDGER_READY,
       one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED"]) == local.scribe_bundle_scheduler_values.SCRIBE_BUNDLE_CAPTURED_WORKER_ENABLED,
       length(azurerm_container_app.worker.identity[0].identity_ids) == 2,
