@@ -14,6 +14,12 @@ variable "enable_public_phi_observability" {
   default     = false
 }
 
+variable "enable_session_prep_production_worker_heartbeat" {
+  description = "Enable the fixed PHI-free Session Prep worker heartbeat in production after monitor and failure/recovery routing acceptance."
+  type        = bool
+  default     = false
+}
+
 variable "public_phi_alert_email" {
   description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
   type        = string
@@ -184,8 +190,15 @@ variable "python_public_vars" {
       "SCRIBE_ENCOUNTER_CREATION_ENABLED",
       "SCRIBE_ENCOUNTER_PREP_ENABLED",
       "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+      "SCRIBE_CANCELLATION_LEDGER_READY",
+      "SCRIBE_CANCELLATION_ENABLED",
+      "SCRIBE_CANCELLATION_GRACE_DAYS",
+      "SCRIBE_CANCELLATION_PHI_SCOPE",
+      "SCRIBE_CANCELLATION_POLICY_SHA256",
+      "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
+      "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED",
     ]))) == 0
-    error_message = "Session Prep, native Scribe, and durable Zoom rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
+    error_message = "Session Prep, native Scribe, durable Zoom, cancellation, and workflow-client rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
   }
 }
 

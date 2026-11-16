@@ -62,6 +62,134 @@ PRESERVED_PREPARATION_FLAGS = {
     "SCRIBE_ENCOUNTER_CREATION_ENABLED",
     "COMPANION_SESSION_PREP_ENABLED",
 }
+NATIVE_FLAGS = {
+    "SCRIBE_NATIVE_WORKLOAD_ENABLED",
+    "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
+    "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
+    "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
+}
+NATIVE_FIELDS = NATIVE_FLAGS | {
+    "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
+    "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
+}
+ACTIVATION_FIELDS = {
+    "SCRIBE_AUTOMATIC_ACTIVATION_ENABLED",
+    "SCRIBE_ACTIVATION_PRACTICE_REFS",
+}
+CANCELLATION_FLAGS = {
+    "SCRIBE_CANCELLATION_ENABLED",
+    "SCRIBE_CANCELLATION_LEDGER_READY",
+}
+CANCELLATION_FIELDS = CANCELLATION_FLAGS | {
+    "SCRIBE_CANCELLATION_GRACE_DAYS",
+    "SCRIBE_CANCELLATION_PHI_SCOPE",
+    "SCRIBE_CANCELLATION_POLICY_SHA256",
+}
+NATIVE_BINDING_FIELDS = {
+    "ENTRA_TENANT_ID",
+    "AGENT_API_SOVEREIGN_CLIENT_IDS",
+    "AUTHORITY_CLERK_ISSUER",
+    "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
+    "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
+    "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
+}
+
+
+def canonical_uuid(value: str) -> bool:
+    return bool(
+        re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", value)
+        and value != "00000000-0000-0000-0000-000000000000"
+    )
+
+
+def validate_native_groups(runtime: dict[str, str]) -> None:
+    """Complete, bounded optional groups never grant omitted capabilities."""
+    for group in (NATIVE_FIELDS, ACTIVATION_FIELDS, CANCELLATION_FIELDS):
+        require(not (group & runtime.keys()) or group <= runtime.keys())
+    if NATIVE_FIELDS <= runtime.keys():
+        require(all(runtime[key] in {"true", "false"} for key in NATIVE_FLAGS))
+        workload = runtime["SCRIBE_NATIVE_WORKLOAD_ENABLED"] == "true"
+        context = runtime["SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED"] == "true"
+        visits = runtime["SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED"] == "true"
+        actions = runtime["SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED"] == "true"
+        require(not context or workload)
+        require(not visits or (workload and context))
+        require(not actions or (workload and context and visits))
+        for key in NATIVE_FIELDS - NATIVE_FLAGS:
+            require(canonical_uuid(runtime[key]) if workload else runtime[key] == "")
+    if ACTIVATION_FIELDS <= runtime.keys():
+        enabled = runtime["SCRIBE_AUTOMATIC_ACTIVATION_ENABLED"]
+        require(enabled in {"true", "false"})
+        cohort = runtime["SCRIBE_ACTIVATION_PRACTICE_REFS"]
+        refs = cohort.split(",") if cohort else []
+        require(len(refs) <= 32 and len(set(refs)) == len(refs))
+        require(
+            all(
+                re.fullmatch(r"practice_[0-7][0-9a-hjkmnp-tv-z]{25}", ref)
+                for ref in refs
+            )
+        )
+        if enabled == "true":
+            require(refs and runtime.get("SCRIBE_NATIVE_WORKLOAD_ENABLED") == "true")
+    if CANCELLATION_FIELDS <= runtime.keys():
+        require(all(runtime[key] in {"true", "false"} for key in CANCELLATION_FLAGS))
+        grace = runtime["SCRIBE_CANCELLATION_GRACE_DAYS"]
+        scope = runtime["SCRIBE_CANCELLATION_PHI_SCOPE"]
+        policy = runtime["SCRIBE_CANCELLATION_POLICY_SHA256"]
+        require(not grace or (re.fullmatch(r"[3-8][0-9]|90", grace) is not None))
+        require(scope in {"", "core-and-scribe-clinical-records"})
+        require(not policy or re.fullmatch(r"[0-9a-f]{64}", policy))
+        if runtime["SCRIBE_CANCELLATION_ENABLED"] == "true":
+            require(
+                runtime["SCRIBE_CANCELLATION_LEDGER_READY"] == "true"
+                and runtime.get("SCRIBE_NATIVE_WORKLOAD_ENABLED") == "true"
+                and grace
+                and scope
+                and policy
+            )
+
+
+def validate_native_binding(configuration: dict[str, str]) -> None:
+    """Validate only public deployment bindings, without loading the application."""
+    fields = NATIVE_FIELDS | ACTIVATION_FIELDS | CANCELLATION_FIELDS
+    require(
+        type(configuration) is dict
+        and set(configuration) <= fields | NATIVE_BINDING_FIELDS
+    )
+    require(
+        all(
+            type(value) is str and len(value) < 2048 for value in configuration.values()
+        )
+    )
+    validate_native_groups(configuration)
+    if configuration.get("SCRIBE_NATIVE_WORKLOAD_ENABLED") != "true":
+        return
+    require(NATIVE_BINDING_FIELDS <= configuration.keys())
+    require(canonical_uuid(configuration["ENTRA_TENANT_ID"]))
+    # These are the unextended Sovereign tool callers. Native auth selects its
+    # own singleton for both policies and compares their verified client IDs;
+    # it does not require equality with the legacy capture caller or audience.
+    tools = configuration["AGENT_API_SOVEREIGN_CLIENT_IDS"].split(",")
+    require(tools and all(canonical_uuid(value) for value in tools))
+    require(configuration["SCRIBE_NATIVE_WORKLOAD_CLIENT_ID"] not in tools)
+    require(
+        configuration["AUTHORITY_CLERK_ISSUER"]
+        == "https://resolved-emu-53.clerk.accounts.dev"
+    )
+    ttl, refresh, maximum = (
+        configuration[key]
+        for key in (
+            "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
+            "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
+            "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
+        )
+    )
+    require(
+        all(
+            re.fullmatch(r"[1-9][0-9]{0,8}", value) for value in (ttl, refresh, maximum)
+        )
+    )
+    require(int(ttl) >= 300 and 60 <= int(refresh) < int(ttl) <= int(maximum))
 
 
 def require(value: object) -> None:
@@ -115,23 +243,25 @@ def bound_json(filename: str, digest: str):
 def validate_runtime(runtime: dict[str, str]) -> None:
     # Historical Scribe-only plans remain valid. Companion admission is an
     # explicit, complete group, including an empty caller for full withdrawal.
-    # Workflow and preparation preservation are independently optional complete
-    # groups. Old plans remain valid; absent groups never synthesize defaults.
-    field_groups = (FIELDS, FIELDS | COMPANION_FIELDS)
-    existing_groups = (
-        *field_groups,
-        *(group | PRESERVED_WORKFLOW_FLAGS for group in field_groups),
-    )
-    require(
-        type(runtime) is dict
-        and set(runtime)
-        in (
-            *existing_groups,
-            *(group | PRESERVED_PREPARATION_FLAGS for group in existing_groups),
-        )
-    )
+    # Optional groups are independent and complete. Historical plans remain
+    # valid; absent groups never synthesize defaults or admit inherited values.
+    require(type(runtime) is dict and FIELDS <= runtime.keys())
+    remaining = set(runtime) - FIELDS
+    for group in (
+        COMPANION_FIELDS,
+        PRESERVED_WORKFLOW_FLAGS,
+        PRESERVED_PREPARATION_FLAGS,
+        NATIVE_FIELDS,
+        ACTIVATION_FIELDS,
+        CANCELLATION_FIELDS,
+    ):
+        if remaining & group:
+            require(group <= remaining)
+            remaining -= group
+    require(not remaining)
     require(all(type(value) is str and len(value) < 2048 for value in runtime.values()))
     require(all(runtime[key] in {"true", "false"} for key in FLAGS))
+    validate_native_groups(runtime)
     if PRESERVED_WORKFLOW_FLAGS <= runtime.keys():
         require(
             all(runtime[key] in {"true", "false"} for key in PRESERVED_WORKFLOW_FLAGS)
@@ -661,12 +791,15 @@ def main(argv):
         with open(argv[-1], "x", encoding="utf-8") as stream:
             json.dump(output, stream, sort_keys=True, separators=(",", ":"))
         return
-    if argv == ["--validate-runtime-public"]:
+    if argv in (["--validate-runtime-public"], ["--validate-native-binding"]):
         raw = sys.stdin.buffer.read(65537)
         require(0 < len(raw) <= 65536)
         runtime = json.loads(raw, object_pairs_hook=unique)
-        validate_runtime(runtime)
-        print(json.dumps(runtime, sort_keys=True, separators=(",", ":")))
+        if argv == ["--validate-native-binding"]:
+            validate_native_binding(runtime)
+        else:
+            validate_runtime(runtime)
+            print(json.dumps(runtime, sort_keys=True, separators=(",", ":")))
         return
     require(len(argv) in {3, 5, 7})
     plan = bound_json(argv[1], argv[2])

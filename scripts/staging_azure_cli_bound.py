@@ -450,7 +450,7 @@ def validate_runtime_operation(argv: list[str], operation: str) -> None:
     if operation == "web-image-only":
         validate_web_image_operation(argv)
         return
-    require(operation in {"recover-core", "warm-scribe"})
+    require(operation in {"recover-core", "warm-scribe", "scribe-initialize"})
     names = STAGING_CONTAINER_NAMES - {"cosmaneura-staging-migrate"}
     if operation == "warm-scribe":
         names = {"cosmaneura-staging-scribe-api"}
@@ -477,6 +477,73 @@ def validate_runtime_operation(argv: list[str], operation: str) -> None:
                 revision[0],
                 *ending,
             ]
+        )
+    elif operation == "scribe-initialize" and argv[:3] == [
+        "containerapp",
+        "secret",
+        "list",
+    ]:
+        require(
+            argv
+            == ["containerapp", "secret", "list", *suffix, "--show-values", *ending]
+        )
+    elif operation == "scribe-initialize":
+        require(argv[:2] == ["containerapp", "update"])
+        image = flag_values(argv, {"--image"})
+        revision_suffix = flag_values(argv, {"--revision-suffix"})
+        require(len(image) == len(revision_suffix) == 1)
+        require(
+            re.fullmatch(
+                r"cosmaneurastagingregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}",
+                image[0],
+            )
+        )
+        require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,35}", revision_suffix[0]))
+        require(len(name[0] + "--" + revision_suffix[0]) <= 54)
+        start = [
+            "containerapp",
+            "update",
+            *suffix,
+            "--image",
+            image[0],
+            "--revision-suffix",
+            revision_suffix[0],
+            "--set-env-vars",
+        ]
+        require(argv[: len(start)] == start and argv[-len(ending) :] == ending)
+        entries = argv[len(start) : -len(ending)]
+        fields = {
+            "SCRIBE_NATIVE_WORKLOAD_ENABLED",
+            "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
+            "SCRIBE_NATIVE_WORKLOAD_CLIENT_ID",
+            "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
+            "SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED",
+            "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
+            "SCRIBE_AUTOMATIC_ACTIVATION_ENABLED",
+            "SCRIBE_ACTIVATION_PRACTICE_REFS",
+            "SCRIBE_CANCELLATION_ENABLED",
+            "SCRIBE_CANCELLATION_GRACE_DAYS",
+            "SCRIBE_CANCELLATION_PHI_SCOPE",
+            "SCRIBE_CANCELLATION_POLICY_SHA256",
+            "SCRIBE_CANCELLATION_LEDGER_READY",
+        }
+        expected = (
+            fields
+            if name[0] == "cosmaneura-staging-app"
+            else {"SCRIBE_CANCELLATION_LEDGER_READY"}
+        )
+        require(len(entries) == len(expected))
+        parsed = {}
+        for entry in entries:
+            key, separator, value = entry.partition("=")
+            require(separator and key in expected and key not in parsed)
+            require(
+                len(value) < 2048 and "secretref:" not in value and "\x00" not in value
+            )
+            parsed[key] = value
+        require(
+            set(parsed) == expected
+            and parsed["SCRIBE_CANCELLATION_LEDGER_READY"] == "true"
         )
     elif operation == "recover-core":
         revision = flag_values(argv, {"--from-revision"})

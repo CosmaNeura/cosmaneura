@@ -1,7 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest"
 
-import type { TemplateField } from "~/configuration/client"
-
+import soapStartingPoint from "../../../tests/fixtures/default_soap_starting_point.json"
 import { CreateNoteTemplate } from "./CreateNoteTemplate"
 import { fireEvent, render, screen } from "@testing-library/react"
 
@@ -27,11 +26,7 @@ it("starts from four general SOAP sections and sends only the current owner's na
     "Template “My SOAP” created. It is available for future notes.",
   )
   expect(create.mock.calls[0][0].body.note_type).toBe("My SOAP")
-  expect(
-    create.mock.calls[0][0].body.fields.map(
-      (field: TemplateField) => field.heading,
-    ),
-  ).toEqual(["Subjective", "Objective", "Assessment", "Plan"])
+  expect(create.mock.calls[0][0].body.fields).toEqual(soapStartingPoint)
   expect(Object.keys(create.mock.calls[0][0].body)).toEqual([
     "note_type",
     "fields",

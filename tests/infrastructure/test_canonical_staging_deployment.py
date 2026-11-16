@@ -1453,7 +1453,10 @@ def test_completion_artifact_rejects_malformed_closed_zip_content(change):
         module["validate_attempt_bundle"](metadata, raw, context)
 
 
-def test_completion_artifact_accepts_current_full_runtime_and_ordinary_validation():
+@pytest.mark.parametrize("native", [False, True])
+def test_completion_artifact_accepts_current_full_runtime_and_ordinary_validation(
+    native,
+):
     module, context, documents, metadata = _attempt_bundle_fixture()
     runtime = context["request"]["staging_runtime_public"]
     runtime.update(
@@ -1465,7 +1468,12 @@ def test_completion_artifact_accepts_current_full_runtime_and_ordinary_validatio
         )
     )
     runtime["AGENT_API_COMPANION_CLIENT_ID"] = "33333333-3333-3333-3333-333333333333"
-    assert len(runtime) == 26
+    if native:
+        fixture = runpy.run_path(
+            str(ROOT / "tests/infrastructure/test_scribe_staging_configuration.py")
+        )
+        runtime.update(fixture["NEW"])
+    assert len(runtime) == (39 if native else 26)
     documents["request.json"]["staging_runtime_public"] = copy.deepcopy(runtime)
     context["validation"] = {
         "run_id": context["run_id"],

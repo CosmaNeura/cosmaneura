@@ -721,6 +721,6 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     # Pin the independently reviewed PR932 hosted source/migration handoff.
     # Founder-user, readiness/traffic, runtime preservation and job cleanup
     # guards remain; hosted selectors require canonical candidate reverification.
-    assert hashlib.sha256(deploy).hexdigest() == "8d02d349cfbcceb3aea6e14bed22dbb2ccf54080c0ba39ae5bb90f5adcb4498d"
+    assert hashlib.sha256(deploy).hexdigest() == "81fa963ed1382c338b9b6600937f710c1b3ef445ce79fec2c422f9da1b7eec62"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on

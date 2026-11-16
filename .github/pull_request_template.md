@@ -53,8 +53,10 @@ new review.
 - Previous known-good artifact/data boundary:
 
 Production promotion is founder-only and manual from exact `master`, recorded
-as self-authorization. `AGENTS.md` records the remaining immutable-artifact
-promotion gap; this checklist does not claim a required environment reviewer.
+as self-authorization. Archived guardrails under `docs/reference/archive/`
+record the remaining immutable-artifact promotion gap; this checklist does
+not claim a required environment reviewer. Hard agent rules stay in root
+`AGENTS.md`.
 
 ## Change record
 

@@ -15,6 +15,7 @@ HOSTED_PR_WORKFLOWS = {
     "pull_request_checks.yml": "pull_request",
     "change-budget.yml": "pull_request_target",
     "infra_plan.yml": "pull_request",
+    "staging_environment_boundary.yml": "pull_request",
 }
 spec = importlib.util.spec_from_file_location(
     "local_release_runner", ROOT / "scripts/local_release_runner.py"

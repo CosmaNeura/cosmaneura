@@ -301,7 +301,7 @@ def test_terraform_models_default_off_adoption_and_exact_least_privilege() -> No
     assert (
         'identity { type = "UserAssigned" identity_ids = '
         "concat([azurerm_user_assigned_identity.health_services.id], "
-        "var.scribe_core_bundle.attach_existing_translation_identity ? "
+        "local.effective_scribe_core_bundle.attach_existing_translation_identity ? "
         "[data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id] : []) }"
     ) in " ".join(worker_identity.split())
     bundle_variable, translation_identity = bundle.split(
@@ -312,7 +312,7 @@ def test_terraform_models_default_off_adoption_and_exact_least_privilege() -> No
     )
     assert "default = {}" in " ".join(bundle_variable.split())
     assert (
-        "count = var.scribe_core_bundle.attach_existing_translation_identity ? 1 : 0"
+        "count = local.effective_scribe_core_bundle.attach_existing_translation_identity ? 1 : 0"
     ) in " ".join(translation_identity.split("locals {", 1)[0].split())
     assert 'name  = "AZURE_DEID_AUTH_MODE"' in main
     assert 'name  = "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID"' in main
