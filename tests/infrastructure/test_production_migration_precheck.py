@@ -5,7 +5,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 
@@ -48,6 +48,15 @@ class FixtureDatabase:
             return Rows([self.boundary])
         if query == precheck.house.TLS_STATUS_QUERY:
             return Rows([] if self.tls is None else [self.tls])
+        if query == precheck.GUARD_TABLES:
+            available = []
+            for name in ("scribe_capture_provider_link", "provider_practice_authority"):
+                count = self.db.execute(
+                    "SELECT count(*) FROM public.sqlite_master WHERE type='table' AND name=?",
+                    (name,),
+                ).fetchone()[0]
+                available.append(bool(count))
+            return Rows([tuple(available)])
         return self.db.execute(query, params)
 
     def rollback(self) -> None:
@@ -104,18 +113,22 @@ def test_clear_fixture_reports_only_fixed_fields(database):
     )
     report = precheck.collect(database, CONTRACT)
     assert report == {
+        "scope": "core",
         "migration_head": "49126bf99c72",
         "repository_head": "69bad2e072e2",
         "is_ancestor_of_repository_head": True,
+        "pending_migrations": ["ddd6261fa36f", "e78845cecca6", "69bad2e072e2"],
         "e78845cecca6_would_abort": False,
         "abort_counts": {"practice_conflicts": 0, "reused_uuids": 0, "zero_uuids": 0},
         "provider_practice_authority_null_practice_id_count": 1,
+        "refusal_reasons": ["pending_migrations"],
     }
     assert "synthetic" not in json.dumps(report)
     assert database.queries == [
         precheck.BOUNDARY,
         precheck.house.TLS_STATUS_QUERY,
         precheck.HEADS,
+        precheck.GUARD_TABLES,
         precheck.ABORT_COUNTS,
         precheck.NULL_PRACTICE_COUNT,
     ]
@@ -245,7 +258,8 @@ def test_cli_refuses_tls_downgrades_without_connecting(monkeypatch, url, capsys,
     assert captured.out == ""
     assert (
         captured.err
-        == (precheck.PREFER_REFUSAL if mode == "prefer" else precheck.REFUSAL) + "\n"
+        == (precheck.PREFER_REFUSAL if mode == "prefer" else precheck.REFUSAL)
+        + " Reason: configuration_refused.\n"
     )
     assert calls == []
     assert "synthetic-password" not in captured.err
@@ -278,6 +292,9 @@ def test_cli_one_read_only_snapshot_rolls_back_and_emits_aggregate_report(
     monkeypatch, url, capsys, blocked
 ):
     database = FixtureDatabase()
+    database.db.execute(
+        "UPDATE public.alembic_version SET version_num=?", (CONTRACT.head,)
+    )
     if blocked:
         database.db.execute(
             "INSERT INTO public.scribe_capture_provider_link VALUES ('p', ?, NULL)",
@@ -293,6 +310,11 @@ def test_cli_one_read_only_snapshot_rolls_back_and_emits_aggregate_report(
     assert database.rolled_back
     assert len(calls) == 1 and calls[0]["sslmode"] == "verify-full"
     assert "default_transaction_read_only=on" in calls[0]["options"]
+    assert f"lock_timeout={precheck.LOCK_TIMEOUT_MILLISECONDS}" in calls[0]["options"]
+    assert (
+        f"idle_in_transaction_session_timeout={precheck.IDLE_TRANSACTION_TIMEOUT_MILLISECONDS}"
+        in calls[0]["options"]
+    )
     assert "synthetic-password" not in captured.out
 
 
@@ -317,7 +339,10 @@ def test_cli_failure_never_emits_driver_details_or_partial_output(
     monkeypatch.setattr(precheck.psycopg, "connect", broken)
     assert precheck.main() == 2
     captured = capsys.readouterr()
-    assert captured.out == "" and captured.err == precheck.REFUSAL + "\n"
+    assert (
+        captured.out == ""
+        and captured.err == precheck.REFUSAL + " Reason: snapshot_refused.\n"
+    )
 
 
 def test_cli_writable_session_refuses_without_a_partial_report(
@@ -328,19 +353,41 @@ def test_cli_writable_session_refuses_without_a_partial_report(
     install_connection(monkeypatch, url, database)
     assert precheck.main() == 2
     captured = capsys.readouterr()
-    assert captured.out == "" and captured.err == precheck.REFUSAL + "\n"
+    assert (
+        captured.out == ""
+        and captured.err == precheck.REFUSAL + " Reason: snapshot_refused.\n"
+    )
     assert database.queries == [precheck.TRANSACTION, precheck.BOUNDARY]
 
 
-def test_missing_schema_refuses_without_replacing_counts_with_zero(
-    monkeypatch, url, capsys
+@pytest.mark.parametrize(
+    "missing",
+    [
+        ("scribe_capture_provider_link",),
+        ("provider_practice_authority",),
+        ("scribe_capture_provider_link", "provider_practice_authority"),
+    ],
+)
+def test_missing_schema_preserves_head_and_empty_counts_with_stop(
+    monkeypatch, url, capsys, missing
 ):
     database = FixtureDatabase()
-    database.db.execute("DROP TABLE public.scribe_capture_provider_link")
+    for name in missing:
+        database.db.execute(f"DROP TABLE public.{name}")
     install_connection(monkeypatch, url, database)
-    assert precheck.main() == 2
+    assert precheck.main() == 1
     captured = capsys.readouterr()
-    assert captured.out == "" and captured.err == precheck.REFUSAL + "\n"
+    assert captured.err == ""
+    report = json.loads(captured.out)
+    assert report["migration_head"] == "49126bf99c72"
+    assert report["abort_counts"] == {}
+    assert report["e78845cecca6_would_abort"] is None
+    assert report["provider_practice_authority_null_practice_id_count"] is None
+    assert "guard_tables_missing" in report["refusal_reasons"]
+    assert set(report["refusal_reasons"]) <= precheck.REFUSAL_REASONS
+    assert precheck.ABORT_COUNTS not in database.queries
+    assert precheck.NULL_PRACTICE_COUNT not in database.queries
+    assert database.rolled_back
 
 
 def test_missing_url_never_connects(monkeypatch, capsys):
@@ -350,3 +397,145 @@ def test_missing_url_never_connects(monkeypatch, capsys):
     )
     assert precheck.main() == 2
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    ("head", "pending"),
+    [
+        ("49126bf99c72", ["ddd6261fa36f", "e78845cecca6", "69bad2e072e2"]),
+        ("ddd6261fa36f", ["e78845cecca6", "69bad2e072e2"]),
+        ("e78845cecca6", ["69bad2e072e2"]),
+        (CONTRACT.head, []),
+        ("aaaaaaaaaaaa", []),
+    ],
+)
+def test_cli_lists_pending_migrations_and_behind_is_stop(
+    monkeypatch, url, capsys, head, pending
+):
+    database = FixtureDatabase()
+    database.db.execute("UPDATE public.alembic_version SET version_num=?", (head,))
+    install_connection(monkeypatch, url, database)
+    assert precheck.main() == int(head != CONTRACT.head)
+    report = json.loads(capsys.readouterr().out)
+    assert report["pending_migrations"] == pending
+    assert report["refusal_reasons"] == (
+        ["pending_migrations"]
+        if pending
+        else ["migration_head_unknown"]
+        if head != CONTRACT.head
+        else []
+    )
+    assert database.rolled_back
+
+
+@pytest.mark.parametrize("query", [precheck.ABORT_COUNTS, precheck.NULL_PRACTICE_COUNT])
+def test_table_disappearing_after_catalog_check_retains_head_not_partial_counts(
+    monkeypatch, url, capsys, query
+):
+    database = FixtureDatabase()
+    execute = database.execute
+
+    def raced(statement, params=()):
+        if statement == query:
+            raise precheck.psycopg.errors.UndefinedTable("synthetic-private-row")
+        return execute(statement, params)
+
+    monkeypatch.setattr(database, "execute", raced)
+    install_connection(monkeypatch, url, database)
+    assert precheck.main() == 1
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["migration_head"] == "49126bf99c72"
+    assert report["abort_counts"] == {}
+    assert report["provider_practice_authority_null_practice_id_count"] is None
+    assert report["e78845cecca6_would_abort"] is None
+    assert report["refusal_reasons"] == ["pending_migrations", "guard_tables_missing"]
+    assert captured.err == "" and "synthetic-private-row" not in captured.out
+    assert database.rolled_back
+
+
+@pytest.mark.parametrize("kind", ["relative", "missing", "directory", "unreadable"])
+def test_cli_refuses_ca_bundle_path_without_connecting(
+    monkeypatch, url, tmp_path, capsys, kind
+):
+    ca = tmp_path / "synthetic-ca.pem"
+    if kind == "relative":
+        path = "synthetic-ca.pem"
+    elif kind == "missing":
+        path = str(tmp_path / "missing.pem")
+    elif kind == "directory":
+        path = str(tmp_path)
+    else:
+        path = str(ca)
+        monkeypatch.setattr(precheck.os, "access", lambda *args: False)
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query))
+    query["sslrootcert"] = path
+    changed = urlunsplit(parsed._replace(query=urlencode(query)))
+    calls = install_connection(monkeypatch, changed, None)
+    assert precheck.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == precheck.REFUSAL + " Reason: configuration_refused.\n"
+    assert calls == [] and path not in captured.err
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "scheme",
+        "no_user",
+        "no_password",
+        "extra_at",
+        "wrong_port",
+        "bad_port",
+        "multi_host",
+        "encoded_database",
+        "empty_mode",
+        "empty_ca",
+        "bare_query",
+        "hostaddr",
+        "service",
+        "client_key",
+        "duplicate_ca",
+        "no_url",
+    ],
+)
+def test_cli_url_shape_refusals_are_fixed_and_never_connect(
+    monkeypatch, url, capsys, shape
+):
+    host = precheck.house.EXPECTED_DATABASE_HOST
+    changed = {
+        "scheme": url.replace("postgresql:", "https:"),
+        "no_user": url.replace("synthetic:synthetic-password@", ":synthetic-password@"),
+        "no_password": url.replace("synthetic:synthetic-password@", "synthetic@"),
+        "extra_at": url.replace("synthetic-password@", "synthetic@password@"),
+        "wrong_port": url.replace(host, host + ":5433"),
+        "bad_port": url.replace(host, host + ":bad"),
+        "multi_host": url.replace(host, "synthetic.invalid," + host),
+        "encoded_database": url.replace("/production?", "/%70roduction?"),
+        "empty_mode": url.replace("sslmode=verify-full", "sslmode="),
+        "empty_ca": url.split("&sslrootcert=")[0] + "&sslrootcert=",
+        "bare_query": url + "&unsafe",
+        "hostaddr": url + "&hostaddr=127.0.0.1",
+        "service": url + "&service=synthetic",
+        "client_key": url + "&sslkey=synthetic",
+        "duplicate_ca": url + "&sslrootcert=synthetic",
+        "no_url": "",
+    }[shape]
+    calls = install_connection(monkeypatch, changed, None)
+    assert precheck.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == precheck.REFUSAL + " Reason: configuration_refused.\n"
+    assert calls == [] and "synthetic-password" not in captured.err
+
+
+def test_operator_doc_uses_azure_no_echo_recipe_and_dynamic_head():
+    doc = (ROOT / "docs/production-migration-precheck.md").read_text()
+    assert "**inside Azure**" in doc and "**Core only**" in doc
+    assert "`cosmaneura-os` #377" in doc and "separate database" in doc
+    assert "set +x" in doc and "read -r -s -p" in doc
+    assert "trap 'unset DATABASE_URL' EXIT" in doc
+    assert CONTRACT.head not in doc
+    assert "pending_migrations" in doc and "guard_tables_missing" in doc

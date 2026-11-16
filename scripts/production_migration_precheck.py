@@ -29,8 +29,14 @@ SELECT current_database(), current_schema(),
        current_setting('transaction_isolation')
 """
 HEADS: LiteralString = (
-    "SELECT version_num FROM public.alembic_version ORDER BY version_num"
+    "SELECT version_num FROM public.alembic_version ORDER BY version_num LIMIT 2"
 )
+GUARD_TABLES: LiteralString = """
+SELECT to_regclass('public.scribe_capture_provider_link') IS NOT NULL,
+       to_regclass('public.provider_practice_authority') IS NOT NULL
+"""
+LOCK_TIMEOUT_MILLISECONDS = 5_000
+IDLE_TRANSACTION_TIMEOUT_MILLISECONDS = 60_000
 # Match e78845cecca6's historical guard, including revoked links and PostgreSQL
 # COUNT(DISTINCT)'s NULL semantics. Only the three integers leave the server.
 ABORT_COUNTS: LiteralString = """
@@ -57,6 +63,16 @@ REFUSAL = "Production migration precheck refused; stop before promote."
 PREFER_REFUSAL = (
     "Production migration precheck refused: sslmode=prefer is not allowed; "
     "supply an explicitly reviewed verify-full URL. Stop before promote."
+)
+REFUSAL_REASONS = frozenset(
+    {
+        "configuration_refused",
+        "snapshot_refused",
+        "migration_head_unknown",
+        "pending_migrations",
+        "guard_tables_missing",
+        "e78845_abort",
+    }
 )
 
 
@@ -110,6 +126,8 @@ def connection_parameters(database_url: str) -> dict[str, Any]:
         "options": (
             "-c default_transaction_read_only=on "
             f"-c statement_timeout={house.STATEMENT_TIMEOUT_MILLISECONDS} "
+            f"-c lock_timeout={LOCK_TIMEOUT_MILLISECONDS} "
+            f"-c idle_in_transaction_session_timeout={IDLE_TRANSACTION_TIMEOUT_MILLISECONDS} "
             "-c search_path=public -c timezone=UTC"
         ),
     }
@@ -123,6 +141,32 @@ def integer_counts(row: tuple[Any, ...] | None, length: int) -> tuple[int, ...]:
     ):
         raise house.InventoryFailure()
     return row
+
+
+def pending_revisions(
+    head: str,
+    contract: house.RepositoryMigrationContract,
+) -> list[str]:
+    """List the checkout's pending revisions in deterministic dependency order."""
+    if head not in contract.ancestors:
+        return []  # unknown head is a separate refusal, never a clean result
+    graph = house._migration_graph(house.ROOT)
+    house._assert_acyclic_migration_graph(graph)
+    if house._revision_ancestors(graph, contract.head) != contract.ancestors:
+        raise house.InventoryFailure()
+    applied = set(house._revision_ancestors(graph, head))
+    remaining = set(contract.ancestors) - applied
+    pending: list[str] = []
+    while remaining:
+        ready = sorted(
+            revision for revision in remaining if set(graph[revision]) <= applied
+        )
+        if not ready:
+            raise house.InventoryFailure()
+        pending.extend(ready)
+        applied.update(ready)
+        remaining.difference_update(ready)
+    return pending
 
 
 def collect(
@@ -148,23 +192,61 @@ def collect(
         raise house.InventoryFailure()
     # Reject arbitrary head text rather than echoing it as operator evidence.
     head = heads[0][0]
-    abort = integer_counts(connection.execute(ABORT_COUNTS).fetchone(), 3)
-    null_practice = integer_counts(
-        connection.execute(NULL_PRACTICE_COUNT).fetchone(), 1
-    )[0]
-    return {
+    pending = pending_revisions(head, contract)
+    reasons = []
+    if head not in contract.ancestors:
+        reasons.append("migration_head_unknown")
+    if pending:
+        reasons.append("pending_migrations")
+    report = {
+        "scope": "core",
         "migration_head": head,
         "repository_head": contract.head,
         "is_ancestor_of_repository_head": head in contract.ancestors,
-        "e78845cecca6_would_abort": any(abort),
-        "abort_counts": dict(zip(COUNT_LABELS, abort, strict=True)),
-        "provider_practice_authority_null_practice_id_count": null_practice,
+        "pending_migrations": pending,
+        "e78845cecca6_would_abort": None,
+        "abort_counts": {},
+        "provider_practice_authority_null_practice_id_count": None,
+        "refusal_reasons": reasons,
     }
+    tables = connection.execute(GUARD_TABLES).fetchone()
+    if (
+        tables is None
+        or len(tables) != 2
+        or any(type(value) is not bool for value in tables)
+    ):
+        raise house.InventoryFailure()
+    if not all(tables):
+        reasons.append("guard_tables_missing")
+        return report
+    try:
+        abort = integer_counts(connection.execute(ABORT_COUNTS).fetchone(), 3)
+        null_practice = integer_counts(
+            connection.execute(NULL_PRACTICE_COUNT).fetchone(), 1
+        )[0]
+    except psycopg.errors.UndefinedTable:
+        # A concurrent DROP may race the catalog observation. No further SQL
+        # is issued on this failed transaction; main rolls it back. Discard
+        # partial counts but preserve the already verified revision evidence.
+        reasons.append("guard_tables_missing")
+        return report
+    report.update(
+        {
+            "e78845cecca6_would_abort": any(abort),
+            "abort_counts": dict(zip(COUNT_LABELS, abort, strict=True)),
+            "provider_practice_authority_null_practice_id_count": null_practice,
+        }
+    )
+    if any(abort):
+        reasons.append("e78845_abort")
+    return report
 
 
 def main() -> int:
+    refusal_reason = "configuration_refused"
     try:
         parameters = connection_parameters(os.environ.get("DATABASE_URL", ""))
+        refusal_reason = "snapshot_refused"
         contract = house.repository_migration_contract()
         with psycopg.connect(**parameters) as connection:
             connection.execute(TRANSACTION)
@@ -172,18 +254,15 @@ def main() -> int:
             # End the one snapshot by rollback even though it is read-only.
             connection.rollback()
     except PreferTLS:
-        print(PREFER_REFUSAL, file=sys.stderr)
+        print(f"{PREFER_REFUSAL} Reason: configuration_refused.", file=sys.stderr)
         return 2
     except Exception:
         # Driver exceptions can include credentials or row-derived text.
         # Never print the exception or a partial report.
-        print(REFUSAL, file=sys.stderr)
+        print(f"{REFUSAL} Reason: {refusal_reason}.", file=sys.stderr)
         return 2
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))
-    return int(
-        not report["is_ancestor_of_repository_head"]
-        or report["e78845cecca6_would_abort"]
-    )
+    return int(bool(report["refusal_reasons"]))
 
 
 if __name__ == "__main__":
