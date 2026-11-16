@@ -26,6 +26,8 @@ VisitPrepAccessDenialReason = Literal[
     "practice_access_not_authorized",
     "baa_not_in_force",
     "entitlement_not_in_force",
+    "scribe_cancelled_read_only",
+    "scribe_export_period_expired",
     "cohort_not_enabled",
 ]
 
@@ -74,7 +76,7 @@ def resolve_visit_prep_access(
     doctor: Doctor,
     *,
     view_as_active: bool = False,
-    settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
+    settings: VisitPrepSettings | None = None,
     at: datetime | None = None,
 ) -> VisitPrepAccessDecision:
     """Resolve Visit Prep capabilities without mutating identity or tenancy.
@@ -84,6 +86,10 @@ def resolve_visit_prep_access(
     and a current entitlement. In particular, the legacy exact-account pilot
     grant cannot unlock Visit Prep on its own.
     """
+
+    if settings is None:
+        # Resolve at call time so tests can monkeypatch VISIT_PREP_SETTINGS.
+        settings = VISIT_PREP_SETTINGS
 
     if not settings.configuration_valid:
         return _denied(

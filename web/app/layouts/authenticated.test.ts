@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   billingRecoveryLocation,
+  canOpenSessionPrepDashboard,
   needsBillingRecovery,
   needsOnboarding,
   shouldRedirectToBillingRecovery,
@@ -9,6 +10,48 @@ import {
 } from "./authenticated"
 
 describe("authenticated access routing", () => {
+  it.each(["/notes", "/notes/", "/notes/appointment_123?tab=soap"])(
+    "lets an active Session Prep account open %s before practice or billing setup",
+    (path) => {
+      expect(
+        canOpenSessionPrepDashboard(
+          { session_prep: { eligible: true, can_review_sources: true } },
+          `https://staging-app.cosmaneura.com${path}`,
+        ),
+      ).toBe(true)
+    },
+  )
+
+  it("keeps unrelated product routes and unverified account state behind their existing gates", () => {
+    const active = {
+      session_prep: { eligible: true, can_review_sources: true },
+    }
+    expect(
+      canOpenSessionPrepDashboard(
+        active,
+        "https://staging-app.cosmaneura.com/intake",
+      ),
+    ).toBe(false)
+    expect(
+      canOpenSessionPrepDashboard(
+        active,
+        "https://staging-app.cosmaneura.com/settings",
+      ),
+    ).toBe(false)
+    expect(
+      canOpenSessionPrepDashboard(
+        undefined,
+        "https://staging-app.cosmaneura.com/notes",
+      ),
+    ).toBe(false)
+    expect(
+      canOpenSessionPrepDashboard(
+        { session_prep: { eligible: false, can_review_sources: false } },
+        "https://staging-app.cosmaneura.com/notes",
+      ),
+    ).toBe(false)
+  })
+
   it("lets an effectively ready grandfathered account reach the dashboard", () => {
     expect(
       needsOnboarding({

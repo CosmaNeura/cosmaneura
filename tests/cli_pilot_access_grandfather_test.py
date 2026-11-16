@@ -440,6 +440,7 @@ def test_audit_cli_reports_only_aggregate_digest_state():
         "grant_plan_digests": [{"count": 47, "sha256": grant_result.plan_sha256}],
         "integrity_error_count": 0,
         "lineage_count": 47,
+        "practice_binding_count": 0,
         "prelogin_snapshot_count": 46,
         "rebind_count": 0,
         "revocation_plan_digests": [{"count": 1, "sha256": revoke_plan_sha256}],

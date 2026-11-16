@@ -399,7 +399,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
         "deploy-staging-candidate": _workflow_job(candidate_workflow, "deploy"),
     }
 
-    assert "  pull_request: {}" in workflow_scope
+    assert (
+        "  pull_request:\n"
+        "    types: [opened, synchronize, reopened, ready_for_review, labeled]\n"
+    ) in workflow_scope
     assert (
         "VITE_CLERK_PUBLIC_KEY: "
         "pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk" in workflow_scope
@@ -503,6 +506,7 @@ def test_every_pull_request_workflow_is_credential_free() -> None:
         "change-budget.yml",
         "infra_plan.yml",
         "pull_request_checks.yml",
+        "staging_environment_boundary.yml",
     }
     forbidden = (
         "${{ secrets.",
@@ -562,7 +566,7 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
     apply_workflow = _read(".github/workflows/infra_apply_local.yml")
     publish_workflow = _read(".github/workflows/build_and_publish_local.yml")
     candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
-    production_deploy = publish_workflow[publish_workflow.index("  deploy:\n") :]
+    production_deploy = _workflow_job(publish_workflow, "release-gates")
     fixed_false = f'{FLAG}: "false"'
     mutable_default = f"{FLAG}: ${{{{ vars.{FLAG} || 'false' }}}}"
     protected_probe = f"{PROTECTED_FLAG}: ${{{{ vars.{FLAG} }}}}"
@@ -819,7 +823,7 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     installer = _read(".github/actions/install-nixpacks/action.yml")
     build_recipe = _read("just/build.just")
     publish = _read(".github/workflows/build_and_publish_local.yml")
-    production_deploy = _workflow_job(publish, "deploy")
+    production_deploy = _workflow_job(publish, "production-candidate")
 
     assert "NIXPACKS_VERSION: 1.41.0" in installer
     assert (
@@ -954,27 +958,18 @@ def test_onepassword_cli_installer_is_exact_and_checksum_verified(
 def test_production_deploy_rechecks_current_master_before_mutation() -> None:
     publish = _read(".github/workflows/build_and_publish_local.yml")
     production_deploy = _workflow_job(publish, "deploy")
-
-    publish_check = production_deploy.index(
-        "Reverify current master before publishing production images"
-    )
-    image_publish = production_deploy.index("run: just build_push")
-    deploy_check = production_deploy.index(
-        "Reverify current master before production deployment"
-    )
-    azure_mutation = production_deploy.index("name: Deploy to Azure")
-
-    assert publish_check < image_publish < deploy_check < azure_mutation
-    assert (
-        production_deploy.count('"repos/$GITHUB_REPOSITORY/git/ref/heads/master"') == 2
-    )
-    assert (
-        production_deploy.count('if [[ "$current_master_sha" != "$TARGET_SHA" ]]') == 2
-    )
-    final_check = production_deploy[deploy_check:azure_mutation]
-    assert "GH_TOKEN: ${{ github.token }}" in final_check
-    assert "TARGET_SHA: ${{ github.sha }}" in final_check
-    assert "${{ secrets." not in final_check
+    authenticate = production_deploy.index("production_core_candidate.py admit")
+    config = production_deploy.index("OP_SERVICE_ACCOUNT_TOKEN:")
+    final_check = production_deploy.index("production_core_candidate.py check")
+    mutation = production_deploy.index("Deploy the previously verified Core digest")
+    assert authenticate < config < final_check < mutation
+    assert "run: just build" not in production_deploy
+    final_step = production_deploy.index("Reauthenticate candidate, configuration")
+    assert "GH_TOKEN: ${{ github.token }}" in production_deploy[final_step:mutation]
+    deploy_script = _read("infra/deploy.sh")
+    check = deploy_script.index("production_core_candidate.py")
+    assert deploy_script.index("superadmin_capability_config_preflight.py") < check
+    assert check < deploy_script.index("az account show")
 
 
 def test_onepassword_exports_are_direct_non_caching_and_daemon_free() -> None:
@@ -1035,7 +1030,7 @@ def test_protected_environment_files_use_only_their_own_vault() -> None:
 def test_protected_build_resolves_locally_then_drops_credential_capabilities() -> None:
     publish = _read(".github/workflows/build_and_publish_local.yml")
     candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
-    production_deploy = _workflow_job(publish, "deploy")
+    production_deploy = _workflow_job(publish, "production-candidate")
     build_recipe = _read("just/build.just")
     vite_config = _read("web/vite.config.ts")
 
@@ -1054,8 +1049,8 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
     staging_build = _workflow_job(candidate_workflow, "build")
     production_build = production_deploy[
         production_deploy.index(
-            "Build production images from resolved public configuration"
-        ) : production_deploy.index("Remove resolved production frontend configuration")
+            "Build the combined production frontend and Core image"
+        ) : production_deploy.index("uses: azure/login@")
     ]
     assert "OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN" in production_resolve
     assert "OP_STAGING_SERVICE_ACCOUNT_TOKEN" not in production_resolve
@@ -1083,7 +1078,12 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
         production_deploy.index("uses: docker/login-action@")
     )
     assert production_deploy.count("if: always()") >= 1
-    assert production_deploy.count('rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"') == 1
+    assert (
+        production_deploy.count(
+            'rm -f -- "$RUNNER_TEMP/production-frontend-build.json"'
+        )
+        == 1
+    )
     # Staging needs no in-job scrub: configuration is resolved in a job that
     # holds no registry credentials and hands the build an artifact, so the
     # resolved file never shares a runner with a docker login.

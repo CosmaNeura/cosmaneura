@@ -26,6 +26,10 @@ from app.services.pilot_access_grandfather import (
     owned_provider_tombstone_rows,
     revoked_pilot_access_grant,
 )
+from app.services.scribe_cancellation_access import (
+    AccessPurpose,
+    doctor_cancellation_denial,
+)
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -52,6 +56,8 @@ DoctorAccessDenialReason = Literal[
     "practice_access_not_authorized",
     "baa_not_in_force",
     "entitlement_not_in_force",
+    "scribe_cancelled_read_only",
+    "scribe_export_period_expired",
 ]
 
 
@@ -206,6 +212,7 @@ def resolve_doctor_access(
     doctor: Doctor,
     *,
     require_entitlement: bool = True,
+    purpose: AccessPurpose = "process",
     at: datetime | None = None,
     _ownership: DoctorAccessRowOwnership | None = None,
     _practice_id: object = None,
@@ -220,6 +227,16 @@ def resolve_doctor_access(
     through the normal practice/member authorization rules.
     """
 
+    cancellation = doctor_cancellation_denial(doctor, purpose=purpose, at=at)
+    if cancellation is not None:
+        return _denied(cancellation)
+    if (
+        purpose == "read"
+        and doctor_cancellation_denial(doctor, purpose="process", at=at) is not None
+    ):
+        # Cancellation's export window must not send the customer back to billing.
+        # Existing account, practice, membership, BAA and record checks still apply.
+        require_entitlement = False
     if _ownership is None:
         with get_session() as session:
             owned = current_capture_doctor_rows(session, doctor)
@@ -333,6 +350,7 @@ def doctor_access_in_force(
     doctor: Doctor,
     *,
     require_entitlement: bool = True,
+    purpose: AccessPurpose = "process",
     at: datetime | None = None,
     _ownership: DoctorAccessRowOwnership | None = None,
     _practice_id: object = None,
@@ -348,6 +366,7 @@ def doctor_access_in_force(
     return resolve_doctor_access(
         doctor,
         require_entitlement=require_entitlement,
+        purpose=purpose,
         at=at,
         _ownership=_ownership,
         _practice_id=_practice_id,

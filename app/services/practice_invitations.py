@@ -36,6 +36,7 @@ from app.services.public_entitlements import (
     record_active_clinician_seat_quantity,
     require_active_clinician_seat_capacity,
 )
+from app.services.scribe_activation_events import activate_scribe_after_commit
 
 from app.models.doctor import Doctor
 from app.models.practice import (
@@ -625,6 +626,9 @@ def accept_invitation(
         session.add(practice)
     record_active_clinician_seat_quantity(session, practice)
     session.commit()
+    activate_scribe_after_commit(
+        trigger="membership", doctor_ref=doctor.id, bind=session.get_bind()
+    )
     session.refresh(practice)
     session.refresh(member)
     return practice, member

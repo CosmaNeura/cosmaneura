@@ -37,6 +37,7 @@ vi.mock("~/utils/reference-toolkit-feature", () => ({
 }))
 const sessionPrepUi = vi.hoisted(() => ({
   buildAvailable: false,
+  viewAsActive: false,
   settings: undefined as
     | {
         session_prep?: {
@@ -45,6 +46,9 @@ const sessionPrepUi = vi.hoisted(() => ({
         }
       }
     | undefined,
+}))
+vi.mock("~/components/ViewAsRouteGuard", () => ({
+  useViewAsActive: () => sessionPrepUi.viewAsActive,
 }))
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>()
@@ -76,7 +80,6 @@ vi.mock("~/components/shared/InnerScrollableContent", () => ({
     <div>{children}</div>
   ),
 }))
-vi.mock("~/components/shared/StatusBadge", () => ({ StatusBadge: () => null }))
 vi.mock("~/components/shared/EngagementBadge", () => ({
   EngagementBadge: () => null,
 }))
@@ -157,6 +160,7 @@ function show({
 
 beforeEach(() => {
   sessionPrepUi.buildAvailable = false
+  sessionPrepUi.viewAsActive = false
   sessionPrepUi.settings = undefined
 })
 
@@ -176,7 +180,11 @@ const priorNotes: NonNullable<NoteDetail["session_prep_prior_notes"]> = {
 }
 
 describe("Session Prep provider discovery", () => {
-  it.each(["an existing provider", "a newly onboarded provider"])(
+  it.each([
+    "an existing provider",
+    "a new active provider before practice setup",
+    "a grandfathered provider without a practice snapshot",
+  ])(
     "shows the panel and prior-visit controls to %s once current access is ready",
     () => {
       sessionPrepUi.buildAvailable = true
@@ -198,7 +206,7 @@ describe("Session Prep provider discovery", () => {
     ],
     ["a new provider before onboarding discovery is available", {}],
     [
-      "an incomplete, revoked, or unentitled provider",
+      "a disabled account",
       { session_prep: { eligible: false, can_review_sources: false } },
     ],
     [
@@ -215,6 +223,32 @@ describe("Session Prep provider discovery", () => {
     expect(
       screen.queryByText("Prior visits for Session Prep"),
     ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Not reviewed for Session Prep"),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Reviewed for Session Prep"),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Mark reviewed for Session Prep" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("explains how to leave view-as without exposing another account's Session Prep", () => {
+    sessionPrepUi.buildAvailable = true
+    sessionPrepUi.viewAsActive = true
+    sessionPrepUi.settings = {
+      session_prep: { eligible: false, can_review_sources: false },
+    }
+
+    show({ priorNotes })
+
+    expect(
+      screen.getByRole("region", { name: "Session Prep access" }),
+    ).toHaveTextContent(
+      "Exit read-only view-as and open a visit in your own account",
+    )
+    expect(screen.queryByTestId("session-prep-panel")).not.toBeInTheDocument()
   })
 })
 
@@ -224,6 +258,8 @@ describe("note detail page heading", () => {
     const headings = screen.getAllByRole("heading", { level: 1 })
     expect(headings).toHaveLength(1)
     expect(headings[0]).toHaveTextContent("Synthetic Patient")
+    expect(screen.getByText("AI note ready")).toBeVisible()
+    expect(screen.queryByText("Note ready")).not.toBeInTheDocument()
   })
 })
 
@@ -241,12 +277,14 @@ describe("a note arriving for a just-uploaded visit", () => {
     expect(result.current.startedAt.has("appointment_fixture")).toBe(false)
     expect(result.current.justReady.has("appointment_fixture")).toBe(true)
     expect(toast).toHaveBeenCalledOnce()
-    expect(toast).toHaveBeenCalledWith({ title: "Your note is ready" })
+    expect(toast).toHaveBeenCalledWith({ title: "Your AI note is ready" })
   })
 
   it("says plainly when a visit has no note", () => {
     show({ notes: [], transcript: null })
     expect(screen.getByText("No note for this visit yet.")).toBeVisible()
+    expect(screen.getByText("No note yet")).toBeVisible()
+    expect(screen.queryByText("AI note ready")).not.toBeInTheDocument()
   })
 })
 

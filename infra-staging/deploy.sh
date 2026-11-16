@@ -19,6 +19,7 @@ EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
 STAGING_PRESERVE_EFFECTIVE_CONFIGURATION="${STAGING_PRESERVE_EFFECTIVE_CONFIGURATION:-false}"
 EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256="${EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256:-}"
+STAGING_RUNTIME_PUBLIC_JSON="${STAGING_RUNTIME_PUBLIC_JSON:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
@@ -26,6 +27,19 @@ STAGING_PUBLICATION_RECEIPT="${STAGING_PUBLICATION_RECEIPT:-}"
 EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256="${EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256:-}"
 RELEASE_V2_JSON=""
 EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"
+STAGING_SCRIBE_INIT_PLAN="${STAGING_SCRIBE_INIT_PLAN:-}"
+EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256="${EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256:-}"
+STAGING_SCRIBE_INIT_JOURNAL="${STAGING_SCRIBE_INIT_JOURNAL:-}"
+STAGING_SCRIBE_INIT_ACTION="${STAGING_SCRIBE_INIT_ACTION:-initialize}"
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256$STAGING_SCRIBE_INIT_JOURNAL" ]]; then
+	[[ "$STAGING_SCRIBE_INIT_PLAN" == /private/tmp/* && \
+		"$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256" =~ ^[0-9a-f]{64}$ && \
+		-n "$STAGING_SCRIBE_INIT_JOURNAL" && \
+		"$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
+		"$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" && \
+		-n "$STAGING_PUBLICATION_RECEIPT" && \
+		( "$STAGING_SCRIBE_INIT_ACTION" == "initialize" || "$STAGING_SCRIBE_INIT_ACTION" == "closed" ) ]] || exit 1
+fi
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
 	( -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
@@ -89,6 +103,11 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	done
 	export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
 	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" ]]; then
+	"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_scribe_initialization_executor.py" \
+		--check-journal-path "$STAGING_SCRIBE_INIT_JOURNAL" >/dev/null || exit 1
 fi
 
 initialize_migration_job() {
@@ -241,8 +260,46 @@ verify_founder_release_source() {
 	fi
 }
 
+verify_staging_release_source() {
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
+		verify_founder_release_source
+		return $?
+	fi
+	local source_result
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" != "service-principal" || \
+		"$GIT_SHA" != "${CANDIDATE_SHA:-}" || "$STAGING_IMAGE_DIGEST" != "${IMAGE_DIGEST:-}" || \
+		! "$GIT_SHA" =~ ^[0-9a-f]{40}$ || ! "$STAGING_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ || \
+		! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ || \
+		! "${WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ || \
+		! "$EXPECTED_SCHEMA_BEFORE" =~ ^[0-9a-f]{12}$ || ! "$EXPECTED_SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]; then
+		echo "Hosted staging requires the exact canonical candidate, published digest, PR and schema inputs."
+		return 1
+	fi
+	if ! source_result=$(cd "$REPOSITORY_ROOT" && "$PYTHON_BIN" -I -S -B \
+		scripts/verify_staging_candidate.py --reverify --candidate-sha "$GIT_SHA" \
+		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" --expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
+		--workflow-sha "$WORKFLOW_SHA"); then
+		echo "Hosted staging candidate provenance reverification failed."
+		return 1
+	fi
+	if ! printf '%s' "$source_result" | jq -e --arg candidate "$GIT_SHA" \
+		--argjson approval_pr "$STAGING_APPROVAL_PR_NUMBER" --arg schema "$EXPECTED_SCHEMA_AFTER" '
+		type == "object" and keys == ["approval_pr_number","candidate_sha","master_sha","schema_head"] and
+		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and .schema_head == $schema and
+		(.master_sha | test("^[0-9a-f]{40}$"))' >/dev/null; then
+		echo "Hosted staging candidate source evidence is invalid."
+		return 1
+	fi
+	# Bind the existing migration selectors only after the canonical founder
+	# dispatch, protected-master/PR/schema verifier and published digest agree.
+	FOUNDER_CANDIDATE_SHA=$GIT_SHA
+	FOUNDER_CANDIDATE_IMAGE_DIGEST=$STAGING_IMAGE_DIGEST
+	FOUNDER_APPROVAL_PR_NUMBER=$STAGING_APPROVAL_PR_NUMBER
+	FOUNDER_EXPECTED_SCHEMA_AFTER=$EXPECTED_SCHEMA_AFTER
+}
+
 case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
-service-principal) ;;
+service-principal) verify_staging_release_source || exit 1 ;;
 founder-user) verify_founder_release_source || exit 1 ;;
 *) echo "Unsupported staging deployment identity mode."; exit 1 ;;
 esac
@@ -275,7 +332,7 @@ fi
 CONFIGURATION_STATUS=0
 ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend 2>/dev/null) || \
 	CONFIGURATION_STATUS=$?
-unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
+unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET RECALL_API_KEY_INPUT
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	echo "Failed to load staging deployment configuration."
 	exit 1
@@ -368,7 +425,14 @@ unset CANDIDATE_PROCFILE RESOLVED_GIT_SHA
 if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 	--arg enabled "$ENABLE_PROVIDER_V7" \
 	'del(.AGENT_API_COMPANION_CLIENT_ID, .COMPANION_ENCOUNTER_READ_ENABLED,
-		.COMPANION_RECORD_READ_ENABLED, .COMPANION_APPOINTMENT_SETUP_ENABLED) | . + {
+		.COMPANION_RECORD_READ_ENABLED, .COMPANION_APPOINTMENT_SETUP_ENABLED,
+		.SCRIBE_NATIVE_WORKLOAD_ENABLED, .SCRIBE_NATIVE_WORKLOAD_AUDIENCE,
+		.SCRIBE_NATIVE_WORKLOAD_CLIENT_ID, .SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED,
+		.SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED, .SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED,
+		.SCRIBE_AUTOMATIC_ACTIVATION_ENABLED, .SCRIBE_ACTIVATION_PRACTICE_REFS,
+		.SCRIBE_CANCELLATION_ENABLED, .SCRIBE_CANCELLATION_LEDGER_READY,
+		.SCRIBE_CANCELLATION_GRACE_DAYS, .SCRIBE_CANCELLATION_PHI_SCOPE,
+		.SCRIBE_CANCELLATION_POLICY_SHA256) | . + {
 		AUTHORITY_KERNEL_ENABLED: $enabled,
 		AGENT_API_ENABLED: $enabled,
 		SCRIBE_HANDOFF_ENABLED: "false",
@@ -387,6 +451,14 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 fi
 if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
 	ENV_JSON=$(jq -c --argjson release "$RELEASE_V2_JSON" '. + $release.runtime_public' <<<"$ENV_JSON") || exit 1
+elif [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+	# Canonical service-principal preservation receives only the reviewed public
+	# group. The complete hash and live comparisons still bind every owned value.
+	STAGING_RUNTIME_PUBLIC_JSON=$(printf '%s' "$STAGING_RUNTIME_PUBLIC_JSON" |
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+			--validate-runtime-public) || exit 1
+	ENV_JSON=$(jq -c --argjson runtime "$STAGING_RUNTIME_PUBLIC_JSON" \
+		'. + $runtime' <<<"$ENV_JSON") || exit 1
 fi
 if ! jq -e '
 	.SOVEREIGN_RECORD_GRANT_SECRET |
@@ -396,10 +468,29 @@ if ! jq -e '
 	exit 1
 fi
 
+# Bind native admission to the existing staging public identity configuration.
+# Only this explicit public projection enters the pure validator; no secrets.
+if ! printf '%s' "$ENV_JSON" | jq -c 'with_entries(select(.key | IN(
+	"SCRIBE_NATIVE_WORKLOAD_ENABLED", "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
+	"SCRIBE_NATIVE_WORKLOAD_CLIENT_ID", "SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED",
+	"SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED", "SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED",
+	"SCRIBE_AUTOMATIC_ACTIVATION_ENABLED", "SCRIBE_ACTIVATION_PRACTICE_REFS",
+	"SCRIBE_CANCELLATION_ENABLED", "SCRIBE_CANCELLATION_LEDGER_READY",
+	"SCRIBE_CANCELLATION_GRACE_DAYS", "SCRIBE_CANCELLATION_PHI_SCOPE",
+	"SCRIBE_CANCELLATION_POLICY_SHA256", "ENTRA_TENANT_ID",
+	"AGENT_API_SOVEREIGN_CLIENT_IDS", "AUTHORITY_CLERK_ISSUER",
+	"MOUNT_CONTEXT_TOKEN_TTL_SECONDS", "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS",
+	"MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS"
+)))' | "$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+	--validate-native-binding; then
+	echo "Staging native public configuration binding was refused." >&2
+	exit 1
+fi
+
 emit_github_output() {
 	local name=$1 value=$2
 	case "$name" in
-	source_sha | image_digest | configuration_evidence | schema_before | schema_after | recovery_digest | workloads_before | workloads_after) ;;
+	source_sha | image_digest | configuration_evidence | schema_before | schema_after | recovery_digest | workloads_before | workloads_after | scribe_initialization_result) ;;
 	*) echo "Refusing to emit an output outside the staging evidence allowlist."; return 1 ;;
 	esac
 	[[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || {
@@ -431,7 +522,7 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
 forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
-if sys.argv[2] == "v2":
+if sys.argv[2] == "v2" or sys.argv[3] == "true":
     forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
     if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
         fail()
@@ -485,7 +576,7 @@ evidence = {
     "deployment_blockers": blockers,
 }
 print(json.dumps(evidence, separators=(",", ":"), sort_keys=True))
-' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" <<<"$ENV_JSON"
+' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" <<<"$ENV_JSON"
 }
 
 if ! CONFIGURATION_EVIDENCE_JSON=$(build_configuration_evidence); then
@@ -529,6 +620,12 @@ SCRIBE_API_ONLY_PUBLIC_VARS=(
 	SCRIBE_ENCOUNTER_CREATION_ENABLED COMPANION_SESSION_PREP_ENABLED
 	SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED SCRIBE_NATIVE_REQUEST_TIMING
 	SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED
+	SCRIBE_NATIVE_WORKLOAD_ENABLED SCRIBE_NATIVE_WORKLOAD_AUDIENCE
+	SCRIBE_NATIVE_WORKLOAD_CLIENT_ID SCRIBE_NATIVE_PROVIDER_CONTEXT_ENABLED
+	SCRIBE_NATIVE_EXISTING_PATIENT_VISITS_ENABLED SCRIBE_NATIVE_VISIT_ACTIONS_V2_ENABLED
+	SCRIBE_AUTOMATIC_ACTIVATION_ENABLED SCRIBE_ACTIVATION_PRACTICE_REFS
+	SCRIBE_CANCELLATION_ENABLED SCRIBE_CANCELLATION_GRACE_DAYS
+	SCRIBE_CANCELLATION_PHI_SCOPE SCRIBE_CANCELLATION_POLICY_SHA256
 )
 API_WORKER_PUBLIC_VARS=(ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED)
 WORKER_ONLY_PUBLIC_VARS=(SESSION_PREP_HEALTH_ALERTS_ENABLED)
@@ -561,6 +658,7 @@ PUBLIC_VARS=(
 	AGENT_API_ENABLED AGENT_API_AUDIENCE AGENT_API_SOVEREIGN_CLIENT_IDS
 	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
 	MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS
+	SCRIBE_CANCELLATION_LEDGER_READY
 	DURABLE_WEBHOOK_INBOX_ENABLED SENTRY_STAGING_ENABLED
 )
 LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)
@@ -642,6 +740,7 @@ runtime_contracts_json() {
 }
 
 verify_effective_configuration_fingerprint() {
+	[[ -z "$STAGING_SCRIBE_INIT_PLAN" ]] || return 0 # Separate raw before/desired checks below.
 	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
 	local observed
 	observed=$(printf '%s\n%s\n' "$ENV_JSON" "$RUNTIME_CONTRACTS_JSON" |
@@ -654,9 +753,14 @@ verify_effective_configuration_fingerprint() {
 }
 
 RUNTIME_CONTRACTS_JSON=""
-if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" && -z "$STAGING_SCRIBE_INIT_PLAN" ]]; then
 	RUNTIME_CONTRACTS_JSON=$(runtime_contracts_json) || exit 1
 	verify_effective_configuration_fingerprint || exit 1
+	CONFIGURATION_EVIDENCE_JSON=$(jq -c \
+		--arg fingerprint "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" \
+		'. + {effective_configuration_sha256: $fingerprint, effective_configuration_preserved: true}' \
+		<<<"$CONFIGURATION_EVIDENCE_JSON") || exit 1
+	emit_github_output configuration_evidence "$CONFIGURATION_EVIDENCE_JSON" || exit 1
 fi
 
 if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
@@ -664,6 +768,11 @@ if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
 fi
 if ! validate_deploy_revision_suffix "$REVISION_STRING" $CONTAINERS; then
 	exit 1
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" && "$STAGING_SCRIBE_INIT_ACTION" == "initialize" ]]; then
+	jq -e --arg suffix "--$REVISION_STRING" \
+		'.desired | all(.[]; .revision | endswith($suffix))' "$STAGING_SCRIBE_INIT_PLAN" >/dev/null || exit 1
 fi
 
 echo "Revision string: $REVISION_STRING"
@@ -717,14 +826,19 @@ verify_azure_deployment_identity() {
 verify_azure_deployment_identity || exit 1
 
 ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	STAGING_CANDIDATE_MANIFEST="$STAGING_REPOSITORY@$STAGING_IMAGE_DIGEST"
+else
+	STAGING_CANDIDATE_MANIFEST="$STAGING_REPOSITORY:$GIT_SHA"
+fi
 if ! PUBLISHED_DIGEST=$(az acr manifest show-metadata \
-	--registry "$ACR_NAME" --name "$STAGING_REPOSITORY:$GIT_SHA" \
+	--registry "$ACR_NAME" --name "$STAGING_CANDIDATE_MANIFEST" \
 	--query digest -o tsv); then
 	echo "Failed to resolve the staging candidate image digest."
 	exit 1
 fi
 if [[ "$PUBLISHED_DIGEST" != "$STAGING_IMAGE_DIGEST" ]]; then
-	echo "The staging candidate tag does not resolve to the approved image digest."
+	echo "The staging candidate manifest does not resolve to the approved image digest."
 	exit 1
 fi
 emit_github_output image_digest "$STAGING_IMAGE_DIGEST" || exit 1
@@ -940,6 +1054,7 @@ verify_workload_state_ready() {
 }
 
 verify_preserved_runtime() {
+	[[ -z "$STAGING_SCRIBE_INIT_PLAN" ]] || return 0 # Full raw checks replace subset attestation.
 	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
 	local selected=${1:-$CRITICAL_CONTAINERS}
 	local observed container state contract expected_revision secrets
@@ -1149,7 +1264,7 @@ verify_migration_job_template() {
 	local compatibility_args=()
 	# Version-2 candidates already escape the URL in migrations/env.py.
 	# Keep the old bootstrap only for the historical pinned release.
-	if [[ -z "${RELEASE_V2_JSON:-}" ]]; then
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && -z "${RELEASE_V2_JSON:-}" ]]; then
 		compatibility_args+=(--staging-alembic-compatibility)
 	fi
 	if ! migration_template=$(az containerapp job show \
@@ -1313,9 +1428,9 @@ run_migrations() {
 	fi
 
 	# Build secrets and env var args from the same source as the app containers.
-	local migration_command command_flag=--staging-alembic-command
-	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
-		command_flag=--alembic-command
+	local migration_command command_flag=--alembic-command
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && -z "${RELEASE_V2_JSON:-}" ]]; then
+		command_flag=--staging-alembic-command
 	fi
 	migration_command=$("$PYTHON_BIN" -I -S -B \
 		"$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
@@ -1398,6 +1513,13 @@ run_migrations() {
 	verify_migration_job_template || return 1
 	capture_schema_revision "Pre-migration" "$migration_container_name" || return 1
 	SCHEMA_BEFORE=$CAPTURED_SCHEMA_REVISION
+	if [[ -n "$STAGING_SCRIBE_INIT_PLAN" && "$STAGING_SCRIBE_INIT_ACTION" == "closed" ]]; then
+		[[ "$SCHEMA_BEFORE" == "$EXPECTED_SCHEMA_AFTER" ]] || return 1
+		SCHEMA_AFTER=$SCHEMA_BEFORE
+		emit_github_output schema_after "$SCHEMA_AFTER" || return 1
+		cleanup_migration_job || return 1
+		return 0 # Probe only; closed recovery does not apply or downgrade schema.
+	fi
 	emit_github_output schema_before "$SCHEMA_BEFORE" || return 1
 	if [[ "$SCHEMA_BEFORE" != "$EXPECTED_SCHEMA_BEFORE" ]]; then
 		echo "Live staging schema does not match the reviewed pre-migration revision."
@@ -1818,13 +1940,51 @@ wait_for_incompatible_worker_replicas_to_drain() {
 }
 
 # Run migrations before deploying new containers
-verify_founder_release_source || exit 1
+verify_staging_release_source || exit 1
 verify_azure_deployment_identity || exit 1
 verify_preserved_runtime || exit 1
+staging_scribe_bridge() {
+	local action=$1 schema=$2 result
+	# Protected resolver JSON travels over stdin; only hashes/public receipts return.
+	result=$(printf '%s' "$ENV_JSON" | jq -c '{configuration:.}' | \
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_scribe_initialization_executor.py" \
+		"$action" "$STAGING_SCRIBE_INIT_PLAN" "$EXPECTED_STAGING_SCRIBE_INIT_PLAN_SHA256" \
+		"$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
+		"$STAGING_PUBLICATION_RECEIPT" "$EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256" \
+		"$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "$schema" "$STAGING_SCRIBE_INIT_JOURNAL" \
+		"$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256") || return 1
+	emit_github_output scribe_initialization_result "$result" || return 1
+}
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" && "$STAGING_SCRIBE_INIT_ACTION" == "initialize" ]]; then
+	staging_scribe_bridge before "$EXPECTED_SCHEMA_BEFORE" || exit 1
+fi
 run_migrations
 if [[ $? -ne 0 ]]; then
 	echo "Migration failed. Aborting deployment."
 	exit 1
+fi
+
+if [[ -n "$STAGING_SCRIBE_INIT_PLAN" ]]; then
+	[[ "$SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER" ]] || exit 1
+	if [[ "$STAGING_SCRIBE_INIT_ACTION" == "closed" ]]; then
+		for container in $BACKEND_CONTAINERS "$API_CONTAINER"; do
+			verify_staging_release_source || exit 1
+			staging_scribe_bridge closed-step "$SCHEMA_AFTER" || exit 1
+		done
+		staging_scribe_bridge closed-step "$SCHEMA_AFTER" || exit 1
+	else
+		for container in $BACKEND_CONTAINERS; do
+			verify_staging_release_source || exit 1
+			staging_scribe_bridge step "$SCHEMA_AFTER" || exit 1
+			if [[ "$container" == "$WORKER_CONTAINER" ]]; then
+				wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
+			fi
+		done
+		verify_staging_release_source || exit 1
+		staging_scribe_bridge step "$SCHEMA_AFTER" || exit 1
+		staging_scribe_bridge finish "$SCHEMA_AFTER" || exit 1
+	fi
+	exit 0 # Qualified same-image CLOSED recovery; skip legacy cleanup/mutation path.
 fi
 
 # Deploy and verify recovery workloads before making the new API revision live.

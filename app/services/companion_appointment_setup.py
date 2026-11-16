@@ -290,7 +290,7 @@ def setup_appointments(
                     ):
                         raise AppointmentSetupChanged
                     session.expire_all()
-                    current, _ = _provider(session, **args)
+                    current, _ = _provider(session, purpose="process", **args)
                     if current != connection:
                         raise AppointmentSetupChanged
                     # Guard the physical commit as well as each SQL statement.

@@ -1,8 +1,9 @@
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 
 import { forgetPendingInvitationOnSignOut } from "~/lib/pending-invitation"
 
-import { ClerkProvider, useClerk } from "@clerk/clerk-react"
+import { bindQueryPrincipal } from "./query-principal"
+import { ClerkProvider, useAuth, useClerk } from "@clerk/clerk-react"
 import { loadClerkJsScript } from "@clerk/shared/loadClerkJsScript"
 import { invariant } from "@epic-web/invariant"
 
@@ -40,6 +41,7 @@ type ClerkClient = {
   load: () => Promise<void>
   user?: ClerkUser
   session?: {
+    id?: string
     getToken: (options?: {
       template?: string
       skipCache?: boolean
@@ -70,6 +72,7 @@ function makeTestClerkClient(userId: string): ClerkClient {
     load: async () => {},
     user: { id: userId },
     session: {
+      id: `test-session:${userId}`,
       getToken: async (options) =>
         options?.template ? `test-provider:${userId}` : `test:${userId}`,
     },
@@ -164,6 +167,15 @@ function ForgetPendingInvitationOnSignOut() {
   return null
 }
 
+function BindBrowserQueryCache() {
+  const { identity, isLoaded, userId, sessionId } = useBrowserPrincipal()
+  useEffect(() => {
+    bindQueryPrincipal({ isLoaded, userId, sessionId })
+    return identity.subscribe(bindQueryPrincipal)
+  }, [identity, isLoaded, userId, sessionId])
+  return null
+}
+
 export default function withClerkProvider(Component: React.ComponentType) {
   return (props: React.ComponentProps<typeof Component>) => (
     <ClerkProvider
@@ -174,7 +186,120 @@ export default function withClerkProvider(Component: React.ComponentType) {
       signUpFallbackRedirectUrl="/notes"
     >
       <ForgetPendingInvitationOnSignOut />
+      <BindBrowserQueryCache />
       <Component {...props} />
     </ClerkProvider>
   )
+}
+
+/** Browser identity is ephemeral; never serialize these values into record metadata. */
+export type BrowserPrincipal = Readonly<{
+  isLoaded: boolean
+  userId: string | null
+  sessionId: string | null
+}>
+export function sameBrowserPrincipal(
+  left: BrowserPrincipal,
+  right: BrowserPrincipal,
+) {
+  return (
+    left.isLoaded === right.isLoaded &&
+    left.userId === right.userId &&
+    left.sessionId === right.sessionId
+  )
+}
+
+export type BrowserPrincipalToken = Readonly<{
+  token: string
+  assertCurrent: () => void
+}>
+
+/** Mutations retain the exact SDK session across loading, token retrieval and dispatch. */
+export async function getBrowserPrincipalToken(
+  expected: BrowserPrincipal,
+  isCurrent: () => boolean,
+): Promise<BrowserPrincipalToken> {
+  const principal = { ...expected }
+  const client = await getClient()
+  const session = client?.session
+  const assertCurrent = () => {
+    if (
+      !principal.isLoaded ||
+      !principal.userId ||
+      !principal.sessionId ||
+      !session ||
+      client?.session !== session ||
+      !sameBrowserPrincipal(browserPrincipal(client), principal) ||
+      !isCurrent()
+    ) {
+      throw new Error(
+        "The signed-in account or session changed. Review the form again.",
+      )
+    }
+  }
+  assertCurrent()
+  const token = await session!.getToken()
+  assertCurrent()
+  if (!token)
+    throw new Error("A signed-in session is required to submit this form.")
+  return { token, assertCurrent }
+}
+
+export type BrowserPrincipalIdentity = Readonly<{
+  current: () => BrowserPrincipal
+  subscribe: (listener: (principal: BrowserPrincipal) => void) => () => void
+  // The returned reader observes the actual mutable SDK resource after later awaits.
+  readCurrent: () => Promise<() => BrowserPrincipal>
+}>
+function browserPrincipal(
+  resources:
+    | {
+        loaded?: boolean
+        user?: { id?: string } | null
+        session?: { id?: string } | null
+      }
+    | undefined,
+): BrowserPrincipal {
+  return {
+    isLoaded: resources?.loaded === true,
+    userId: resources?.user?.id ?? null,
+    sessionId: resources?.session?.id ?? null,
+  }
+}
+
+/** Read the mutable SDK resource, including a signed-out state, at load time. */
+export async function readCurrentBrowserPrincipal(): Promise<BrowserPrincipal> {
+  const testAuth = readTestAuth()
+  if (testAuth) return browserPrincipal(makeTestClerkClient(testAuth.userId))
+  if (!loadedClerkClientPromise)
+    loadedClerkClientPromise = resolveLoadedClient()
+  return browserPrincipal(await loadedClerkClientPromise)
+}
+
+/** Normalize React, listener and actual SDK identity at the vendor boundary. */
+export function useBrowserPrincipal(): BrowserPrincipal & {
+  identity: BrowserPrincipalIdentity
+} {
+  const clerk = useClerk()
+  const { isLoaded, userId, sessionId } = useAuth()
+  const identity = useMemo<BrowserPrincipalIdentity>(
+    () => ({
+      current: () => browserPrincipal(clerk),
+      subscribe: (listener) =>
+        clerk.addListener((resources) =>
+          listener(browserPrincipal({ ...resources, loaded: clerk.loaded })),
+        ),
+      readCurrent: async () => {
+        const client = await getClient()
+        return () => browserPrincipal(client)
+      },
+    }),
+    [clerk],
+  )
+  return {
+    isLoaded,
+    userId: userId ?? null,
+    sessionId: sessionId ?? null,
+    identity,
+  }
 }

@@ -15,7 +15,7 @@ from app.models.note_type_customization import (
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
-# Verbatim copy of the numbered instruction block from origin/master
+# Historical accepted185 numbered instruction block before the stated-reason repair
 # (lines 1–16, each indented 8 spaces, typos and double-spaces preserved).
 # This constant pins byte-identity of the default rendered prompt.
 ORIGINAL_DEFAULT_BLOCK = """\
@@ -73,7 +73,7 @@ def _transcript(doctor) -> AIVisitTranscript:
     )
 
 
-def test_default_block_preserves_all_hash33_behaviors():
+def test_default_block_preserves_other_hash33_behaviors():
     block = _instruction_block(default_customization())
     for phrase in (PRONOUN, SUBJECTIVE, NEW_MEDS, PLAN_REASON, ROS, PLAN_ORDER):
         assert phrase in block, f"missing default phrase: {phrase}"
@@ -169,7 +169,7 @@ def test_generate_clinical_note_forwards_customization():
     assert captured["customization"] is c
 
 
-def test_default_prompt_block_byte_identical_to_master():
+def test_default_prompt_only_replaces_the_historical_inferred_reason_rule():
     doctor = DoctorFactory.build().save()
     schema = DoctorNoteSchema(
         doctor_id=doctor.id, note_type="SOAP", fields={"Subjective": "x"}
@@ -177,4 +177,18 @@ def test_default_prompt_block_byte_identical_to_master():
     transcript = _transcript(doctor)
     with patch.object(summarize, "extract_action_items", return_value="none"):
         prompt = build_structured_prompt(transcript, None, schema, None)
-    assert ORIGINAL_DEFAULT_BLOCK in prompt
+    stated_rule = (
+        "        11. Plan section bullets MUST include the reason for an action only when the transcript explicitly states that reason. "
+        "Preserve the stated purpose without inventing a rationale. When no reason is recorded, describe the documented action and leave the purpose unstated; "
+        'do not add "for X" or "to X" phrasing. A complaint, diagnosis, medication indication, template or example is not a recorded reason. '
+        "Preserve a stated trigger condition without inferring a purpose from it."
+    )
+    historical_rule = next(
+        line
+        for line in ORIGINAL_DEFAULT_BLOCK.splitlines()
+        if line.startswith("        11. ")
+    )
+    expected = ORIGINAL_DEFAULT_BLOCK.replace(historical_rule, stated_rule)
+    assert expected in prompt
+    assert historical_rule not in prompt
+    assert expected.replace(stated_rule, historical_rule) == ORIGINAL_DEFAULT_BLOCK

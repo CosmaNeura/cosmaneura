@@ -30,6 +30,7 @@ ARM_ORIGIN = "https://management.azure.com"
 PRODUCTION_DATABASE_HOST = "cosmaneura-prod-postgres.postgres.database.azure.com"
 PRODUCTION_DATABASE_NAME = "production"
 PRODUCTION_SCHEMA_NAME = "public"
+LINUX_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 APPLICATION_LOGIN_ROLE = "cosmaneura_app"
 APPLICATION_OWNER_ROLE = "cosmaneura_app_owner"
 SECRET_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,19}$")
@@ -472,8 +473,20 @@ def validate_database_url(
         raise CutoverError("versioned URL uses an unexpected port")
     if parsed.path != f"/{expected_database}":
         raise CutoverError("versioned URL uses an unexpected database")
-    if parsed.query != "sslmode=require":
-        raise CutoverError("versioned URL options must be exactly sslmode=require")
+    try:
+        pairs = urllib.parse.parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError as error:
+        raise CutoverError("versioned URL options are invalid") from error
+    query = dict(pairs)
+    if len(pairs) != len(query) or query != {
+        "sslmode": "verify-full",
+        "sslrootcert": LINUX_CA_BUNDLE,
+    }:
+        raise CutoverError("versioned URL options must use canonical verified TLS")
     if parsed.fragment:
         raise CutoverError("versioned URL must not contain a fragment")
 

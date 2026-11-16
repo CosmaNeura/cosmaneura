@@ -17,6 +17,8 @@ const client = vi.hoisted(() => ({
   getNoteTemplatePreference: vi.fn(),
   updateNoteTemplatePreference: vi.fn(),
   createNoteTemplate: vi.fn(),
+  initializeNoteTemplates: vi.fn(),
+  deleteNoteTemplate: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => client)
 
@@ -31,7 +33,21 @@ vi.mock("~/lib/practice-api", async (importOriginal) => ({
   ...practiceApi,
 }))
 
-vi.mock("@clerk/clerk-react", () => ({ useUser: () => ({ user: null }) }))
+const browserAuth = vi.hoisted(() => ({
+  loaded: true,
+  user: { id: "synthetic_settings_user" },
+  session: { id: "synthetic_settings_session" },
+  addListener: () => () => {},
+}))
+vi.mock("@clerk/clerk-react", () => ({
+  useUser: () => ({ user: null }),
+  useAuth: () => ({
+    isLoaded: true,
+    userId: browserAuth.user.id,
+    sessionId: browserAuth.session.id,
+  }),
+  useClerk: () => browserAuth,
+}))
 const supportView = vi.hoisted(() => ({ active: false }))
 vi.mock("~/components/ViewAsRouteGuard", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/components/ViewAsRouteGuard")>()),
@@ -132,6 +148,9 @@ function openSettings() {
 beforeEach(() => {
   vi.clearAllMocks()
   supportView.active = false
+  client.initializeNoteTemplates.mockResolvedValue({
+    data: { status: "deleted", created: false },
+  })
   client.getNoteTemplatePreference.mockResolvedValue({
     data: { default_schema_ref: null, revision: 0 },
     response: new Response(null, { status: 200 }),

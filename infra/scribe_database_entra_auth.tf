@@ -1,7 +1,12 @@
 variable "enable_scribe_database_entra_auth" {
-  description = "Add Microsoft Entra authentication to the existing production PostgreSQL server while retaining password authentication. This does not authorize a migration or Scribe activation."
+  description = "Persist Microsoft Entra authentication on the existing production PostgreSQL server while retaining password authentication. This does not authorize a migration administrator, database migration or Scribe activation."
   type        = bool
-  default     = false
+  default     = true
+
+  validation {
+    condition     = var.enable_scribe_database_entra_auth
+    error_message = "Production PostgreSQL Entra authentication must remain enabled. Disabling it requires a separately reviewed source and production recovery decision; an input override cannot remove runtime authentication."
+  }
 }
 
 variable "enable_scribe_database_migration_administrator" {

@@ -258,7 +258,7 @@ async def test_gateway_transport_preserves_authorized_actor_and_exact_key(
             client=transport,
         )
         result = await gateway.execute_capture_operation(
-            caller=cast(CaptureCaller, None),
+            caller=CaptureCaller("synthetic", "synthetic", "synthetic", uuid4()),
             binding_ref="synthetic",
             workspace_id=uuid4(),
             operation=operation,
@@ -299,7 +299,7 @@ async def test_review_requires_current_actor_before_and_after_remote(
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
     with pytest.raises(gateway.CaptureGatewayError):
         await gateway.execute_capture_operation(
-            caller=cast(CaptureCaller, None),
+            caller=CaptureCaller("synthetic", "synthetic", "synthetic", uuid4()),
             binding_ref="synthetic",
             workspace_id=uuid4(),
             operation=protocol.ReadOperation(kind="creator_review"),

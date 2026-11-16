@@ -229,6 +229,9 @@ class PriorNoteOverview:
     # A UI freshness hint only. Authorization and publication always re-read
     # the reviewed source selection rather than accepting this client value.
     selected_source_fingerprint: str | None = None
+    # Presentation only: a current owned prior note newer than the selected
+    # reviewed history is excluded until the clinician explicitly reviews it.
+    newer_prior_note_awaiting_review: bool = False
 
 
 def _prior_patient_scope(session, doctor_id, target):
@@ -388,11 +391,22 @@ def prior_note_overview(
     previews.sort(
         key=lambda item: (-_utc(item.appointment_date).timestamp(), item.note_id)
     )
+    newest_reviewed_source_at = max(
+        (_utc(source.source_at) for source in selection.sources), default=None
+    )
+    newer_prior_note_awaiting_review = False
+    if newest_reviewed_source_at is not None:
+        newer_prior_note_awaiting_review = any(
+            note.status == "needs_review"
+            and _utc(note.appointment_date) > newest_reviewed_source_at
+            for note in previews
+        )
     return PriorNoteOverview(
         notes=tuple(previews),
         included_count=len(included),
         more_notes=len(recent) > PRIOR_NOTE_PREVIEW_LIMIT,
         selection_limited=selection.truncated,
+        newer_prior_note_awaiting_review=newer_prior_note_awaiting_review,
         selected_source_fingerprint="sha256_"
         + hashlib.sha256(
             json.dumps(

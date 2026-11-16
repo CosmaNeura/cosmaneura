@@ -1,0 +1,30 @@
+name: Staging environment boundary
+
+# Scans pull-request trees for live production hosts or live Clerk identity
+# inside staging-scoped paths. Receives no secrets and does not mutate state.
+# Not required by branch protection yet; John enables the check context when ready.
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staging-environment-boundary:
+    name: staging-environment-boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Refuse live production hosts in staging-scoped paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/staging_environment_boundary.py

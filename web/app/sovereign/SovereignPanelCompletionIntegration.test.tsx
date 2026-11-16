@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import {
   SOVEREIGN_PANEL_ASSET_PATH,
@@ -13,7 +14,10 @@ import {
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { act, render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  useBrowserPrincipal: () => syntheticClerk.principal(getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 afterEach(() => {
@@ -42,15 +46,25 @@ it("loads the pinned dashboard asset and completes preparation without a second 
     actor: null,
     target: null,
   })
-  vi.mocked(getClient).mockResolvedValue({
-    loaded: true,
-    load: async () => {},
-    user: { id: "user_provider_test" },
-    session: { getToken: async () => "synthetic-platform-token" },
-    redirectToSignIn: async () => {},
-  })
+  vi.mocked(getClient).mockResolvedValue(
+    syntheticClerk.bindResource({
+      loaded: true,
+      load: async () => {},
+      user: { id: "user_provider_test" },
+      session: {
+        id: "session_provider_test",
+        getToken: async () => "synthetic-platform-token",
+      },
+      redirectToSignIn: async () => {},
+    }),
+  )
   const token = `mctx_${"a".repeat(48)}`
   const turns: string[] = []
+  const timedRequests: Array<{
+    method: string | undefined
+    authorization: string | null
+    body: unknown
+  }> = []
   let exchanges = 0
   function json(body: unknown, status = 200) {
     return new Response(JSON.stringify(body), {
@@ -66,7 +80,20 @@ it("loads the pinned dashboard asset and completes preparation without a second 
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.endsWith("/embed/history")) return json(emptyHistory())
+      if (url.endsWith("/embed/history-retained"))
+        return json({ ...emptyHistory(), schema_version: "1.2.0" })
+      if (url.endsWith("/embed/history-timed")) {
+        timedRequests.push({
+          method: init?.method,
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: JSON.parse(String(init?.body)),
+        })
+        return json({
+          ...emptyHistory(),
+          schema_version: "1.3.0",
+          observed_at: new Date().toISOString(),
+        })
+      }
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges += 1
         expect(JSON.parse(String(init?.body)).record_ref).toBe(
@@ -180,6 +207,17 @@ it("loads the pinned dashboard asset and completes preparation without a second 
       document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
     ).toBe(false),
   )
+  expect(timedRequests).toEqual([
+    {
+      method: "POST",
+      authorization: `Bearer ${token}`,
+      body: {
+        schema_version: "1.3.0",
+        mode: "recent",
+        client_turn_id: null,
+      },
+    },
+  ])
   document.querySelector<HTMLButtonElement>(".cnp-fab")!.click()
   vi.useFakeTimers()
   document.querySelector<HTMLButtonElement>(".cnp-prep-go")!.focus()

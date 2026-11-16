@@ -78,6 +78,7 @@ class SourceEvidence:
     source_archive_sha256: str
     protection_sha256: str
     evidence: tuple[tuple[str, str], ...]
+    github_actions_enabled: bool = False
     execution_authorized: bool = False
     deployment_authorized: bool = False
 
@@ -201,6 +202,7 @@ class BuildSourceReader(source.ReadOnlySource):
         self.sequence = 0
         # Preserve response hashes, not full /user objects or review links/tokens.
         self.response_hashes: list[tuple[str, str]] = []
+        self.actions_enabled: bool | None = None
 
     def allowed_git(self, args: list[str]) -> None:
         context = self.request.context
@@ -382,8 +384,18 @@ class BuildSourceReader(source.ReadOnlySource):
         source.protection(
             policy, rules, current_staging=self.request.review_kind == "local_cursor"
         )
-        require(self.gh(source.API + "/actions/permissions").get("enabled") is False)
-        return sha(source.canonical({"classic": policy, "ruleset": rules}))
+        permissions = self.gh(source.API + "/actions/permissions")
+        enabled = permissions.get("enabled")
+        require(type(enabled) is bool)
+        if self.request.review_kind != "local_cursor":
+            require(enabled is False)
+        require(self.actions_enabled is None or self.actions_enabled is enabled)
+        self.actions_enabled = enabled
+        return sha(
+            source.canonical(
+                {"classic": policy, "ruleset": rules, "actions_enabled": enabled}
+            )
+        )
 
     def local_closure(self) -> None:
         for name, expected in self.request.production_files:
@@ -497,6 +509,20 @@ class BuildSourceReader(source.ReadOnlySource):
                 )
                 == b""
             )
+            if self.actions_enabled is True:
+                # Enabled Actions do not replace independent local review. Bind
+                # the existing required CI contexts to this exact reviewed head
+                # as well; this reader never dispatches a hosted workflow.
+                source.statuses(
+                    self.gh(source.API + "/commits/" + head + "/status?per_page=100"),
+                    self.gh(
+                        source.API
+                        + "/commits/"
+                        + head
+                        + "/check-runs?filter=all&per_page=100"
+                    ),
+                    head,
+                )
         else:
             review = self.gh(
                 source.API
@@ -591,7 +617,7 @@ class BuildSourceReader(source.ReadOnlySource):
 def collect_build_source(root: Path, request: SourceRequest) -> SourceEvidence:
     """Initial full source decision; the live controller still owes phase checks.
 
-    Requires no enabled Actions and creates no credential or workspace. Caller
+    Observes Actions without changing its state and creates no workspace. Caller
     must disable core dumps before any authenticated child. No receipt/review
     file, identity hash or SourceRequest can grant execution authority itself.
     """
@@ -628,6 +654,10 @@ def collect_build_source(root: Path, request: SourceRequest) -> SourceEvidence:
     require(after == verified and reader.protections() == before)
     reader.controller()
     reader.final_boundaries()
+    actions_enabled = reader.actions_enabled
+    if actions_enabled is None:
+        raise BuildSourceRefused("staging_build_source_refused")
+    require(type(actions_enabled) is bool)
     return SourceEvidence(
         reader.started_utc.isoformat(),
         request.context.candidate_sha,
@@ -637,4 +667,5 @@ def collect_build_source(root: Path, request: SourceRequest) -> SourceEvidence:
         sha(archive),
         before,
         tuple(reader.response_hashes),
+        actions_enabled,
     )

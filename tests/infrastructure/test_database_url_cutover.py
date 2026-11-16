@@ -9,6 +9,9 @@ import pytest
 from infra import database_url_cutover as cutover
 
 STRONG_PASSWORD = "Aa1!" * 8
+VERIFIED_TLS_OPTIONS = (
+    "sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
+)
 
 
 def _workload_resource(secret_ref: str) -> dict[str, Any]:
@@ -51,7 +54,7 @@ def test_database_url_must_be_scoped_application_login() -> None:
     cutover.validate_database_url(
         f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
         "cosmaneura-prod-postgres.postgres.database.azure.com:5432/"
-        "production?sslmode=require",
+        f"production?{VERIFIED_TLS_OPTIONS}",
         expected_database="production",
         expected_login_role="cosmaneura_app",
         expected_host=cutover.PRODUCTION_DATABASE_HOST,
@@ -61,7 +64,7 @@ def test_database_url_must_be_scoped_application_login() -> None:
         cutover.validate_database_url(
             f"postgresql://server_admin:{STRONG_PASSWORD}@"
             "cosmaneura-prod-postgres.postgres.database.azure.com/"
-            "production?sslmode=require",
+            f"production?{VERIFIED_TLS_OPTIONS}",
             expected_database="production",
             expected_login_role="cosmaneura_app",
             expected_host=cutover.PRODUCTION_DATABASE_HOST,
@@ -71,17 +74,17 @@ def test_database_url_must_be_scoped_application_login() -> None:
         cutover.validate_database_url(
             f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
             "different-server.postgres.database.azure.com/"
-            "production?sslmode=require",
+            f"production?{VERIFIED_TLS_OPTIONS}",
             expected_database="production",
             expected_login_role="cosmaneura_app",
             expected_host=cutover.PRODUCTION_DATABASE_HOST,
         )
 
-    with pytest.raises(cutover.CutoverError, match="exactly sslmode"):
+    with pytest.raises(cutover.CutoverError, match="canonical verified TLS"):
         cutover.validate_database_url(
             f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
             "cosmaneura-prod-postgres.postgres.database.azure.com/"
-            "production?sslmode=require&options=-crole%3Dserver_admin",
+            f"production?{VERIFIED_TLS_OPTIONS}&options=-crole%3Dserver_admin",
             expected_database="production",
             expected_login_role="cosmaneura_app",
             expected_host=cutover.PRODUCTION_DATABASE_HOST,
@@ -91,7 +94,34 @@ def test_database_url_must_be_scoped_application_login() -> None:
         cutover.validate_database_url(
             f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
             "cosmaneura-prod-postgres.postgres.database.azure.com:not-a-port/"
-            "production?sslmode=require",
+            f"production?{VERIFIED_TLS_OPTIONS}",
+            expected_database="production",
+            expected_login_role="cosmaneura_app",
+            expected_host=cutover.PRODUCTION_DATABASE_HOST,
+        )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        "sslmode=prefer",
+        "sslmode=require",
+        "sslmode=verify-ca&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt",
+        "sslmode=verify-full",
+        "sslmode=verify-full&sslrootcert=%2Ftmp%2Funtrusted.pem",
+        (
+            "sslmode=verify-full&"
+            "sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt&"
+            "sslmode=require"
+        ),
+    ],
+)
+def test_database_url_rejects_noncanonical_tls_options(options: str) -> None:
+    with pytest.raises(cutover.CutoverError, match="options"):
+        cutover.validate_database_url(
+            f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
+            "cosmaneura-prod-postgres.postgres.database.azure.com/"
+            f"production?{options}",
             expected_database="production",
             expected_login_role="cosmaneura_app",
             expected_host=cutover.PRODUCTION_DATABASE_HOST,
@@ -113,7 +143,7 @@ def test_migration_secret_bundle_is_strict_and_selector_bound() -> None:
     new_url = (
         f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
         "cosmaneura-prod-postgres.postgres.database.azure.com/"
-        "production?sslmode=require"
+        f"production?{VERIFIED_TLS_OPTIONS}"
     )
     values = cutover.read_migration_secret_bundle(
         io.StringIO(json.dumps({"database-url-v2": new_url}))

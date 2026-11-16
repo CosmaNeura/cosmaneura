@@ -15,6 +15,12 @@ administrator password is a later change, after the rollback window closes.
   read-only by default. Mutations require `--apply` or `--rollback`.
 - Database URLs and passwords are accepted only through a named environment
   variable or stdin. They are never accepted as command-line arguments.
+- Both the administrative and versioned application URLs must use libpq
+  `sslmode=verify-full` with the fixed Linux trust bundle at
+  `/etc/ssl/certs/ca-certificates.crt`; weaker modes, alternate roots, duplicate
+  options, and extra options fail before a connection is opened.
+- Run connection-bearing commands from the exact reviewed Linux runtime where
+  that trust bundle exists. Native macOS execution is not an equivalent proof.
 - The application login is `LOGIN`, `INHERIT`, `NOSUPERUSER`, `NOCREATEDB`,
   `NOCREATEROLE`, `NOREPLICATION`, and `NOBYPASSRLS`.
 - `cosmaneura_app_owner` is `NOLOGIN`. It owns only the selected application
@@ -115,6 +121,10 @@ Use the current administrator URL through `DATABASE_URL`. The default command
 connects read-only, inventories `public`, verifies `production` and
 `alembic_version`, and prints counts only:
 
+If the stored administrator field still uses `prefer` or `require`, this
+command refuses before opening a socket. Updating that protected field to the
+canonical verified-TLS URL is a separate reviewed configuration operation.
+
 ```bash
 export DATABASE_URL="$(op read \
   'op://Production/postgres-prod-database/python-connection-string')"
@@ -143,7 +153,9 @@ python infra/database_role.py --verify
 Create a separate 1Password field containing the complete TLS URL for
 `cosmaneura_app`; keep the administrator URL unchanged for rollback. The URL
 must target the same Azure PostgreSQL host, port 5432, database `production`,
-and include `sslmode=require`.
+and include `sslmode=verify-full` with
+`sslrootcert=/etc/ssl/certs/ca-certificates.crt`. The checked-in Terraform
+administrator URL uses the same trust and hostname-verification contract.
 
 ## 2. Read-only Azure plan
 

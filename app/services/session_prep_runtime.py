@@ -45,6 +45,10 @@ from app.services.session_prep_note_sources import (
     ReviewedNoteSelection,
     load_reviewed_note_sources,
 )
+from app.services.session_prep_source_locks import (
+    NoteSourceScopeChanged,
+    lock_note_source_versions,
+)
 
 from activemodel.types import TypeIDType
 from app.models.authority import (
@@ -62,6 +66,7 @@ from app.models.session_prep_runtime import (
     SessionPrepBuild,
     SessionPrepReadReceipt,
 )
+from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, select
 
 
@@ -213,6 +218,23 @@ def current_source_state(
         except CaptureSourceBusy:
             raise SessionPrepSourceBusy from None
         except CaptureSourceCorrected:
+            raise SessionPrepScopeDenied from None
+        try:
+            # Preserve the outer worker/read transaction after a busy source.
+            # The shared fence locks only bounded owned prior appointments,
+            # their patient associations and exact source notes, without wait.
+            with session.begin_nested():
+                lock_note_source_versions(
+                    session,
+                    scope,
+                    [note.source_ref for note in selection.sources],
+                    observed_at,
+                )
+        except DBAPIError as error:
+            if getattr(error.orig, "sqlstate", None) == "55P03":
+                raise SessionPrepSourceBusy from None
+            raise SessionPrepScopeDenied from None
+        except NoteSourceScopeChanged:
             raise SessionPrepScopeDenied from None
         selection = load_reviewed_note_sources(
             session=session,

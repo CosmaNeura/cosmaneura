@@ -453,15 +453,18 @@ printf '%s\n%s\n' "$CONTROLLER_RESULT_JSON" "$PLAN_JSON" | "$JQ" -se \
 	  "actor","build_metadata","build_metadata_bytes","build_metadata_sha256",
 	  "build_root","candidate_sha","complete",
 	  "controller_sha","deployment_authorized","finished_at",
-	  "frontend_configuration_sha256","image_archive","image_archive_bytes",
+	  "frontend_configuration_sha256","github_actions_enabled",
+	  "image_archive","image_archive_bytes",
 	  "image_archive_sha256","image_id","module_sha256s","plan_sha256",
-	  "public_assets_sha256","publication_authorized","source_archive_sha256",
+	  "protection_sha256","public_assets_sha256","publication_authorized","source_archive_sha256",
 	  "started_at"
 	] and $result.complete == true and $result.actor == "delegated_assistant" and
 	$result.candidate_sha == $candidate and $result.controller_sha == $controller and
 	$result.plan_sha256 == $plan_sha256 and $result.module_sha256s == $plan.module_sha256s and
 	$result.publication_authorized == false and $result.deployment_authorized == false and
 	$result.source_archive_sha256 == $source_sha256 and
+	($result.github_actions_enabled | type == "boolean") and
+	($result.protection_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
 	($result.frontend_configuration_sha256 | test("^[0-9a-f]{64}$")) and
 	($result.public_assets_sha256 | test("^[0-9a-f]{64}$")) and
 	($result.image_id | test("^sha256:[0-9a-f]{64}$")) and

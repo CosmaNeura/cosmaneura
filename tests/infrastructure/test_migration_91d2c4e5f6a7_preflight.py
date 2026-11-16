@@ -119,3 +119,27 @@ def test_main_exits_nonzero_when_readiness_is_false(
     output = json.loads(capsys.readouterr().out)
     assert output["code"] == "migration_not_ready"
     assert output["result"] == "blocked"
+
+
+def test_main_rejects_require_only_tls_before_database_access(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://admin:opaque@"
+        "cosmaneura-prod-postgres.postgres.database.azure.com/"
+        "production?sslmode=require",
+    )
+    monkeypatch.setattr(
+        preflight.psycopg,
+        "connect",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("database access must not occur")
+        ),
+    )
+
+    assert preflight.main() == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "migration_preflight_failed",
+        "result": "failed",
+    }

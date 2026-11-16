@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { syntheticClerk } from "./SovereignClerk.fixture"
 import { emptyHistory } from "./SovereignHistory.fixture"
 import {
   act,
@@ -16,7 +17,10 @@ const authority = vi.hoisted(() => ({
   getClient: vi.fn(),
   getViewAsStatus: vi.fn(),
 }))
-vi.mock("~/configuration/clerk", () => ({ getClient: authority.getClient }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: authority.getClient,
+  useBrowserPrincipal: () => syntheticClerk.principal(authority.getClient),
+}))
 vi.mock("~/lib/view-as-api", () => ({
   getViewAsStatus: authority.getViewAsStatus,
 }))
@@ -101,24 +105,44 @@ async function fixture() {
   vi.spyOn(Date, "now").mockImplementation(() => control.now)
   authority.getViewAsStatus.mockResolvedValue(inactiveViewAs)
   const getClerkToken = vi.fn(async () => "synthetic-platform-session-token")
-  authority.getClient.mockResolvedValue({
-    user: { id: "user_synthetic_reconnect" },
-    session: { getToken: getClerkToken },
-  })
+  authority.getClient.mockResolvedValue(
+    syntheticClerk.bindResource({
+      user: { id: "user_synthetic_reconnect" },
+      session: { id: "session_synthetic_reconnect", getToken: getClerkToken },
+    }),
+  )
   const exchanges: Array<{
     record: string
     signal: AbortSignal
     authorization: string | null
   }> = []
   const prepRequests: Array<{ turn: string; authorization: string | null }> = []
+  const timedRequests: Array<{ body: unknown; authorization: string | null }> =
+    []
   const welcomes: Array<string | null> = []
   const welcomeSignals: AbortSignal[] = []
   const tokens = ["a", "b", "c"].map((letter) => `mctx_${letter.repeat(48)}`)
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.endsWith("/embed/history")) return json(emptyHistory())
+      if (url.endsWith("/embed/history-retained"))
+        return json({ ...emptyHistory(), schema_version: "1.2.0" })
       const authorization = new Headers(init?.headers).get("authorization")
+      if (url.endsWith("/embed/history-timed")) {
+        expect(init?.method).toBe("POST")
+        const body = JSON.parse(String(init?.body))
+        expect(body).toEqual({
+          schema_version: "1.3.0",
+          mode: "recent",
+          client_turn_id: null,
+        })
+        timedRequests.push({ body, authorization })
+        return json({
+          ...emptyHistory(),
+          schema_version: "1.3.0",
+          observed_at: new Date(control.now).toISOString(),
+        })
+      }
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges.push({
           record: JSON.parse(String(init?.body)).record_ref,
@@ -192,6 +216,8 @@ async function fixture() {
       document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
     ).toBe(false),
   )
+  expect(timedRequests).toHaveLength(1)
+  expect(timedRequests[0].authorization).toBe(`Bearer ${tokens[0]}`)
   const expireAndLock = async () => {
     document.querySelector<HTMLButtonElement>(".cnp-fab")!.click()
     control.now += 16 * 60_000
@@ -204,6 +230,7 @@ async function fixture() {
     control,
     exchanges,
     prepRequests,
+    timedRequests,
     welcomes,
     welcomeSignals,
     tokens,
@@ -222,6 +249,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  syntheticClerk.bind(null)
   vi.clearAllMocks()
   delete window.CosmaNeuraPanel
 })
@@ -399,6 +427,7 @@ describe("explicit assistant session reconnection", () => {
           active: true,
         })
       if (denial === "signed-out")
+        // SDK signout can precede the normal React/listener resource update.
         authority.getClient.mockResolvedValue({ user: null, session: null })
       if (denial === "exchange-denied") f.control.denyExchange = true
       fireEvent.click(
