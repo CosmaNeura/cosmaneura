@@ -503,7 +503,9 @@ def test_http_dsn_cannot_send_through_capture(
     class LocalTransport(heartbeat_health._ProductionHeartbeatTransport):
         def _make_pool(self) -> Any:
             return SimpleNamespace(
-                request=lambda method, url, **kwargs: calls.append((method, url, kwargs))
+                request=lambda method, url, **kwargs: calls.append(
+                    (method, url, kwargs)
+                )
                 or SimpleNamespace(status=200, headers={}, close=lambda: None)
             )
 
