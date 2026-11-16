@@ -101,22 +101,34 @@ export function handleInternalApiResponse(
 }
 
 /** Fetch for authenticated internal APIs only; external/public calls stay untouched. */
-export const internalApiFetch: typeof globalThis.fetch = async (
-  input,
-  init,
-) => {
-  if (typeof window === "undefined") return globalThis.fetch(input, init)
+export const internalApiFetch: typeof globalThis.fetch = async (input, init) =>
+  internalApiFetchWithDispatchGuard(input, init)
+
+/** A mutation guard runs after request binding, immediately before network dispatch. */
+export async function internalApiFetchWithDispatchGuard(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  assertCurrent?: () => void,
+): Promise<Response> {
+  if (typeof window === "undefined") {
+    assertCurrent?.()
+    return globalThis.fetch(input, init)
+  }
 
   const currentUrl = window.location.href
   if (!isInternalApiRequest(input, currentUrl)) {
+    assertCurrent?.()
     return globalThis.fetch(input, init)
   }
 
   const requestInit = isViewAsControlRequest(input, currentUrl)
     ? init
     : await bindInternalApiRequest(input, init)
+  assertCurrent?.()
   const response = await globalThis.fetch(input, requestInit)
-  await enforceViewAsBindingResponse(response)
+  assertCurrent?.()
+  await enforceViewAsBindingResponse(response, undefined, assertCurrent)
+  assertCurrent?.()
 
   return handleInternalApiResponse(response, currentUrl, (target) =>
     window.location.replace(target),

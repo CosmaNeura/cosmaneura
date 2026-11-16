@@ -201,6 +201,7 @@ COMMON_SECRET_VARS=(DATABASE_URL)
 PUBLIC_VARS=(AUTO_MIGRATE_ON_STARTUP)
 ENV_JSON='{{"DATABASE_URL":"postgresql://synthetic:synthetic-only@db.example.test/staging","AUTO_MIGRATE_ON_STARTUP":"false"}}'
 RELEASE_V2_JSON={shlex.quote('{"version":2}' if release_v2 else "")}
+STAGING_SCRIBE_INIT_PLAN=
 EXPECTED_SCHEMA_BEFORE=111111111111
 EXPECTED_SCHEMA_AFTER=222222222222
 sleep() {{ :; }}

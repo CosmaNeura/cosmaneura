@@ -36,6 +36,7 @@ from app.configuration.scribe_capture import (
     ScribeCaptureSettings,
 )
 from app.configuration.scribe_workflow import SCRIBE_SERVICE_TIMEOUT_SECONDS_LIMIT
+from app.services.default_note_template import provision_default_note_template
 from app.services.scribe_capture_scope import authorize_capture_binding
 from app.services.scribe_configured_capture_contract import (
     ConfiguredCaptureReservation,
@@ -550,6 +551,7 @@ def _prepared_operation(
                 operation.recording_key_sha256,
             ):
                 raise AdmissionConflict
+        provision_default_note_template(session, binding.doctor_id)
         yield session, binding, operation
 
 

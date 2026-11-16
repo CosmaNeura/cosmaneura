@@ -157,6 +157,115 @@ def provision_companion_provider(
     if not doctor_access_in_force(doctor):
         _fail("existing_processing_access_required")
 
+    correspondence = _provider_correspondence(
+        session,
+        doctor=doctor,
+        practice_id=practice_id,
+        tenant_id=tenant_id,
+        scribe_tenant_id=scribe_tenant_id,
+        settings=settings,
+    )
+    missing = correspondence.missing
+    mapping, identity, actor, own = (
+        correspondence.mapping,
+        correspondence.identity,
+        correspondence.actor,
+        correspondence.own,
+    )
+    if missing and not create_missing_authority:
+        _fail("explicit_authority_creation_review_required")
+    payload = {
+        "version": 2,
+        "action": "companion_provider_provision",
+        "doctor_ref": str(doctor_id),
+        "practice_ref": str(practice_id),
+        "practice_member_ref": str(member.id),
+        "tenant_ref": str(tenant_id),
+        "scribe_tenant_id": str(scribe_tenant_id),
+        "issuer": settings.clerk_issuer,
+        "subject_sha256": _digest(doctor.clerk_id),
+        "verified_email_sha256": _digest(verified),
+        "review_ref": review_ref,
+        "operator_ref": operator_ref,
+        "create_missing_authority": create_missing_authority,
+    }
+    digest = _digest(payload)
+    bound_review = "companion:v2:" + digest
+    legacy_reviews = {
+        "companion:v1:"
+        + _digest({**payload, "version": 1, "create_missing_authority": value})
+        for value in (False, True)
+    }
+    if own:
+        row = own[0]
+        legacy = row.review_ref in legacy_reviews
+        if (
+            (set(missing) - {"core_practice_authority"})
+            or identity is None
+            or actor is None
+            or row.actor_id != actor.id
+            or row.source_identity_id != identity.id
+            or (row.review_ref != bound_review and not legacy)
+            or (mapping is None and not legacy)
+        ):
+            _fail("existing_provider_link_review_differs")
+        if mapping is not None:
+            return CompanionProvisioningResult(
+                digest, "already_provisioned", (), str(row.id)
+            )
+    if not apply:
+        return CompanionProvisioningResult(digest, "ready_for_review", missing)
+    if not isinstance(confirm_plan_sha256, str) or not hmac.compare_digest(
+        confirm_plan_sha256, digest
+    ):
+        _fail("current_reviewed_plan_confirmation_required")
+
+    link = _write_provider_correspondence(
+        session,
+        correspondence=correspondence,
+        doctor=doctor,
+        practice_id=practice_id,
+        tenant_id=tenant_id,
+        scribe_tenant_id=scribe_tenant_id,
+        settings=settings,
+        link_review_ref=bound_review,
+        digest=digest,
+        event_type="companion.provider.practice_authority_bound"
+        if own
+        else "companion.provider.provisioned",
+        platform_refs=[
+            {"kind": "approval", "ref": review_ref},
+            {"kind": "operator", "ref": operator_ref},
+        ],
+    )
+    link_ref = str(link.id)
+    session.commit()
+    return CompanionProvisioningResult(digest, "provisioned", (), link_ref)
+
+
+@dataclass(frozen=True)
+class _ProviderCorrespondence:
+    tenant: AuthorityTenant | None
+    actor: AuthorityActor | None
+    identity: AuthorityActorExternalIdentity | None
+    memberships: list[AuthorityTenantMembership]
+    mapping: ProviderPracticeAuthority | None
+    own: list[ScribeCaptureProviderLink]
+    missing: tuple[str, ...]
+
+
+def _provider_correspondence(
+    session: Session,
+    *,
+    doctor: Doctor,
+    practice_id: Any,
+    tenant_id: Any,
+    scribe_tenant_id: UUID,
+    settings: AuthorityKernelSettings,
+    allow_new_practice_namespace: bool = False,
+) -> _ProviderCorrespondence:
+    """Shared correspondence checks; caller already owns Practice → Doctor locks."""
+    doctor_id = doctor.id
     # Session Prep may have provisioned this account's immutable namespace before
     # Scribe onboarding. Preserve it rather than replacing its membership. Scribe
     # itself still requires the real practice above and only creates practice rows.
@@ -243,7 +352,7 @@ def provision_companion_provider(
         # real Scribe practice. Only a different Doctor's exact existing mapping
         # can coexist here; no guessed tenant, same-owner rebind or practice move.
         if (
-            mapping is None
+            (mapping is None and not allow_new_practice_namespace)
             or row.doctor_id == doctor.id
             or row.practice_id != practice_id
             or row.scribe_tenant_id != scribe_tenant_id
@@ -266,7 +375,9 @@ def provision_companion_provider(
             )
         ):
             _fail("practice_correspondence_review_required")
-        if mapping.doctor_id is None and other_mapping.doctor_id is None:
+        if (
+            mapping is None or mapping.doctor_id is None
+        ) and other_mapping.doctor_id is None:
             # Entirely legacy practice links keep their original Core tenant.
             _fail("practice_correspondence_review_required")
     own = [row for row in related if row.doctor_id == doctor_id]
@@ -370,54 +481,35 @@ def provision_companion_provider(
         ]
         if absent
     )
-    if missing and not create_missing_authority:
-        _fail("explicit_authority_creation_review_required")
-    payload = {
-        "version": 2,
-        "action": "companion_provider_provision",
-        "doctor_ref": str(doctor_id),
-        "practice_ref": str(practice_id),
-        "practice_member_ref": str(member.id),
-        "tenant_ref": str(tenant_id),
-        "scribe_tenant_id": str(scribe_tenant_id),
-        "issuer": settings.clerk_issuer,
-        "subject_sha256": _digest(doctor.clerk_id),
-        "verified_email_sha256": _digest(verified),
-        "review_ref": review_ref,
-        "operator_ref": operator_ref,
-        "create_missing_authority": create_missing_authority,
-    }
-    digest = _digest(payload)
-    bound_review = "companion:v2:" + digest
-    legacy_reviews = {
-        "companion:v1:"
-        + _digest({**payload, "version": 1, "create_missing_authority": value})
-        for value in (False, True)
-    }
-    if own:
-        row = own[0]
-        legacy = row.review_ref in legacy_reviews
-        if (
-            (set(missing) - {"core_practice_authority"})
-            or identity is None
-            or actor is None
-            or row.actor_id != actor.id
-            or row.source_identity_id != identity.id
-            or (row.review_ref != bound_review and not legacy)
-            or (mapping is None and not legacy)
-        ):
-            _fail("existing_provider_link_review_differs")
-        if mapping is not None:
-            return CompanionProvisioningResult(
-                digest, "already_provisioned", (), str(row.id)
-            )
-    if not apply:
-        return CompanionProvisioningResult(digest, "ready_for_review", missing)
-    if not isinstance(confirm_plan_sha256, str) or not hmac.compare_digest(
-        confirm_plan_sha256, digest
-    ):
-        _fail("current_reviewed_plan_confirmation_required")
+    return _ProviderCorrespondence(
+        tenant, actor, identity, list(memberships), mapping, own, missing
+    )
 
+
+def _write_provider_correspondence(
+    session: Session,
+    *,
+    correspondence: _ProviderCorrespondence,
+    doctor: Doctor,
+    practice_id: Any,
+    tenant_id: Any,
+    scribe_tenant_id: UUID,
+    settings: AuthorityKernelSettings,
+    link_review_ref: str,
+    digest: str,
+    event_type: str,
+    platform_refs: list[dict[str, str]],
+) -> ScribeCaptureProviderLink:
+    """Shared atomic writer. Caller owns policy, audit provenance and commit."""
+    doctor_id = doctor.id
+    tenant, actor, identity, memberships, mapping, own = (
+        correspondence.tenant,
+        correspondence.actor,
+        correspondence.identity,
+        correspondence.memberships,
+        correspondence.mapping,
+        correspondence.own,
+    )
     now = datetime.now(UTC)
     if tenant is None:
         tenant = AuthorityTenant.model_validate({"id": tenant_id, "status": "active"})
@@ -464,15 +556,13 @@ def provision_companion_provider(
             practice_id=practice_id,
             scribe_tenant_id=scribe_tenant_id,
             reviewed_at=now,
-            review_ref=bound_review,
+            review_ref=link_review_ref,
         )
         session.add(link)
         session.flush()
     session.add(
         AuthorityAuditEvent(
-            event_type="companion.provider.practice_authority_bound"
-            if own
-            else "companion.provider.provisioned",
+            event_type=event_type,
             outcome="accepted",
             occurred_at=now,
             tenant_id=tenant_id,
@@ -482,12 +572,7 @@ def provision_companion_provider(
             else "scribe_provider_link",
             resource_ref=str(mapping.id if own else link.id),
             request_digest=digest,
-            platform_refs=[
-                {"kind": "approval", "ref": review_ref},
-                {"kind": "operator", "ref": operator_ref},
-            ],
+            platform_refs=platform_refs,
         )
     )
-    link_ref = str(link.id)
-    session.commit()
-    return CompanionProvisioningResult(digest, "provisioned", (), link_ref)
+    return link

@@ -190,8 +190,15 @@ variable "python_public_vars" {
       "SCRIBE_ENCOUNTER_CREATION_ENABLED",
       "SCRIBE_ENCOUNTER_PREP_ENABLED",
       "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+      "SCRIBE_CANCELLATION_LEDGER_READY",
+      "SCRIBE_CANCELLATION_ENABLED",
+      "SCRIBE_CANCELLATION_GRACE_DAYS",
+      "SCRIBE_CANCELLATION_PHI_SCOPE",
+      "SCRIBE_CANCELLATION_POLICY_SHA256",
+      "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
+      "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED",
     ]))) == 0
-    error_message = "Session Prep, native Scribe, and durable Zoom rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
+    error_message = "Session Prep, native Scribe, durable Zoom, cancellation, and workflow-client rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
   }
 }
 
