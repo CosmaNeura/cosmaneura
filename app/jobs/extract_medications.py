@@ -17,6 +17,7 @@ from typeid import TypeID
 
 from app import log
 from app.celery import celery_app
+from app.configuration.medication import held_medication_writes_enabled
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
 from app.services.doctor_access import doctor_access_in_force
@@ -156,6 +157,11 @@ def perform(transcript_id: str | TypeID | TypeIDType):
             s.value for s in MedicationStatus
         }:
             # An unsupported or missing classification is not evidence of use.
+            continue
+
+        if status_value == "held" and not held_medication_writes_enabled():
+            # Preserve the literal source status: never turn a dormant hold
+            # into active/stopped, or perform a lookup for an omitted row.
             continue
 
         kind = item.get("kind")

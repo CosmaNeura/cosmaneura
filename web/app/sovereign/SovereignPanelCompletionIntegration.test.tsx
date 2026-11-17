@@ -60,6 +60,11 @@ it("loads the pinned dashboard asset and completes preparation without a second 
   )
   const token = `mctx_${"a".repeat(48)}`
   const turns: string[] = []
+  const timedRequests: Array<{
+    method: string | undefined
+    authorization: string | null
+    body: unknown
+  }> = []
   let exchanges = 0
   function json(body: unknown, status = 200) {
     return new Response(JSON.stringify(body), {
@@ -77,6 +82,18 @@ it("loads the pinned dashboard asset and completes preparation without a second 
       const url = String(input)
       if (url.endsWith("/embed/history-retained"))
         return json({ ...emptyHistory(), schema_version: "1.2.0" })
+      if (url.endsWith("/embed/history-timed")) {
+        timedRequests.push({
+          method: init?.method,
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: JSON.parse(String(init?.body)),
+        })
+        return json({
+          ...emptyHistory(),
+          schema_version: "1.3.0",
+          observed_at: new Date().toISOString(),
+        })
+      }
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges += 1
         expect(JSON.parse(String(init?.body)).record_ref).toBe(
@@ -190,6 +207,17 @@ it("loads the pinned dashboard asset and completes preparation without a second 
       document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
     ).toBe(false),
   )
+  expect(timedRequests).toEqual([
+    {
+      method: "POST",
+      authorization: `Bearer ${token}`,
+      body: {
+        schema_version: "1.3.0",
+        mode: "recent",
+        client_turn_id: null,
+      },
+    },
+  ])
   document.querySelector<HTMLButtonElement>(".cnp-fab")!.click()
   vi.useFakeTimers()
   document.querySelector<HTMLButtonElement>(".cnp-prep-go")!.focus()

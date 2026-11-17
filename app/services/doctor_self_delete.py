@@ -5,6 +5,11 @@ deletes only themselves: identity comes from the verified Clerk session, never
 from a target user id. Clerk deletion uses the existing ``CLERK_PRIVATE_KEY``
 integration (``app.configuration.clerk.clerk``); no new secrets are introduced.
 
+Local soft-disable, retention window, video OAuth cleanup, and timestamp helpers
+reuse master's ``doctor_account_closure`` primitives. Self-delete then adds the
+Apple-required Clerk user removal and the ownerless-practice latch that the
+operator CLI deliberately does not perform.
+
 Clinical and practice records are not purged here. See
 ``apply_clinical_record_retention_policy`` — the single retention hook where
 counsel/John will decide later what must be held.
@@ -12,7 +17,6 @@ counsel/John will decide later what must be held.
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +27,13 @@ from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 from app import log
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.clerk import clerk
+from app.services.doctor_account_closure import (
+    ACCOUNT_CLOSURE_RETENTION_YEARS,
+    _aware as _closure_aware,
+    _seven_years_after as _closure_seven_years_after,
+    _sha256 as _closure_sha256,
+    _video_integrations,
+)
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
@@ -40,7 +51,6 @@ from app.models.authority import (
     MountContextSession,
 )
 from app.models.doctor import Doctor
-from app.models.doctor_video_integration import DoctorVideoIntegration
 from app.models.note_template_preference import NoteTemplatePreference
 from app.models.organization_access import OrganizationRosterApproval
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -59,7 +69,7 @@ from sqlmodel import Session, col, select
 CONFIRM_PHRASE = "DELETE"
 ACCOUNT_DELETION_PENDING = "deletion_pending"
 ACCOUNT_DELETION_DELETED = "deleted"
-SELF_DELETE_RETENTION_YEARS = 7
+SELF_DELETE_RETENTION_YEARS = ACCOUNT_CLOSURE_RETENTION_YEARS
 SELF_DELETE_RESOURCE_TYPE = "doctor_self_delete"
 SELF_DELETE_OPERATOR_PREFIX = "self:doctor:"
 SELF_DELETE_REASON = "Authenticated self-delete requested by the account holder"
@@ -120,25 +130,24 @@ def apply_clinical_record_retention_policy(
 
 
 def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    """Reuse master's closure digest helper (same bytes)."""
+
+    return _closure_sha256(value)
 
 
 def _aware(value: datetime | None) -> datetime:
-    current = value or datetime.now(UTC)
-    if current.tzinfo is None or current.utcoffset() is None:
-        raise DoctorSelfDeleteError("operation timestamp must include a timezone")
-    return current
+    """Reuse master's timezone-aware clock helper with self-delete errors."""
+
+    try:
+        return _closure_aware(value)
+    except ValueError as error:
+        raise DoctorSelfDeleteError(str(error)) from error
 
 
 def _seven_years_after(value: datetime) -> datetime:
-    try:
-        return value.replace(year=value.year + SELF_DELETE_RETENTION_YEARS)
-    except ValueError:
-        return value.replace(
-            year=value.year + SELF_DELETE_RETENTION_YEARS,
-            month=2,
-            day=28,
-        )
+    """Reuse master's retention-window helper (ACCOUNT_CLOSURE_RETENTION_YEARS)."""
+
+    return _closure_seven_years_after(value)
 
 
 def _require_confirm(confirm: str) -> None:
@@ -271,11 +280,8 @@ def _delete_personal_settings(session: Session, doctor: Doctor) -> None:
         )
     ).all():
         session.delete(preference)
-    for integration in session.exec(
-        select(DoctorVideoIntegration).where(
-            DoctorVideoIntegration.doctor_id == doctor.id
-        )
-    ).all():
+    # Same video-OAuth cleanup path as master's operator account closure.
+    for integration in _video_integrations(session, doctor=doctor, lock=True):
         session.delete(integration)
 
 

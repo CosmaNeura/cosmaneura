@@ -101,29 +101,32 @@ def scribe_path(path: str) -> bool:
     )
 
 
-async def stop_child(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is None:
+async def stop_child(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
         process.send_signal(signal.SIGTERM)
         try:
-            await asyncio.wait_for(process.wait(), 20)
-        except TimeoutError:
+            await asyncio.to_thread(process.wait, timeout=20)
+        except subprocess.TimeoutExpired:
             process.kill()
-            await process.wait()
+            await asyncio.to_thread(process.wait)
 
 
 class CoreBundleGateway:
     def __init__(self, core: FastAPI):
         self.core = core
         self.client: httpx.AsyncClient | None = None
-        self.process: asyncio.subprocess.Process | None = None
+        self.process: subprocess.Popen[bytes] | None = None
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
             async with core.router.lifespan_context(core):
-                process = await asyncio.create_subprocess_exec(
-                    PYTHON,
-                    CHILD_SCRIPT,
-                    "api",
+                # uvloop rejects asyncio's user/group subprocess options.
+                # The stdlib path retains the same OS-enforced identity drop
+                # used by the existing captured workers, independent of loop.
+                # Capture the child before a cancellation point can orphan it;
+                # all process waits remain outside the event-loop thread.
+                process = subprocess.Popen(  # noqa: ASYNC220
+                    [PYTHON, CHILD_SCRIPT, "api"],
                     env=child_environment("api"),
                     cwd="/opt/scribe",
                     stdin=subprocess.DEVNULL,
@@ -144,7 +147,7 @@ class CoreBundleGateway:
                         ),
                     ) as client:
                         for _attempt in range(100):
-                            if process.returncode is not None:
+                            if process.poll() is not None:
                                 raise BundleUnavailable(
                                     "scribe_core_bundle_startup_unavailable"
                                 )
@@ -182,7 +185,7 @@ class CoreBundleGateway:
         elif (
             self.client is None
             or self.process is None
-            or self.process.returncode is not None
+            or self.process.poll() is not None
         ):
             await Response(status_code=503, headers={"Cache-Control": "no-store"})(
                 scope, receive, send

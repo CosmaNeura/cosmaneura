@@ -37,10 +37,28 @@ const headers = {
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers })
 
+function isTimedTurn(request: { url: string; init: RequestInit }) {
+  return (
+    request.url.endsWith("/embed/history-timed") &&
+    JSON.parse(String(request.init.body)).mode === "turn"
+  )
+}
+
+function useDisplayTimers() {
+  const wall = Date.now(),
+    mono = performance.now()
+  vi.useFakeTimers()
+  // These host-deadline tests model ordinary elapsed time, not OS sleep.
+  vi.spyOn(performance, "now").mockImplementation(
+    () => mono + Date.now() - wall,
+  )
+}
+
 async function fixture(
   first = async () => json(citationFixture()),
   sessionToken = async () => "synthetic-session",
   sdkRead?: () => Promise<unknown>,
+  autoOpen = true,
 ) {
   vi.resetModules()
   vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
@@ -63,6 +81,34 @@ async function fixture(
     answer: excerptAnswer,
     exchange: null as (() => Promise<Response>) | null,
     rotate: null as (() => Promise<Response>) | null,
+    observedAt: new Date(Date.now()).toISOString(),
+    // A saved receipt's expiry is fixed across reads; verification does not renew it.
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  }
+  const timed = async (response: Response) => {
+    if (!response.ok) return response
+    const value = await response.json()
+    control.observedAt = new Date(Date.now()).toISOString()
+    return json({
+      ...value,
+      schema_version: "1.3.0",
+      observed_at: control.observedAt,
+      history: {
+        ...value.history,
+        messages: value.history.messages.map(
+          (message: Record<string, unknown>) => ({
+            ...message,
+            reviewed_citations:
+              message.role === "user" ? null : message.reviewed_citations,
+            display_state:
+              message.role === "user"
+                ? null
+                : (message.display_state ?? "historical"),
+            expires_at: message.role === "user" ? null : control.expiresAt,
+          }),
+        ),
+      },
+    })
   }
   const requests: Array<{ url: string; init: RequestInit }> = []
   vi.stubGlobal(
@@ -97,6 +143,23 @@ async function fixture(
       if (url.endsWith("/embed/history")) return json(emptyHistory())
       if (url.endsWith("/embed/history-retained")) return control.retained()
       if (url.endsWith("/embed/history-with-citations")) return control.fresh()
+      if (url.endsWith("/embed/history-timed")) {
+        expect(init.method).toBe("POST")
+        const body = JSON.parse(String(init.body))
+        expect(Object.keys(body).sort()).toEqual([
+          "client_turn_id",
+          "mode",
+          "schema_version",
+        ])
+        expect(body.schema_version).toBe("1.3.0")
+        expect(["recent", "turn"]).toContain(body.mode)
+        const restoredTurn = citationFixture().turns[0].client_turn_id
+        return timed(
+          await (body.mode === "recent" || body.client_turn_id === restoredTurn
+            ? control.retained()
+            : control.fresh()),
+        )
+      }
       if (url.endsWith("/chat"))
         return json({
           client_turn_id: JSON.parse(String(init.body)).client_turn_id,
@@ -131,7 +194,18 @@ async function fixture(
   )
   const { SovereignPanelHost: Host } = await import("./SovereignPanelHost")
   const view = render(<Host appointmentId="appointment_synthetic_a" />)
-  return { control, requests, mounts, view, Host }
+  const open = async () => {
+    await waitFor(() =>
+      expect(
+        document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
+      ).toBe(false),
+    )
+    const button = document.querySelector<HTMLButtonElement>(".cnp-fab")!
+    expect(button.hidden).toBe(false)
+    if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button)
+  }
+  if (autoOpen) await open()
+  return { control, requests, mounts, view, Host, open }
 }
 
 afterEach(() => {
@@ -168,11 +242,7 @@ describe("real byte-pinned panel with accepted Core maps", () => {
       return json(response)
     }
     fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
-    await waitFor(() =>
-      expect(
-        f.requests.some((item) => item.url.endsWith("history-with-citations")),
-      ).toBe(true),
-    )
+    await waitFor(() => expect(f.requests.some(isTimedTurn)).toBe(true))
     const requests = f.requests.filter((item) => item.url.endsWith("/chat"))
     expect(requests).toHaveLength(1)
     const wire = String(requests[0].init.body),
@@ -197,9 +267,7 @@ describe("real byte-pinned panel with accepted Core maps", () => {
     ])
       expect(wire).not.toContain(excluded)
     expect(Object.keys(body.metadata)).not.toContain("history")
-    expect(
-      f.requests.filter((item) => item.url.endsWith("history-with-citations")),
-    ).toHaveLength(1)
+    expect(f.requests.filter(isTimedTurn)).toHaveLength(1)
   })
 
   it("uses a neutral historical label when a quoted answer has no verified accepted map", async () => {
@@ -259,8 +327,16 @@ describe("real byte-pinned panel with accepted Core maps", () => {
     )
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
     fireEvent.click(screen.getByRole("button", { name: "Save answer .md" }))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
     const exported = await (save.mock.calls[0][0] as Blob).text()
-    expect(exported.startsWith(excerptAnswer)).toBe(true)
+    const start = exported.indexOf(excerptAnswer)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(exported.slice(start, start + excerptAnswer.length)).toBe(
+      excerptAnswer,
+    )
+    expect(exported).toContain("Answer recorded: 2026-09-28T12:00:00Z")
+    expect(exported).toContain(`Export verified: ${f.control.observedAt}`)
+    expect(exported).toContain(`Available until: ${f.control.expiresAt}`)
     expect(exported).toContain("Historical answer — sources superseded.")
     expect(exported).toContain(
       "Visit 2026-10-01T09:00:00Z; reviewed 2026-10-02T10:00:00Z",
@@ -272,6 +348,7 @@ describe("real byte-pinned panel with accepted Core maps", () => {
         request.url.endsWith("/embed/history-retained"),
       ),
     ).toHaveLength(1)
+    expect(f.requests.filter(isTimedTurn)).toHaveLength(1)
     expect(
       f.requests.some((request) =>
         /\/chat$|history-with-citations|\/notes\//.test(request.url),
@@ -298,13 +375,7 @@ describe("real byte-pinned panel with accepted Core maps", () => {
       const input = document.querySelector<HTMLTextAreaElement>(".cnp-in")!
       input.value = "Original complete factual question."
       fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
-      await waitFor(() =>
-        expect(
-          f.requests.some((request) =>
-            request.url.endsWith("history-with-citations"),
-          ),
-        ).toBe(true),
-      )
+      await waitFor(() => expect(f.requests.some(isTimedTurn)).toBe(true))
       expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
       const fresh = citationFixture(
         "1.1.0",
@@ -333,7 +404,7 @@ describe("real byte-pinned panel with accepted Core maps", () => {
         return
       }
       await screen.findByText(
-        "Reviewed-source links could not be verified. Attributed export is unavailable.",
+        "The recorded answer’s availability could not be verified. Your draft is preserved.",
       )
       expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
       expect(
@@ -351,6 +422,9 @@ describe("real byte-pinned panel with accepted Core maps", () => {
         new Promise<Response>((r) => {
           resolve = r
         }),
+      undefined,
+      undefined,
+      false,
     )
     await waitFor(() =>
       expect(
@@ -361,6 +435,7 @@ describe("real byte-pinned panel with accepted Core maps", () => {
     current.history.messages[1].reviewed_citations = []
     f.control.retained = async () => json(current)
     f.view.rerender(<f.Host appointmentId="appointment_synthetic_b" />)
+    await f.open()
     await screen.findByText("Current authorized record answer")
     await act(async () => resolve(json(citationFixture())))
     expect(document.querySelector(".cnp-reviewed-citation")).toBeNull()
@@ -381,8 +456,11 @@ describe("real byte-pinned panel with accepted Core maps", () => {
   it.each([401, 403])(
     "denies retained display %s with no old answer or link",
     async (status) => {
-      const f = await fixture(async () =>
-        json({ private: "not-display" }, status),
+      const f = await fixture(
+        async () => json({ private: "not-display" }, status),
+        undefined,
+        undefined,
+        false,
       )
       await screen.findByRole("button", { name: "Reconnect assistant" })
       expect(document.querySelector(".cnp-root")).toBeNull()
@@ -426,6 +504,9 @@ it.each(["account", "session", "signout", "missed-listener", "SDK-only"])(
         new Promise<Response>((r) => {
           resolve = r
         }),
+      undefined,
+      undefined,
+      false,
     )
     await waitFor(() =>
       expect(f.requests.some((r) => r.url.endsWith("history-retained"))).toBe(
@@ -491,6 +572,8 @@ it("same-record Host fences a late platform token before any old exchange or dis
       new Promise<string>((r) => {
         resolve = r
       }),
+    undefined,
+    false,
   )
   await waitFor(() => expect(resolve).toBeTypeOf("function"))
   const old = f.mounts[0]
@@ -571,7 +654,7 @@ it.each([
       ),
     )
     // Initial bootstrap has already finished; only this read's deadline can pass.
-    vi.useFakeTimers()
+    useDisplayTimers()
     let resolve!: (value: unknown) => void,
       calls = 0
     authority.getClient.mockImplementation(async () => {
@@ -628,7 +711,7 @@ it("shorter15s caller cancellation bounds a stalled actualSDK read with no late 
   await waitFor(() =>
     expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
   )
-  vi.useFakeTimers()
+  useDisplayTimers()
   let resolve!: (value: unknown) => void, outcome: unknown
   authority.getClient.mockImplementation(
     () =>
@@ -663,7 +746,7 @@ it("shorter15s caller cancellation bounds a stalled actualSDK read with no late 
   expect(outcome).toMatchObject({ name: "AbortError" })
 })
 it("bootstrap30s cap fences actualSDK completion that arrives after the mount expired", async () => {
-  vi.useFakeTimers()
+  useDisplayTimers()
   let resolve!: (value: unknown) => void
   const f = await fixture(
     async () => json(citationFixture()),
@@ -672,6 +755,7 @@ it("bootstrap30s cap fences actualSDK completion that arrives after the mount ex
       new Promise((r) => {
         resolve = r
       }),
+    false,
   )
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
@@ -695,7 +779,7 @@ it("read deadline cancels rotation and cannot install its late credential", asyn
   await waitFor(() =>
     expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
   )
-  vi.useFakeTimers()
+  useDisplayTimers()
   const start = Date.now()
   vi.setSystemTime(start + 300001)
   let resolve!: (response: Response) => void, outcome: unknown
@@ -754,7 +838,7 @@ it.each(["stall", "reject"])(
         2,
       ),
     )
-    vi.useFakeTimers()
+    useDisplayTimers()
     const answer =
       "Synthetic canonical answer withheld until principal verification."
     f.control.answer = answer
@@ -798,29 +882,33 @@ it.each(["stall", "reject"])(
     expect(f.requests.some((r) => r.url.endsWith("/rotate"))).toBe(false)
   },
 )
-it("actual pinned post-chat verified map transport timeout preserves the canonical answer fallback", async () => {
+it("actual pinned post-chat timed-read timeout refuses unverified answer display and preserves the draft", async () => {
   const f = await fixture()
   await waitFor(() =>
     expect(document.querySelectorAll(".cnp-reviewed-citation")).toHaveLength(2),
   )
-  vi.useFakeTimers()
+  useDisplayTimers()
   const answer =
     "Synthetic canonical answer after a verified map transport failure."
   f.control.answer = answer
   f.control.fresh = () => new Promise<Response>(() => {})
-  document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value =
-    "A complete synthetic factual question."
+  const question = "A complete synthetic factual question."
+  document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value = question
   await act(async () => {
     fireEvent.click(document.querySelector<HTMLButtonElement>(".cnp-send")!)
     await vi.advanceTimersByTimeAsync(0)
   })
-  expect(
-    f.requests.some((r) => r.url.endsWith("/embed/history-with-citations")),
-  ).toBe(true)
+  expect(f.requests.some(isTimedTurn)).toBe(true)
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(30000)
+    await vi.advanceTimersByTimeAsync(15000)
   })
   expect(document.querySelector(".cnp-root")).not.toBeNull()
-  expect(document.body.textContent).toContain(answer)
+  expect(document.body.textContent).not.toContain(answer)
+  expect(document.body.textContent).toContain(
+    "The recorded answer’s availability could not be verified. Your draft is preserved.",
+  )
+  expect(document.querySelector<HTMLTextAreaElement>(".cnp-in")!.value).toBe(
+    question,
+  )
   expect(f.requests.filter((r) => r.url.endsWith("/chat"))).toHaveLength(1)
 })

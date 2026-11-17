@@ -70,6 +70,12 @@ async function fixture() {
       }
       if (String(input).endsWith("/embed/history-retained"))
         return json({ ...emptyHistory(), schema_version: "1.2.0" })
+      if (String(input).endsWith("/embed/history-timed"))
+        return json({
+          ...emptyHistory(),
+          schema_version: "1.3.0",
+          observed_at: new Date().toISOString(),
+        })
       if (String(input).endsWith("/welcome")) {
         return json({
           persona: "provider",
@@ -181,7 +187,20 @@ describe("pending pinned panel load ownership", () => {
     await f.staleCallbacks(old)
     expect(f.mounts).toHaveLength(1)
     expect(f.scripts[1].remove).not.toHaveBeenCalled()
-    expect(f.fetchMock).toHaveBeenCalledTimes(3) // Fresh exchange, welcome and recent history.
+    expect(f.fetchMock).toHaveBeenCalledTimes(4) // Fresh exchange, welcome, retained history and timed history.
+    const [timedUrl, timedInit] = f.fetchMock.mock.calls[3]
+    expect(String(timedUrl)).toBe(
+      "https://provider-sovereign.example/embed/history-timed",
+    )
+    expect(timedInit?.method).toBe("POST")
+    expect(new Headers(timedInit?.headers).get("authorization")).toBe(
+      `Bearer mctx_${"1".repeat(48)}`,
+    )
+    expect(JSON.parse(String(timedInit?.body))).toEqual({
+      schema_version: "1.3.0",
+      mode: "recent",
+      client_turn_id: null,
+    })
   })
 
   it("releases a departing appointment's load and ignores its late callbacks", async () => {

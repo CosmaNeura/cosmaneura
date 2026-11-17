@@ -720,10 +720,11 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
     # Pin the independently reviewed deploy.sh bytes. Rebinds when additive
     # non-secret public runtime is extended (ACCOUNT_SELF_DELETE_ENABLED
-    # API-only). Founder-user, readiness/traffic, runtime preservation and job
-    # cleanup guards remain; hosted selectors require canonical candidate
-    # reverification. This pin does not remove or loosen any gate.
-    assert hashlib.sha256(deploy).hexdigest() == "4cb4818c2239a510fe826fb63e1ffc4e4eb21d17f8e67dac403c5cda22f5b06c"
+    # API-only) atop master's hosted handoff. Founder-user, readiness/traffic,
+    # runtime preservation and job cleanup guards remain; hosted selectors
+    # require canonical candidate reverification. This pin does not remove or
+    # loosen any gate.
+    assert hashlib.sha256(deploy).hexdigest() == "14b66126f83a5960013f55750c3a1a4d744204c9994c2631967935ce11eddee3"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
     assert "ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)" in deploy.decode()
     assert (

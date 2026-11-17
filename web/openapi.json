@@ -647,6 +647,92 @@
         }
       }
     },
+    "/internal/v1/note-schemas/initialize": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Initialize Note Templates",
+        "operationId": "initialize_note_templates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitializeNoteTemplates"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitializedNoteTemplates"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/note-schemas/{schema_id}": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Delete Note Template",
+        "operationId": "delete_note_template",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schema_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schema Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/note-template-preference": {
       "get": {
         "tags": [
@@ -2305,6 +2391,52 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PracticeLookupResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/attestation": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Attest Current Practice Member",
+        "operationId": "attest_current_practice_member",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurrentPracticeAttestationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
                 }
               }
             }
@@ -4739,6 +4871,45 @@
         ],
         "title": "CreatedNoteTemplate"
       },
+      "CurrentPracticeAttestationBody": {
+        "properties": {
+          "practice_ref": {
+            "type": "string",
+            "maxLength": 35,
+            "minLength": 35,
+            "title": "Practice Ref"
+          },
+          "baa_reference": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Baa Reference"
+          },
+          "attestation_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Attestation Name"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "practice_ref",
+          "baa_reference",
+          "attestation_name",
+          "checks"
+        ],
+        "title": "CurrentPracticeAttestationBody"
+      },
       "DailyVolumeRow": {
         "properties": {
           "day": {
@@ -5302,6 +5473,36 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InitializeNoteTemplates": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "InitializeNoteTemplates"
+      },
+      "InitializedNoteTemplates": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "deleted",
+              "capacity"
+            ],
+            "title": "Status"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "created"
+        ],
+        "title": "InitializedNoteTemplates"
       },
       "IntakeDetail": {
         "properties": {
@@ -6630,6 +6831,10 @@
             "type": "boolean",
             "title": "Has Natmed Subscription"
           },
+          "held_medication_writes_enabled": {
+            "type": "boolean",
+            "title": "Held Medication Writes Enabled"
+          },
           "directory": {
             "items": {
               "$ref": "#/components/schemas/ResourceLink"
@@ -6649,6 +6854,7 @@
         "type": "object",
         "required": [
           "has_natmed_subscription",
+          "held_medication_writes_enabled",
           "directory",
           "medications"
         ],
@@ -7011,6 +7217,33 @@
           "attested": {
             "type": "boolean",
             "title": "Attested"
+          },
+          "self_attestation_available": {
+            "type": "boolean",
+            "title": "Self Attestation Available",
+            "default": false
+          },
+          "attestation_practice_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Practice Ref"
+          },
+          "attestation_baa_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Baa Reference"
           },
           "access_authorized": {
             "type": "boolean",
@@ -7629,7 +7862,7 @@
           "can_review_sources"
         ],
         "title": "SessionPrepSettingsData",
-        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current provider/practice/BAA/\nentitlement gate as review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
+        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current active-account decision\nas review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
       },
       "SettingsData": {
         "properties": {

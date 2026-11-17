@@ -11,7 +11,15 @@
 #   - Containers are not rolled back if one of them fails. We assume that if one fails, they will all fail, which isn't a great
 #     assumption.
 
+# The source SHA controls revisions and migration contracts; the independently
+# admitted immutable digest controls every image consumer. No tag fallback.
+if [[ $# -ne 2 || ! "$1" =~ ^[0-9a-f]{40}$ ||
+      ! "$2" =~ ^cosmaneuraprodregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}$ ]]; then
+    echo "A full source SHA and admitted production Core digest are required." >&2
+    exit 1
+fi
 GIT_SHA="$1"
+PRODUCTION_IMAGE_REF="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"
@@ -23,7 +31,6 @@ MIGRATION_JOB="cosmaneura-prod-migrate"
 WORKER_SCHEDULER_CONTAINERS="cosmaneura-prod-worker cosmaneura-prod-scheduler"
 WORKER_CONTAINER="cosmaneura-prod-worker"
 API_CONTAINER="cosmaneura-prod-app"
-PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Resolve protected configuration before invoking git, Docker, Azure, or any
 # other provider-facing subprocess. Keep the resolved JSON in this shell only,
@@ -41,6 +48,14 @@ if ! printf '%s' "$ENV_JSON" |
 fi
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 
+# Configuration loading can wait for the secret service. Recheck canonical
+# founder/current-source admission after that wait and before any Azure write.
+if ! python3 "$SCRIPT_DIR/../scripts/production_core_candidate.py" context; then
+	echo "Production source admission is no longer current."
+	exit 1
+fi
+unset GH_TOKEN GITHUB_TOKEN
+
 # Check for Git SHA input and validate it exists in repo
 if [[ -z "$GIT_SHA" ]]; then
 	echo "Error: Please provide a Git SHA as an argument."
@@ -54,7 +69,7 @@ fi
 
 # Convert potential short SHA to full SHA
 GIT_SHA=$(git rev-parse "$GIT_SHA")
-PRODUCTION_TAG="$PRODUCTION_IMAGE:$GIT_SHA"
+PRODUCTION_TAG="$PRODUCTION_IMAGE_REF"
 
 if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
 	exit 1
@@ -330,7 +345,7 @@ run_migrations() {
 initiate_deployment() {
 	local container_name=$1
 	local git_sha=$2
-	local image="${PRODUCTION_IMAGE}:${git_sha}"
+	local image="$PRODUCTION_IMAGE_REF"
 
 	# All declared production workloads are required. In particular, shipping
 	# the inbox without the scheduler would remove crash recovery.
@@ -355,7 +370,7 @@ initiate_deployment() {
 check_deployment() {
 	local container_name=$1
 	local git_sha=$2
-	local expected_image="${PRODUCTION_IMAGE}:${git_sha}"
+	local expected_image="$PRODUCTION_IMAGE_REF"
 	local expected_revision_name="${container_name}--${REVISION_STRING}"
 
 	if ! az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" &>/dev/null; then
@@ -439,7 +454,7 @@ check_deployment() {
 wait_for_incompatible_worker_replicas_to_drain() {
 	local container_name=$1
 	local git_sha=$2
-	local expected_image="${PRODUCTION_IMAGE}:${git_sha}"
+	local expected_image="$PRODUCTION_IMAGE_REF"
 	local attempts=0
 	local max_attempts=60 # 5 minutes
 	local active_revisions_mode

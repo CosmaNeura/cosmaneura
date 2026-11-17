@@ -28,13 +28,13 @@ import psycopg
 
 CONNECT_TIMEOUT_SECONDS = 10
 STATEMENT_TIMEOUT_MILLISECONDS = 30_000
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+CANCELLATION_MIGRATION = "49126bf99c72"
 EXPECTED_ENVIRONMENT = "production"
 EXPECTED_DATABASE_NAME = "production"
 EXPECTED_SCHEMA = "public"
 EXPECTED_DATABASE_HOST = "cosmaneura-prod-postgres.postgres.database.azure.com"
 LINUX_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
-BAA_CURRENT_REFERENCE = "CN-BAA-CUST-CW v2.3"
 ROOT = Path(__file__).resolve().parents[1]
 # Reviewed runtime ASTs, not imports: application initialization can mutate DBs.
 # A substantive normalizer change requires a fresh SQL-contract review.
@@ -67,7 +67,25 @@ NORMALIZATION_SOURCE_CONTRACTS = (
         "app/services/session_prep_provider_access.py",
         None,
         "resolve_session_prep_provider_access",
-        "bceba723b59de6606e5077c19045bb105ddb27a2e9fe9da8da7baf790e25a76b",
+        "fa61dd41c2efe96b0ffd70070c81c6a5b2174739893f2f4c06e4c213d7c1059c",
+    ),
+    (
+        "app/services/scribe_cancellation_access.py",
+        None,
+        "doctor_cancellation_denial",
+        "40341cfce0b672f9120c908a0c7618f5b9e2d72560e207bb2fb5df564c3befa2",
+    ),
+    (
+        "app/services/scribe_cancellation_access.py",
+        None,
+        "cancellation_denial",
+        "96d9dab120b3dcc7018dc0fde2aeea31ebe26fb07d31c4000d6536b421dbd4c3",
+    ),
+    (
+        "app/configuration/scribe_cancellation.py",
+        None,
+        "load_cancellation_settings",
+        "2908a25e82b061e0012e6a93148620e24a34c251eb508eba749a61080e0d9281",
     ),
     (
         "app/models/practice.py",
@@ -94,17 +112,10 @@ REQUIRED_SESSION_PREP_ANCESTORS = (
     "de9260834611",
 )
 
-DENIAL_REASONS = (
-    "provider_unavailable",
-    "pilot_grant_revoked",
-    "onboarding_incomplete",
-    "practice_membership_required",
-    "practice_membership_inactive",
-    "practice_access_not_authorized",
-    "baa_not_in_force",
-    "entitlement_not_in_force",
-)
+DENIAL_REASONS = ("provider_unavailable",)
 CLASSIFICATIONS = (*DENIAL_REASONS, "eligible")
+CANCELLATION_DENIAL_REASONS = ("scribe_cancelled_read_only", *DENIAL_REASONS)
+CANCELLATION_CLASSIFICATIONS = (*CANCELLATION_DENIAL_REASONS, "eligible")
 
 INTEGRITY_CHECKS = (
     "alembic_head_not_singular",
@@ -240,208 +251,45 @@ SELECT check_name, violations
 """
 
 ELIGIBILITY_QUERY: LiteralString = """
-WITH parameters AS (
-    SELECT %s::timestamptz AS observed_at,
-           %s::text AS current_baa_reference
-),
-pilot_state AS (
-    SELECT clerk_id,
-           bool_or(revoked_at IS NULL) AS has_active,
-           bool_or(revoked_at IS NOT NULL) AS has_revoked
-      FROM pilot_access_grandfather_grant
-     GROUP BY clerk_id
-),
-roster_history AS (
-    SELECT approval.approved_email COLLATE "C" AS approved_email,
-           bool_or(approval.revoked_at IS NOT NULL) AS has_revoked,
-           count(*) FILTER (
-               WHERE approval.revoked_at IS NULL
-                 AND (
-                     approval.expires_at IS NULL
-                     OR approval.expires_at > parameters.observed_at
-                 )
-           ) AS active_count
-      FROM organization_roster_approval AS approval
-      CROSS JOIN parameters
-     GROUP BY approval.approved_email COLLATE "C"
-),
-provider_state AS (
+WITH provider_state AS (
     SELECT CASE
         WHEN doctor.deleted_at IS NOT NULL
             THEN 'provider_unavailable'
-        WHEN NOT coalesce(pilot_state.has_active, false)
-         AND coalesce(pilot_state.has_revoked, false)
-            THEN 'pilot_grant_revoked'
-        WHEN doctor.onboarding_completed_at IS NULL
-            THEN 'onboarding_incomplete'
-        WHEN member.id IS NULL OR practice.id IS NULL
-            THEN 'practice_membership_required'
-        WHEN NOT (
-            member.access_revoked_at IS NULL
-            AND (
-                member.seat_state = 'active'
-                OR (
-                    member.seat_state = 'inactive'
-                    AND member.access_ends_at IS NOT NULL
-                    AND member.access_ends_at > parameters.observed_at
-                )
-            )
-        )
-            THEN 'practice_membership_inactive'
-        WHEN NOT CASE
-            WHEN practice.organization_id IS NULL
-                THEN member.attested_at IS NOT NULL
-            ELSE coalesce(
-                member.organization_roster_approval_id IS NOT NULL
-                AND member.organization_authorized_at IS NOT NULL
-                AND roster_approval.id = member.organization_roster_approval_id
-                AND roster_approval.revoked_at IS NULL
-                AND (
-                    roster_approval.expires_at IS NULL
-                    OR roster_approval.expires_at > parameters.observed_at
-                )
-                AND roster_approval.claimed_doctor_id = member.doctor_id
-                AND roster_approval.target_practice_id = member.practice_id
-                AND doctor.email IS NOT NULL
-                AND char_length(btrim(doctor.email)) <= 320
-                AND (
-                    char_length(btrim(doctor.email))
-                    - char_length(replace(btrim(doctor.email), '@', ''))
-                ) = 1
-                AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 1) <> ''
-                AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2) <> ''
-                AND position(
-                    '.' IN split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2)
-                ) > 0
-                AND lower(btrim(doctor.email) COLLATE "C")
-                    = roster_approval.approved_email
-                AND NOT coalesce(roster_history.has_revoked, false)
-                AND roster_history.active_count = 1
-                AND organization.id = practice.organization_id
-                AND organization.status = 'active'
-                AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2)
-                    = lower(ltrim(btrim(organization.email_domain), '@') COLLATE "C")
-                AND char_length(ltrim(btrim(organization.email_domain), '@'))
-                    BETWEEN 1 AND 253
-                AND position(
-                    '@' IN ltrim(btrim(organization.email_domain), '@')
-                ) = 0
-                AND position(
-                    '.' IN ltrim(btrim(organization.email_domain), '@')
-                ) > 0
-                AND practice.negotiated_baa_on_file
-                AND practice.negotiated_baa_reference IS NOT NULL
-                AND practice.negotiated_baa_reference <> ''
-                AND practice.negotiated_baa_effective_date IS NOT NULL
-                AND practice.negotiated_baa_effective_date
-                    <= parameters.observed_at,
-                false
-            )
-        END
-            THEN 'practice_access_not_authorized'
-        WHEN NOT (
-            (
-                practice.negotiated_baa_on_file
-                AND practice.negotiated_baa_reference IS NOT NULL
-                AND practice.negotiated_baa_reference <> ''
-                AND practice.negotiated_baa_effective_date IS NOT NULL
-                AND practice.negotiated_baa_effective_date
-                    <= parameters.observed_at
-            )
-            OR (
-                practice.baa_accepted_at IS NOT NULL
-                AND practice.baa_version = parameters.current_baa_reference
-            )
-        )
-            THEN 'baa_not_in_force'
-        WHEN NOT (
-        CASE
-            WHEN practice.subscription_status IN ('pending_verification', 'invalid')
-                THEN false
-            WHEN practice.billing_exempt
-             AND (
-                practice.billing_exempt_until IS NULL
-                OR practice.billing_exempt_until > parameters.observed_at
-             )
-                THEN true
-            WHEN practice.acquisition_source = 'public_self_service'
-             AND practice.subscription_status IN ('trialing', 'active')
-             AND NOT coalesce(
-                left(practice.stripe_subscription_id COLLATE "C", 4) = 'sub_'
-                AND char_length(practice.stripe_subscription_id) > 4
-                AND btrim(practice.stripe_subscription_id) COLLATE "C"
-                    = practice.stripe_subscription_id
-                AND left(practice.stripe_customer_id COLLATE "C", 4) = 'cus_'
-                AND char_length(practice.stripe_customer_id) > 4
-                AND btrim(practice.stripe_customer_id) COLLATE "C"
-                    = practice.stripe_customer_id
-                AND practice.stripe_state_version > 0,
-                false
-             )
-                THEN false
-            WHEN practice.subscription_status = 'active'
-                THEN true
-            WHEN practice.subscription_status = 'trialing'
-                THEN practice.trial_ends_at IS NOT NULL
-                 AND practice.trial_ends_at > parameters.observed_at
-            WHEN practice.subscription_status IS NOT NULL
-                THEN false
-            WHEN practice.acquisition_source = 'public_self_service'
-                THEN false
-            ELSE practice.trial_ends_at IS NOT NULL
-             AND practice.trial_ends_at > parameters.observed_at
-        END
-        OR coalesce(pilot_entitlement.matches_current_practice, false)
-        )
-            THEN 'entitlement_not_in_force'
         ELSE 'eligible'
     END AS classification
       FROM doctor
-      CROSS JOIN parameters
-      LEFT JOIN practice_member AS member ON member.doctor_id = doctor.id
-      LEFT JOIN practice ON practice.id = member.practice_id
-      LEFT JOIN pilot_state ON pilot_state.clerk_id = doctor.clerk_id
-      LEFT JOIN LATERAL (
-          SELECT count(*) = 1 AND bool_and(
-              doctor.clerk_id = btrim(doctor.clerk_id)
-              AND left(doctor.clerk_id, 5) = 'user_'
-              AND char_length(doctor.clerk_id) BETWEEN 6 AND 255
-              AND position(' ' IN doctor.clerk_id) = 0
-              AND doctor.email IS NOT NULL
-              AND char_length(btrim(doctor.email)) BETWEEN 1 AND 320
-              AND (
-                  char_length(btrim(doctor.email))
-                  - char_length(replace(btrim(doctor.email), '@', ''))
-              ) = 1
-              AND split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 1) <> ''
-              AND position(
-                  '.' IN split_part(lower(btrim(doctor.email) COLLATE "C"), '@', 2)
-              ) > 0
-              AND (pilot_grant.doctor_id_snapshot IS NULL OR pilot_grant.doctor_id_snapshot = doctor.id)
-              AND pilot_grant.practice_id_snapshot = practice.id
-              AND pilot_grant.email_snapshot = lower(btrim(doctor.email) COLLATE "C")
-              AND pilot_grant.email_sha256 = encode(
-                  sha256(convert_to(lower(btrim(doctor.email) COLLATE "C"), 'UTF8')),
-                  'hex'
-              )
-          ) AS matches_current_practice
-            FROM pilot_access_grandfather_grant AS pilot_grant
-           WHERE pilot_grant.clerk_id = doctor.clerk_id
-             AND pilot_grant.granted_at <= parameters.observed_at
-             AND (pilot_grant.revoked_at IS NULL OR pilot_grant.revoked_at > parameters.observed_at)
-      ) AS pilot_entitlement ON true
-      LEFT JOIN organization_roster_approval AS roster_approval
-        ON roster_approval.id = member.organization_roster_approval_id
-      LEFT JOIN roster_history
-        ON roster_history.approved_email = lower(btrim(doctor.email) COLLATE "C")
-      LEFT JOIN provider_organization AS organization
-        ON organization.id = roster_approval.organization_id
 )
 SELECT classification, count(*)::bigint
   FROM provider_state
  GROUP BY classification
  ORDER BY classification
 """
+
+# Processing remains denied after cancellation, while a separate generic-read
+# path enforces the export window. The exact Doctor reference is never selected
+# or emitted. TypeIDType stores UUIDs, so reconstruct the ledger's canonical
+# doctor_ reference inside SQL. Deleted accounts remain the first runtime gate.
+ELIGIBILITY_WITH_CANCELLATION_QUERY: LiteralString = ELIGIBILITY_QUERY.replace(
+    "        ELSE 'eligible'\n",
+    """        WHEN EXISTS (
+            SELECT 1 FROM scribe_cancellation_operation AS cancelled
+             WHERE cancelled.doctor_ref COLLATE "C" = (
+                 'doctor_' || (
+                     SELECT string_agg(
+                         substr('0123456789abcdefghjkmnpqrstvwxyz',
+                             substring(B'00' ||
+                                 ('x' || replace(doctor.id::text, '-', ''))::bit(128)
+                                 FROM digit * 5 + 1 FOR 5)::integer + 1, 1),
+                         '' ORDER BY digit
+                     )
+                     FROM generate_series(0, 25) AS encoded(digit)
+                 )
+             ) COLLATE "C"
+        ) THEN 'scribe_cancelled_read_only'
+        ELSE 'eligible'
+""",
+    1,
+)
 
 
 class InventoryFailure(RuntimeError):
@@ -722,16 +570,19 @@ def _parse_integrity(rows: Sequence[tuple[Any, ...]]) -> None:
 
 def _parse_classifications(
     rows: Sequence[tuple[Any, ...]],
+    *,
+    ledger_ready: bool = False,
 ) -> dict[str, int]:
     sparse: dict[str, int] = {}
-    allowed = set(CLASSIFICATIONS)
+    labels = CANCELLATION_CLASSIFICATIONS if ledger_ready else CLASSIFICATIONS
+    allowed = set(labels)
     for row in rows:
         if len(row) != 2 or not isinstance(row[0], str) or row[0] not in allowed:
             raise InventoryFailure("eligibility query returned an invalid shape")
         if row[0] in sparse:
             raise InventoryFailure("eligibility query returned a duplicate label")
         sparse[row[0]] = _count(row[1])
-    return {label: sparse.get(label, 0) for label in CLASSIFICATIONS}
+    return {label: sparse.get(label, 0) for label in labels}
 
 
 def _observed_at_text(observed_at: datetime) -> str:
@@ -750,18 +601,23 @@ def build_report(
     migration_head: str,
     observed_at: datetime,
     rollout_enabled: bool,
+    ledger_ready: bool = False,
 ) -> dict[str, Any]:
     """Build one identifier-free, canonically digested inventory report."""
 
     if not isinstance(rollout_enabled, bool):
         raise InventoryFailure("rollout state is invalid")
+    if type(ledger_ready) is not bool:
+        raise InventoryFailure("cancellation ledger state is invalid")
     if not isinstance(migration_head, str) or not migration_head:
         raise InventoryFailure("migration head is invalid")
-    if set(classification_counts) != set(CLASSIFICATIONS):
+    labels = CANCELLATION_CLASSIFICATIONS if ledger_ready else CLASSIFICATIONS
+    reasons = CANCELLATION_DENIAL_REASONS if ledger_ready else DENIAL_REASONS
+    if set(classification_counts) != set(labels):
         raise InventoryFailure("classification set is invalid")
-    counts = {label: _count(classification_counts[label]) for label in CLASSIFICATIONS}
+    counts = {label: _count(classification_counts[label]) for label in labels}
     payload: dict[str, Any] = {
-        "denial_reason_counts": {reason: counts[reason] for reason in DENIAL_REASONS},
+        "denial_reason_counts": {reason: counts[reason] for reason in reasons},
         "eligible": counts["eligible"],
         "environment": EXPECTED_ENVIRONMENT,
         "migration_head": migration_head,
@@ -770,6 +626,8 @@ def build_report(
         "schema_version": REPORT_SCHEMA_VERSION,
         "total": sum(counts.values()),
     }
+    if ledger_ready:
+        payload["cancellation_ledger_ready"] = True
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["evidence_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
     return payload
@@ -781,9 +639,14 @@ def collect_inventory(
     observed_at: datetime,
     rollout_enabled: bool,
     migration_contract: RepositoryMigrationContract | None = None,
+    ledger_ready: bool = False,
 ) -> dict[str, Any]:
     """Read aggregate eligibility state; never select or return identifiers."""
 
+    if type(ledger_ready) is not bool:
+        raise InventoryFailure("cancellation ledger state is invalid")
+    if ledger_ready and ELIGIBILITY_QUERY.count("        ELSE 'eligible'\n") != 1:
+        raise InventoryFailure("cancellation query contract is invalid")
     validate_runtime_normalization_contract()
     _parse_integrity(
         connection.execute(INTEGRITY_QUERY, (observed_at, observed_at)).fetchall()
@@ -793,17 +656,20 @@ def collect_inventory(
         _observed_migration_heads(connection.execute(MIGRATION_HEAD_QUERY).fetchall()),
         contract,
     )
+    if ledger_ready and CANCELLATION_MIGRATION not in contract.ancestors:
+        raise InventoryFailure("cancellation ledger migration is incompatible")
     counts = _parse_classifications(
         connection.execute(
-            ELIGIBILITY_QUERY,
-            (observed_at, BAA_CURRENT_REFERENCE),
-        ).fetchall()
+            ELIGIBILITY_WITH_CANCELLATION_QUERY if ledger_ready else ELIGIBILITY_QUERY
+        ).fetchall(),
+        ledger_ready=ledger_ready,
     )
     return build_report(
         counts,
         migration_head=migration_head,
         observed_at=observed_at,
         rollout_enabled=rollout_enabled,
+        ledger_ready=ledger_ready,
     )
 
 
@@ -867,6 +733,9 @@ def main() -> int:
                 connection,
                 observed_at=observed_at,
                 rollout_enabled=rollout_enabled,
+                ledger_ready=_rollout_enabled(
+                    os.environ.get("SCRIBE_CANCELLATION_LEDGER_READY")
+                ),
             )
             connection.rollback()
     except Exception:

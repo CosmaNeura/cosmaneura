@@ -58,11 +58,13 @@ function stubList(
   hasNatmed = false,
   drugRef: unknown[] = [],
   depletions: unknown[] = [],
+  heldWritesEnabled = true,
 ) {
   medicationList.mockResolvedValue({ data: meds })
   patientReferenceResources.mockResolvedValue({
     data: {
       has_natmed_subscription: hasNatmed,
+      held_medication_writes_enabled: heldWritesEnabled,
       directory: [],
       medications: meds
         .filter((m) => (m as { confirmed: boolean }).confirmed)
@@ -98,6 +100,102 @@ beforeEach(() => {
 })
 
 describe("MedicationPanel", () => {
+  it("hides new holds when disabled while retaining held labels, correction and confirmation", async () => {
+    stubList(
+      [
+        CONFIRMED,
+        { ...UNCONFIRMED, status: "active" },
+        { ...UNCONFIRMED, id: "existing_hold", status: "held" },
+      ],
+      false,
+      [],
+      [],
+      false,
+    )
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+    )
+    await screen.findByTestId("confirmed-medication")
+    expect(
+      screen.queryByRole("button", { name: "Hold" }),
+    ).not.toBeInTheDocument()
+    const active = screen.getAllByRole("combobox")[0]
+    expect(
+      within(active).queryByRole("option", { name: "Held temporarily" }),
+    ).not.toBeInTheDocument()
+    const held = screen.getAllByRole("combobox")[1]
+    expect(held).toHaveValue("held")
+    expect(
+      within(held).getByRole("option", { name: "Held temporarily" }),
+    ).toBeInTheDocument()
+    fireEvent.change(held, { target: { value: "active" } })
+    await waitFor(() =>
+      expect(medicationUpdate).toHaveBeenCalledWith({
+        path: { medication_id: "existing_hold" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
+        body: { status: "active" },
+      }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: "Confirm for patient list" })[1],
+      ).toBeEnabled(),
+    )
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Confirm for patient list" })[1],
+    )
+    await waitFor(() =>
+      expect(medicationUpdate).toHaveBeenLastCalledWith({
+        path: { medication_id: "existing_hold" },
+        headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
+        body: { confirmed: true },
+      }),
+    )
+  })
+
+  it("keeps Resume and a manual draft without enabling a missing release control", async () => {
+    let row = { ...CONFIRMED, status: "held" }
+    stubList([row])
+    medicationList.mockImplementation(() => Promise.resolve({ data: [row] }))
+    patientReferenceResources.mockImplementation(() =>
+      Promise.resolve({
+        data: {
+          has_natmed_subscription: false,
+          directory: [],
+          medications: [],
+        },
+      }),
+    )
+    medicationUpdate.mockImplementation(({ body }) => {
+      row = { ...row, status: body.status }
+      return Promise.resolve({ data: row })
+    })
+    render(
+      <MedicationPanel patientId="patient_1" appointmentId="visit_current" />,
+    )
+    await screen.findByRole("button", { name: "Resume" })
+    expect(screen.getByTestId("confirmed-medication")).toHaveTextContent(
+      "held temporarily",
+    )
+    const input = screen.getByRole("textbox", { name: /Add a medication/ })
+    fireEvent.change(input, { target: { value: "Unsaved synthetic entry" } })
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Resume" }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole("button", { name: "Hold" }),
+    ).not.toBeInTheDocument()
+    expect(input).toHaveValue("Unsaved synthetic entry")
+    expect(medicationUpdate).toHaveBeenCalledWith({
+      path: { medication_id: CONFIRMED.id },
+      headers: { "X-Cosmaneura-Medication-Reader": "held-v1" },
+      body: { status: "active" },
+    })
+  })
+
   it("declares held-reader support on all four reads while preserving patient and abort options", async () => {
     stubList([CONFIRMED])
     render(

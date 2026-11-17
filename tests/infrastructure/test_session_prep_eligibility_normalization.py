@@ -7,6 +7,7 @@ import re
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -184,8 +185,20 @@ class _Rows:
 
 
 class _Connection:
-    def __init__(self, violations: int = 0) -> None:
+    def __init__(
+        self,
+        violations: int = 0,
+        classifications: list[tuple[Any, ...]] | None = None,
+    ) -> None:
         self.violations = violations
+        self.classifications = (
+            classifications
+            if classifications is not None
+            else [
+                ("eligible", 2),
+                ("provider_unavailable", 1),
+            ]
+        )
         self.queries: list[str] = []
 
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> _Rows:
@@ -204,24 +217,116 @@ class _Connection:
             )
         if query == preflight.MIGRATION_HEAD_QUERY:
             return _Rows([("current_head",)])
-        if query == preflight.ELIGIBILITY_QUERY:
-            assert params[1] == preflight.BAA_CURRENT_REFERENCE
-            return _Rows([("eligible", 2), ("entitlement_not_in_force", 1)])
+        if query in (
+            preflight.ELIGIBILITY_QUERY,
+            preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY,
+        ):
+            assert params == ()
+            return _Rows(self.classifications)
         raise AssertionError("unexpected query")
 
 
-def _collect(connection: _Connection) -> dict[str, Any]:
+def _collect(connection: _Connection, *, ledger_ready: bool = False) -> dict[str, Any]:
     return preflight.collect_inventory(
         connection,
         observed_at=datetime(2026, 10, 30, tzinfo=UTC),
         rollout_enabled=False,
+        ledger_ready=ledger_ready,
         migration_contract=preflight.RepositoryMigrationContract(
             head="current_head",
             ancestors=frozenset(
-                {"current_head", *preflight.REQUIRED_SESSION_PREP_ANCESTORS}
+                {
+                    "current_head",
+                    *preflight.REQUIRED_SESSION_PREP_ANCESTORS,
+                    *([preflight.CANCELLATION_MIGRATION] if ledger_ready else []),
+                }
             ),
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "deleted,cancelled,expected",
+    [
+        (False, True, "scribe_cancelled_read_only"),
+        (True, True, "provider_unavailable"),
+        (False, False, "eligible"),
+    ],
+)
+def test_reviewed_active_account_runtime_and_cancellation_inventory_precedence(
+    deleted: bool,
+    cancelled: bool,
+    expected: str,
+) -> None:
+    """Execute the actual resolver AST with fixed rows, without app or DB imports."""
+    preflight.validate_runtime_normalization_contract()
+    tree = ast.parse(
+        (ROOT / "app/services/session_prep_provider_access.py").read_text()
+    )
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "resolve_session_prep_provider_access"
+    )
+    query = SimpleNamespace()
+    for name in ("select_from", "outerjoin", "where", "execution_options"):
+        setattr(query, name, lambda *args, **kwargs: query)
+    doctor = SimpleNamespace(
+        id=0,
+        clerk_id="synthetic",
+        deleted_at=datetime(2026, 11, 3, tzinfo=UTC) if deleted else None,
+    )
+    cancellation_calls = []
+
+    def cancellation(current, **kwargs):
+        cancellation_calls.append(current)
+        return "scribe_cancelled_read_only" if cancelled else None
+
+    namespace: dict[str, Any] = {
+        "datetime": datetime,
+        "UTC": UTC,
+        "Doctor": SimpleNamespace(id=0, clerk_id="synthetic"),
+        "PracticeMember": SimpleNamespace(doctor_id=0, practice_id=0),
+        "Practice": SimpleNamespace(id=0),
+        "col": lambda value: value,
+        "select": lambda *args: query,
+        "doctor_cancellation_denial": cancellation,
+        "_denied": lambda reason: SimpleNamespace(allowed=False, denial_reason=reason),
+        "SessionPrepProviderAccessDecision": SimpleNamespace,
+    }
+    module = ast.fix_missing_locations(
+        ast.Module(
+            body=[
+                ast.ImportFrom(
+                    module="__future__", names=[ast.alias(name="annotations")], level=0
+                ),
+                function,
+            ],
+            type_ignores=[],
+        )
+    )
+    exec(compile(module, "reviewed-account-policy", "exec"), namespace)
+    session = SimpleNamespace(
+        exec=lambda statement: SimpleNamespace(
+            one_or_none=lambda: (doctor, None, None),
+        )
+    )
+    decision = namespace["resolve_session_prep_provider_access"](
+        doctor,
+        session=session,
+        at=datetime(2026, 11, 3, tzinfo=UTC),
+    )
+    classification = "eligible" if decision.allowed else decision.denial_reason
+    assert classification == expected
+    assert len(cancellation_calls) == (0 if deleted else 1)
+    connection = _Connection(classifications=[(classification, 1)])
+    report = _collect(connection, ledger_ready=True)
+    assert report["total"] == 1
+    assert report["eligible"] == (1 if expected == "eligible" else 0)
+    if expected != "eligible":
+        assert report["denial_reason_counts"][expected] == 1
+    assert connection.queries[-1] == preflight.ELIGIBILITY_WITH_CANCELLATION_QUERY
 
 
 @pytest.mark.parametrize("violations", [1, 7])
@@ -238,7 +343,7 @@ def test_supported_report_keeps_fixed_labels_and_entire_total() -> None:
     report = _collect(_Connection())
     assert report["total"] == 3
     assert report["eligible"] == 2
-    assert report["denial_reason_counts"]["entitlement_not_in_force"] == 1
+    assert report["denial_reason_counts"]["provider_unavailable"] == 1
     assert set(report["denial_reason_counts"]) == set(preflight.DENIAL_REASONS)
     assert "unsupported_identity_or_billing_normalization" not in report
 
@@ -253,10 +358,16 @@ def test_sql_guard_covers_all_inputs_and_uses_binary_ascii_casing() -> None:
         "SELECT stripe_customer_id FROM practice",
     ):
         assert projection in preflight.INTEGRITY_QUERY
-    # No locale-dependent lower call remains at any email or domain use.
-    for call in re.findall(r"lower\([^\n]*", preflight.ELIGIBILITY_QUERY):
-        assert 'COLLATE "C"' in call
-    assert 'GROUP BY approval.approved_email COLLATE "C"' in preflight.ELIGIBILITY_QUERY
+    for obsolete_gate in (
+        "onboarding_completed_at",
+        "practice_member",
+        "provider_organization",
+        "organization_roster_approval",
+        "baa_accepted_at",
+        "subscription_status",
+        "pilot_access_grandfather_grant",
+    ):
+        assert obsolete_gate not in preflight.ELIGIBILITY_QUERY
     assert 'GROUP BY approved_email COLLATE "C"' in preflight.INTEGRITY_QUERY
 
 

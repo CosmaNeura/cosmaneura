@@ -151,11 +151,11 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
     assert "The supplied run is not a successful Terraform Apply" in workflow
     assert 'git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"' in workflow
     assert 'git diff --quiet "$apply_sha" "$TARGET_SHA" --' in workflow
-    assert workflow.count("group: cosmaneura-production-container-apps") == 1
+    assert workflow.count("group: cosmaneura-production-container-apps") == 2
     assert (
         "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}" not in workflow
     )
-    assert workflow.count("cancel-in-progress: false") == 2
+    assert workflow.count("cancel-in-progress: false") == 3
     assert apply_workflow.count("group: cosmaneura-production-container-apps") == 1
     assert "cancel-in-progress: false" in apply_workflow
     apply_trigger = apply_workflow[: apply_workflow.index("permissions:\n")]
@@ -196,6 +196,11 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     authorization_job = workflow[authorization_start:deployment_scope_start]
 
     production_job = workflow[workflow.index("\n  deploy:") :]
+    gates = workflow[
+        workflow.index("\n  release-gates:") : workflow.index(
+            "\n  production-candidate:"
+        )
+    ]
 
     assert "github.event_name == 'workflow_dispatch'" in authorization_job
     assert "github.ref == 'refs/heads/master'" in authorization_job
@@ -209,12 +214,14 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     assert '"$PROMOTION_ACTOR" != "JohnClem"' in authorization_job
     assert '"$PROMOTION_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
 
-    assert "needs: [web, app, deployment-scope, authorize-production]" in production_job
+    assert "needs: [web, app, deployment-scope, authorize-production]" in gates
+    assert workflow.count("needs: [release-gates]") == 2
     assert "github.event_name == 'workflow_dispatch'" in production_job
     assert "github.ref == 'refs/heads/master'" in production_job
     assert "github.actor == 'JohnClem'" in production_job
     assert "github.triggering_actor == 'JohnClem'" in production_job
-    assert "needs.authorize-production.result == 'success'" in production_job
+    assert "needs.authorize-production.result == 'success'" in gates
+    assert "needs.release-gates.result == 'success'" in production_job
 
 
 def test_legacy_staging_branch_deployment_path_is_absent() -> None:

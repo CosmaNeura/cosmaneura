@@ -77,7 +77,9 @@ async def test_only_missing_admission_can_return_not_prepared(monkeypatch, error
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
     arguments: DiscoveryArguments = {
-        "caller": cast(admission.CaptureCaller, None),
+        "caller": admission.CaptureCaller(
+            "synthetic", "synthetic", "synthetic", uuid4()
+        ),
         "binding_ref": "synthetic-binding",
         "workspace_id": uuid4(),
         "operation": protocol.ReadOperation(kind="provider_encounter"),

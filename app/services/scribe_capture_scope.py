@@ -290,6 +290,7 @@ def _authorized_scope(
     client_turn_id: UUID,
     appointment_ref: str,
     settings: AuthorityKernelSettings,
+    purpose="process",
 ) -> dict[str, Any]:
     with ExitStack() as ownership:
         return _authorized_scope_with_rows(
@@ -301,6 +302,7 @@ def _authorized_scope(
             appointment_ref=appointment_ref,
             settings=settings,
             ownership=ownership,
+            purpose=purpose,
         )
 
 
@@ -314,6 +316,7 @@ def _authorized_scope_with_rows(
     appointment_ref: str,
     settings: AuthorityKernelSettings,
     ownership: ExitStack,
+    purpose="process",
 ) -> dict[str, Any]:
     arguments = {
         "session": session,
@@ -425,7 +428,7 @@ def _authorized_scope_with_rows(
         or doctor.clerk_id != identity.subject
         or appointment.doctor_id != doctor.id
         or patient.doctor_id != doctor.id
-        or not doctor_access_in_force(doctor)
+        or not doctor_access_in_force(doctor, purpose=purpose)
     ):
         raise CaptureScopeDenied
     return {
@@ -463,6 +466,7 @@ def authorize_capture_binding(
     client_turn_id: UUID,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
     capture_settings: ScribeCaptureSettings = SCRIBE_CAPTURE_SETTINGS,
+    purpose="process",
 ) -> ScribeCaptureBinding:
     """Authorize an existing binding inside the caller's phase transaction.
 
@@ -488,6 +492,7 @@ def authorize_capture_binding(
         client_turn_id=client_turn_id,
         appointment_ref=str(candidate.appointment_id),
         settings=settings,
+        purpose=purpose,
     )
     binding = _locked(session, ScribeCaptureBinding, candidate.id)
     if (
@@ -511,6 +516,7 @@ def resolve_capture_binding(
     request_nonce: UUID,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
     capture_settings: ScribeCaptureSettings = SCRIBE_CAPTURE_SETTINGS,
+    purpose="process",
 ) -> CaptureBindingSnapshot:
     if not capture_settings.enabled:
         raise authority.AuthorityKernelDisabledError
@@ -525,6 +531,7 @@ def resolve_capture_binding(
                 client_turn_id=client_turn_id,
                 appointment_ref=appointment_ref,
                 settings=settings,
+                purpose=purpose,
             )
             digest = _scope_digest(scope)
             bindings = session.exec(

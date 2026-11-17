@@ -37,6 +37,7 @@ vi.mock("~/utils/reference-toolkit-feature", () => ({
 }))
 const sessionPrepUi = vi.hoisted(() => ({
   buildAvailable: false,
+  viewAsActive: false,
   settings: undefined as
     | {
         session_prep?: {
@@ -45,6 +46,9 @@ const sessionPrepUi = vi.hoisted(() => ({
         }
       }
     | undefined,
+}))
+vi.mock("~/components/ViewAsRouteGuard", () => ({
+  useViewAsActive: () => sessionPrepUi.viewAsActive,
 }))
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>()
@@ -156,6 +160,7 @@ function show({
 
 beforeEach(() => {
   sessionPrepUi.buildAvailable = false
+  sessionPrepUi.viewAsActive = false
   sessionPrepUi.settings = undefined
 })
 
@@ -175,7 +180,11 @@ const priorNotes: NonNullable<NoteDetail["session_prep_prior_notes"]> = {
 }
 
 describe("Session Prep provider discovery", () => {
-  it.each(["an existing provider", "a newly onboarded provider"])(
+  it.each([
+    "an existing provider",
+    "a new active provider before practice setup",
+    "a grandfathered provider without a practice snapshot",
+  ])(
     "shows the panel and prior-visit controls to %s once current access is ready",
     () => {
       sessionPrepUi.buildAvailable = true
@@ -197,7 +206,7 @@ describe("Session Prep provider discovery", () => {
     ],
     ["a new provider before onboarding discovery is available", {}],
     [
-      "an incomplete, revoked, or unentitled provider",
+      "a disabled account",
       { session_prep: { eligible: false, can_review_sources: false } },
     ],
     [
@@ -223,6 +232,23 @@ describe("Session Prep provider discovery", () => {
     expect(
       screen.queryByRole("button", { name: "Mark reviewed for Session Prep" }),
     ).not.toBeInTheDocument()
+  })
+
+  it("explains how to leave view-as without exposing another account's Session Prep", () => {
+    sessionPrepUi.buildAvailable = true
+    sessionPrepUi.viewAsActive = true
+    sessionPrepUi.settings = {
+      session_prep: { eligible: false, can_review_sources: false },
+    }
+
+    show({ priorNotes })
+
+    expect(
+      screen.getByRole("region", { name: "Session Prep access" }),
+    ).toHaveTextContent(
+      "Exit read-only view-as and open a visit in your own account",
+    )
+    expect(screen.queryByTestId("session-prep-panel")).not.toBeInTheDocument()
   })
 })
 

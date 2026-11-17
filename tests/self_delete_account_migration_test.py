@@ -17,7 +17,7 @@ MIGRATION_PATH = (
 )
 
 SELF_DELETE_REVISION = "c764298c7590"
-PARENT_REVISION = "312b217ebba4"
+PARENT_REVISION = "69bad2e072e2"
 
 
 def _migration_module():

@@ -88,6 +88,11 @@ describe("Sovereign panel terminal authorization integration", () => {
       body: string
       clientTurnId: string | null
     }> = []
+    const timedRequests: Array<{
+      method: string | undefined
+      authorization: string | null
+      body: unknown
+    }> = []
     let exchanges = 0
     let rotations = 0
 
@@ -97,6 +102,18 @@ describe("Sovereign panel terminal authorization integration", () => {
         const url = String(input)
         if (url.endsWith("/embed/history-retained"))
           return json({ ...emptyHistory(), schema_version: "1.2.0" })
+        if (url.endsWith("/embed/history-timed")) {
+          timedRequests.push({
+            method: init?.method,
+            authorization: new Headers(init?.headers).get("authorization"),
+            body: JSON.parse(String(init?.body)),
+          })
+          return json({
+            ...emptyHistory(),
+            schema_version: "1.3.0",
+            observed_at: new Date().toISOString(),
+          })
+        }
         if (url === "/embed/v1/context-tokens/exchange") {
           exchanges += 1
           return json(contextTokenResponse(firstToken), 201)
@@ -164,6 +181,17 @@ describe("Sovereign panel terminal authorization integration", () => {
         document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
       ).toBe(false),
     )
+    expect(timedRequests).toEqual([
+      {
+        method: "POST",
+        authorization: `Bearer ${firstToken}`,
+        body: {
+          schema_version: "1.3.0",
+          mode: "recent",
+          client_turn_id: null,
+        },
+      },
+    ])
     const input = document.querySelector<HTMLTextAreaElement>(".cnp-in")
     const send = document.querySelector<HTMLButtonElement>(".cnp-send")
     expect(input).not.toBeNull()

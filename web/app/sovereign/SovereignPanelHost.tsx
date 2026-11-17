@@ -676,14 +676,56 @@ export function SovereignPanelHost({
           getContext: async () => {
             if (cancelled || accessLost)
               throw new Error("Open record changed while context was resolving")
-            await checkPrincipal()
-            if (cancelled || accessLost) {
-              throw new Error("Open record changed while context was resolving")
+            const controller = new AbortController()
+            const authentication = { pending: 0, failed: false }
+            let readSignal: AbortSignal | undefined
+            const abort = () => controller.abort()
+            statusController.signal.addEventListener("abort", abort, {
+              once: true,
+            })
+            if (statusController.signal.aborted) abort()
+            try {
+              return await withReadDeadline(
+                async (signal) => {
+                  readSignal = signal
+                  readAuthentication.set(signal, authentication)
+                  signal.throwIfAborted()
+                  if (cancelled || accessLost)
+                    throw new Error(
+                      "Open record changed while context was resolving",
+                    )
+                  await checkPrincipal(signal)
+                  signal.throwIfAborted()
+                  if (cancelled || accessLost)
+                    throw new Error(
+                      "Open record changed while context was resolving",
+                    )
+                  // The record-bound token remains the only authority input.
+                  // No chart content crosses this browser bridge.
+                  return { clientId: appointmentId }
+                },
+                { signal: controller.signal },
+              )
+            } catch (error) {
+              // Timed panel reads use this bridge directly, so they need the
+              // same terminal SDK failure fence as the governed history reads.
+              if (authentication.pending > 0 || authentication.failed) {
+                if (!cancelled && !accessLost) {
+                  discardMounted()
+                  setRecovery("unavailable")
+                }
+                const denied = new Error(
+                  "Assistant access is unavailable",
+                ) as Error & { authenticationUnavailable: boolean }
+                denied.name = error instanceof Error ? error.name : "Error"
+                denied.authenticationUnavailable = true
+                throw denied
+              }
+              throw error
+            } finally {
+              if (readSignal) readAuthentication.delete(readSignal)
+              statusController.signal.removeEventListener("abort", abort)
             }
-            // The record-bound mount token is the only authority input. No raw
-            // history, note, patient, labs content, or Session Prep handle
-            // crosses this browser bridge.
-            return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,
           onSessionPrepStateChange: (state) => {

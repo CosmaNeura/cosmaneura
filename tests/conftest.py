@@ -76,6 +76,7 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "pilot_access_continuity_amendment": (
         "pilot_access_continuity_amendment_reject_mutation"
     ),
+    "pilot_access_practice_binding": "pilot_access_practice_binding_reject_mutation",
     "pilot_access_continuity_amendment_identity": (
         "pilot_access_continuity_amendment_identity_reject_mutation"
     ),

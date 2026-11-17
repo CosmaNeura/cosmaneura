@@ -7,10 +7,10 @@ from decouple import config
 class SessionPrepProviderSettings:
     """One default-off global switch for provider Session Prep.
 
-    Provider lifecycle, practice, BAA, entitlement, view-as, and record
-    ownership are live authorization inputs at their existing boundaries. The
-    rollout switch deliberately carries no account allowlist, so a provider
-    becomes eligible automatically when those current access checks pass.
+    Every active account is included, without a practice, billing or legacy
+    grant enrollment requirement. Account lifecycle, view-as and exact record
+    ownership remain live checks at their own boundaries. The rollout switch
+    deliberately carries no account allowlist.
     """
 
     enabled: bool = False
@@ -19,7 +19,7 @@ class SessionPrepProviderSettings:
         """Return only global availability for an authenticated subject.
 
         This is not an access decision. Callers that touch provider data must
-        still apply their current provider/practice/record authorization.
+        still apply current account and exact-record authorization.
         """
 
         return bool(self.enabled and subject)

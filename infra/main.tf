@@ -610,13 +610,26 @@ resource "azurerm_container_app" "app" {
       }
 
       startup_probe {
-        port      = 80
-        transport = "TCP"
+        failure_count_threshold = 10
+        port                    = 80
+        transport               = "TCP"
       }
 
+      # A TCP probe passes while uvicorn holds the port even if the event loop
+      # is wedged, so a frozen API never restarts. TrustedHostMiddleware covers
+      # /healthcheck; the probe must send the public host or it gets a 400.
       liveness_probe {
-        port      = 80
-        transport = "TCP"
+        port                    = 80
+        transport               = "HTTP"
+        path                    = "/healthcheck"
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+
+        header {
+          name  = "Host"
+          value = "app.cosmaneura.com"
+        }
       }
 
       # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
@@ -683,6 +696,17 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
+        for_each = merge(
+          local.scribe_cancellation_api_public_values,
+          local.scribe_workflow_client_api_public_values,
+        )
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
         for_each = local.core_cab_secret_values
         content {
           name        = env.key
@@ -692,7 +716,7 @@ resource "azurerm_container_app" "app" {
 
       env {
         name  = "SCRIBE_WORKFLOW_ENABLED"
-        value = tostring(var.enable_scribe_workflow)
+        value = tostring(local.effective_enable_scribe_workflow)
       }
 
       env {
@@ -701,24 +725,24 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
-        for_each = var.enable_scribe_workflow ? [1] : []
+        for_each = local.effective_enable_scribe_workflow ? [1] : []
         content {
           name  = "SCRIBE_SERVICE_BASE_URL"
-          value = var.scribe_service_base_url
+          value = local.effective_scribe_service_base_url
         }
       }
 
       dynamic "env" {
-        for_each = var.enable_scribe_workflow ? [1] : []
+        for_each = local.effective_enable_scribe_workflow ? [1] : []
         content {
           name  = "SCRIBE_SERVICE_SCOPE"
-          value = var.scribe_service_scope
+          value = local.effective_scribe_service_scope
         }
       }
 
       env {
         name  = "SCRIBE_SERVICE_TIMEOUT_SECONDS"
-        value = tostring(var.scribe_service_timeout_seconds)
+        value = tostring(local.effective_scribe_service_timeout_seconds)
       }
 
       # yes, memory is defined as a string and CPU is defined as a float
@@ -792,6 +816,16 @@ resource "azurerm_container_app" "app" {
     precondition {
       condition     = length(local.session_prep_api_env_name_collisions) == 0
       error_message = "Session Prep rollout settings cannot also be supplied through generic API environment-name sets"
+    }
+
+    precondition {
+      condition     = length(local.scribe_cancellation_api_env_name_collisions) == 0
+      error_message = "Scribe cancellation and workflow-client settings cannot also be supplied through generic API environment-name sets"
+    }
+
+    precondition {
+      condition     = local.production_live_effective_settings_valid
+      error_message = "production live settings pin requires default pin inputs plus valid effective cancellation, native/workflow, and bundle JSON/digest contracts"
     }
 
     precondition {
@@ -910,6 +944,15 @@ resource "azurerm_container_app" "scheduler" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.scribe_cancellation_shared_public_values
+
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # Beat is lightweight: it polls Redis every few seconds and enqueues
       # the occasional task. Half a CPU and 512Mi is generous.
       dynamic "env" {
@@ -970,6 +1013,11 @@ resource "azurerm_container_app" "scheduler" {
     }
 
     precondition {
+      condition     = length(local.scribe_cancellation_scheduler_env_name_collisions) == 0
+      error_message = "Scribe cancellation ledger settings cannot also be supplied through generic scheduler environment-name sets"
+    }
+
+    precondition {
       condition     = local.database_url_configuration_valid
       error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
     }
@@ -1001,7 +1049,7 @@ resource "azurerm_container_app" "worker" {
   # user-assigned identity rather than permitting an ambient credential chain.
   identity {
     type         = "UserAssigned"
-    identity_ids = concat([azurerm_user_assigned_identity.health_services.id], var.scribe_core_bundle.attach_existing_translation_identity ? [data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id] : [])
+    identity_ids = concat([azurerm_user_assigned_identity.health_services.id], local.effective_scribe_core_bundle.attach_existing_translation_identity ? [data.azurerm_user_assigned_identity.scribe_bundle_translation[0].id] : [])
   }
 
   template {
@@ -1116,6 +1164,22 @@ resource "azurerm_container_app" "worker" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.scribe_cancellation_shared_public_values
+
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # A worker-only, default-off switch for the fixed PHI-free production
+      # check-in. PYTHON_ENV=production remains a second mandatory runtime gate.
+      env {
+        name  = "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"
+        value = tostring(var.enable_session_prep_production_worker_heartbeat)
+      }
+
       env {
         name  = "AZURE_DEID_AUTH_MODE"
         value = var.enable_deid_managed_identity ? "managed_identity" : "client_secret"
@@ -1188,6 +1252,16 @@ resource "azurerm_container_app" "worker" {
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
     precondition {
+      condition     = length(local.session_prep_production_heartbeat_env_name_collisions) == 0
+      error_message = "The fixed Session Prep production heartbeat switch cannot also be supplied through generic worker environment-name sets"
+    }
+
+    precondition {
+      condition     = !var.enable_session_prep_production_worker_heartbeat || var.session_prep_production_rollout.enabled
+      error_message = "The Session Prep production worker heartbeat cannot be enabled while the global Session Prep rollout is disabled"
+    }
+
+    precondition {
       condition     = length(local.scribe_native_worker_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic worker environment-name sets"
     }
@@ -1195,6 +1269,11 @@ resource "azurerm_container_app" "worker" {
     precondition {
       condition     = length(local.session_prep_worker_env_name_collisions) == 0
       error_message = "Session Prep rollout settings cannot also be supplied through generic worker environment-name sets"
+    }
+
+    precondition {
+      condition     = length(local.scribe_cancellation_worker_env_name_collisions) == 0
+      error_message = "Scribe cancellation ledger settings cannot also be supplied through generic worker environment-name sets"
     }
 
     precondition {

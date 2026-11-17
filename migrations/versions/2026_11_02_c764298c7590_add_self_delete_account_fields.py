@@ -5,7 +5,7 @@ Additive, reversible columns for Apple 5.1.1(v) self-delete:
 - practice.owner_reassignment_needed_at flags a practice left ownerless
 
 Revision ID: c764298c7590
-Revises: 312b217ebba4
+Revises: 69bad2e072e2
 Create Date: 2026-11-02 12:20:00.000000
 
 """
@@ -17,7 +17,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c764298c7590"
-down_revision: Union[str, None] = "312b217ebba4"
+down_revision: Union[str, None] = "69bad2e072e2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

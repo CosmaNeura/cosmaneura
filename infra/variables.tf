@@ -14,6 +14,12 @@ variable "enable_public_phi_observability" {
   default     = false
 }
 
+variable "enable_session_prep_production_worker_heartbeat" {
+  description = "Enable the fixed PHI-free Session Prep worker heartbeat in production after monitor and failure/recovery routing acceptance."
+  type        = bool
+  default     = false
+}
+
 variable "public_phi_alert_email" {
   description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
   type        = string
@@ -150,7 +156,9 @@ variable "python_public_vars" {
     "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
     # capability authorization remains independent of Authority Kernel rollout
     "AUTHORITY_CLERK_ISSUER",
-    "DURABLE_WEBHOOK_INBOX_ENABLED"
+    "DURABLE_WEBHOOK_INBOX_ENABLED",
+    # Explicit default-off production input, shared by API/worker/scheduler.
+    "HELD_MEDICATION_WRITES_ENABLED"
   ]
 
   validation {
@@ -164,6 +172,7 @@ variable "python_public_vars" {
       "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
       "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
       "SESSION_PREP_PROVIDER_ENABLED",
+      "AUTO_MIGRATE_ON_STARTUP",
       "SCRIBE_CAPTURE_ENABLED",
       "SCRIBE_NATIVE_WORKLOAD_ENABLED",
       "SCRIBE_NATIVE_WORKLOAD_AUDIENCE",
@@ -181,8 +190,15 @@ variable "python_public_vars" {
       "SCRIBE_ENCOUNTER_CREATION_ENABLED",
       "SCRIBE_ENCOUNTER_PREP_ENABLED",
       "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
+      "SCRIBE_CANCELLATION_LEDGER_READY",
+      "SCRIBE_CANCELLATION_ENABLED",
+      "SCRIBE_CANCELLATION_GRACE_DAYS",
+      "SCRIBE_CANCELLATION_PHI_SCOPE",
+      "SCRIBE_CANCELLATION_POLICY_SHA256",
+      "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED",
+      "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED",
     ]))) == 0
-    error_message = "Session Prep, native Scribe, and durable Zoom rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
+    error_message = "Session Prep, native Scribe, durable Zoom, cancellation, and workflow-client rollout settings are source-controlled separately and cannot be supplied through python_public_vars"
   }
 }
 

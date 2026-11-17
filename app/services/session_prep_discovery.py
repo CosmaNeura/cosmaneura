@@ -19,8 +19,8 @@ def resolve_session_prep_discovery(
 ) -> SessionPrepDiscovery:
     """Project account-level availability for provider-facing UI.
 
-    ``provider_access_allowed`` is the same current Doctor/practice/BAA/
-    entitlement decision used by the source-review route's practice gate.
+    ``provider_access_allowed`` is the same current active-account decision
+    used by source review. No separate practice or pilot enrollment is needed.
     Record and note ownership remain request-specific and are still resolved
     by every execution route.
     """

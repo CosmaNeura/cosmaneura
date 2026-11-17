@@ -16,6 +16,7 @@ import { LabResultsPanel } from "~/components/LabResultsPanel"
 import { MedicationPanel } from "~/components/MedicationPanel"
 import { PrivateVisitNote } from "~/components/PrivateVisitNote"
 import { SessionPrepPriorNotes } from "~/components/SessionPrepPriorNotes"
+import { useViewAsActive } from "~/components/ViewAsRouteGuard"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { Header } from "~/components/notes/Header"
@@ -279,6 +280,7 @@ function NoteHeader({
 }
 
 export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
+  const viewAsActive = useViewAsActive()
   const [sessionPrepOpenRequest, setSessionPrepOpenRequest] = useState(0)
   const [sessionPrepState, setSessionPrepState] =
     useState<SessionPrepUiState | null>(null)
@@ -379,6 +381,19 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
             Patient details can be matched later in Scribe. Your recording and
             note stay with this visit.
           </p>
+        )}
+
+        {sessionPrepBuildAvailable && viewAsActive && (
+          <section
+            className="mb-4 rounded-lg border p-4"
+            aria-label="Session Prep access"
+          >
+            <h2 className="font-semibold">Session Prep</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Exit read-only view-as and open a visit in your own account to use
+              Session Prep.
+            </p>
+          </section>
         )}
 
         {sessionPrepAvailable &&

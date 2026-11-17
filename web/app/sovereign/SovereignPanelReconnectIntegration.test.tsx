@@ -117,6 +117,8 @@ async function fixture() {
     authorization: string | null
   }> = []
   const prepRequests: Array<{ turn: string; authorization: string | null }> = []
+  const timedRequests: Array<{ body: unknown; authorization: string | null }> =
+    []
   const welcomes: Array<string | null> = []
   const welcomeSignals: AbortSignal[] = []
   const tokens = ["a", "b", "c"].map((letter) => `mctx_${letter.repeat(48)}`)
@@ -126,6 +128,21 @@ async function fixture() {
       if (url.endsWith("/embed/history-retained"))
         return json({ ...emptyHistory(), schema_version: "1.2.0" })
       const authorization = new Headers(init?.headers).get("authorization")
+      if (url.endsWith("/embed/history-timed")) {
+        expect(init?.method).toBe("POST")
+        const body = JSON.parse(String(init?.body))
+        expect(body).toEqual({
+          schema_version: "1.3.0",
+          mode: "recent",
+          client_turn_id: null,
+        })
+        timedRequests.push({ body, authorization })
+        return json({
+          ...emptyHistory(),
+          schema_version: "1.3.0",
+          observed_at: new Date(control.now).toISOString(),
+        })
+      }
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges.push({
           record: JSON.parse(String(init?.body)).record_ref,
@@ -199,6 +216,8 @@ async function fixture() {
       document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
     ).toBe(false),
   )
+  expect(timedRequests).toHaveLength(1)
+  expect(timedRequests[0].authorization).toBe(`Bearer ${tokens[0]}`)
   const expireAndLock = async () => {
     document.querySelector<HTMLButtonElement>(".cnp-fab")!.click()
     control.now += 16 * 60_000
@@ -211,6 +230,7 @@ async function fixture() {
     control,
     exchanges,
     prepRequests,
+    timedRequests,
     welcomes,
     welcomeSignals,
     tokens,
