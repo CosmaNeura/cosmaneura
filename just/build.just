@@ -197,6 +197,11 @@ _build_requirements:
 build: _build_requirements _production_build_assertions build_javascript
 	@just _banner_echo "Building Python Image..."
 	@just _python_nixpacks_env_args | xargs -0 {{NIXPACKS_CREDENTIAL_BARRIER}} {{PYTHON_NIXPACKS_BUILD_CMD}}
+	@{{NIXPACKS_CREDENTIAL_BARRIER}} python3 -m scripts.build_scribe_runtime --core-image "{{PYTHON_IMAGE_TAG}}" --output-image "{{PYTHON_IMAGE_TAG}}"
+
+# Refusal-only check invoked by candidate preparation, before publication.
+_scribe_runtime_prepare_check:
+	@{{NIXPACKS_CREDENTIAL_BARRIER}} python3 -m scripts.scribe_runtime_check --image "{{PYTHON_IMAGE_TAG}}"
 
 build_push: _production_build_assertions
 	# Only the deployable Python image is published. The JS builder image stays on
