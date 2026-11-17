@@ -126,7 +126,7 @@ def build(
         core_revision = (core_config.get("Labels") or {}).get(
             "org.opencontainers.image.revision", ""
         )
-        if not re.fullmatch(r"[0-9a-f]{40}(?:-dirty)?", core_revision):
+        if not re.fullmatch(r"[0-9a-f]{40}", core_revision):
             raise ValueError("scribe_runtime_core_revision_rejected")
         core_user = core_config.get("User") or "0:0"
         if not re.fullmatch(r"[0-9]+(?::[0-9]+)?", core_user):

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import build_scribe_runtime as builder
 from scripts import scribe_runtime_check as guard
 from scripts import scribe_runtime_oci as oci
 from scripts.build_scribe_runtime import source_context
@@ -224,6 +225,35 @@ def test_source_checkout_must_match_pin_before_context_copy(tmp_path):
     subprocess.run(["git", "init", str(repository)], capture_output=True, check=True)
     with pytest.raises(ValueError):
         source_context(repository, tmp_path / "context")
+
+
+@pytest.mark.parametrize("revision", ["a" * 40 + "-dirty", "a" * 39, ""])
+def test_core_source_revision_must_be_immutable_before_source_fetch(
+    monkeypatch, revision
+):
+    calls = []
+    monkeypatch.setattr(
+        builder, "command", lambda arguments: calls.append(arguments) or ""
+    )
+    monkeypatch.setattr(
+        builder,
+        "docker_archive_to_oci",
+        lambda *args: (
+            "sha256:" + "1" * 64,
+            {
+                "architecture": "amd64",
+                "os": "linux",
+                "config": {
+                    "Labels": {"org.opencontainers.image.revision": revision},
+                    "User": "0:0",
+                },
+            },
+        ),
+    )
+    with pytest.raises(ValueError, match="core_revision_rejected"):
+        builder.build("synthetic-core-image", "synthetic-output-image")
+    assert len(calls) == 1
+    assert calls[0][:3] == ["docker", "image", "save"]
 
 
 def test_guard_is_only_in_prepare_workflow_path():
