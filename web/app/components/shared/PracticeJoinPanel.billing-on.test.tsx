@@ -92,18 +92,17 @@ describe("existing account with both Stripe readiness flags on", () => {
     },
   )
 
-  it("keeps an active comp and a pilot out of acquisition billing", () => {
-    expect(
-      billingActionKind(
-        practice({ billing_enabled: true, billing_exempt_active: true }),
-      ),
-    ).toBe("none")
-    expect(
-      billingActionKind(
-        practice({ billing_enabled: true, pilot_access_grant_active: true }),
-      ),
-    ).toBe("none")
-  })
+  it.each([
+    { billing_exempt_active: true },
+    { pilot_access_grant_active: true },
+  ])(
+    "keeps an active comp and a pilot out of acquisition billing",
+    (overrides) => {
+      expect(
+        billingActionKind(practice({ billing_enabled: true, ...overrides })),
+      ).toBe("none")
+    },
+  )
 
   it("keeps the legacy pilot out of the pending-verification wall", () => {
     render(

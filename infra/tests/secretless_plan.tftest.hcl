@@ -1190,6 +1190,7 @@ run "production_live_settings_pin_projects_full_env" {
       toset([for entry in azurerm_container_app.app.template[0].container[0].env : entry.name]) ==
       setunion(
         toset(jsondecode(file("${path.module}/../tests/infrastructure/fixtures/production_live_env_names.json")).app),
+        toset(["STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"]),
         toset([
           "SCRIBE_CAPTURE_LONG_VISITS_ENABLED",
           "SCRIBE_CAPTURE_RECOVERY_ENABLED",
@@ -1211,7 +1212,7 @@ run "production_live_settings_pin_projects_full_env" {
         ])
       )
     )
-    error_message = "app env names must equal the live fixture plus the reviewed 17 dark adds"
+    error_message = "app env names must equal the live fixture plus the reviewed 17 dark adds and F1 price references"
   }
 
   assert {
@@ -1219,6 +1220,7 @@ run "production_live_settings_pin_projects_full_env" {
       toset([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.name]) ==
       setunion(
         toset(jsondecode(file("${path.module}/../tests/infrastructure/fixtures/production_live_env_names.json")).worker),
+        toset(["STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"]),
         toset([
           "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED",
           "SESSION_PREP_PROVIDER_ENABLED",
@@ -1231,7 +1233,7 @@ run "production_live_settings_pin_projects_full_env" {
         ])
       )
     )
-    error_message = "worker env names must equal the live fixture plus the reviewed 8 dark adds"
+    error_message = "worker env names must equal the live fixture plus the reviewed 8 dark adds and F1 price references"
   }
 
   assert {

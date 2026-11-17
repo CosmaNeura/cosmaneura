@@ -24,8 +24,7 @@ def test_env_files_flag_values_unchanged():
     # not depend on remote refs being present in a shallow CI checkout.
     names = ".env .env.dev .env.dev.local-example .env.local-example .env.production.backend .env.production.frontend .env.shared .env.staging.backend .env.staging.frontend .env.test .envrc".split()
     evidence = "\n".join(
-        name
-        + ":"
+        f"{name}:"
         + "\n".join(
             re.findall(
                 r"^(?:export\s+)?\w+_ENABLED=.*$", (ROOT / name).read_text(), re.M
@@ -33,10 +32,8 @@ def test_env_files_flag_values_unchanged():
         )
         for name in names
     )
-    assert (
-        hashlib.sha256(evidence.encode()).hexdigest()
-        == "6c05265decf395bfba70e0f14ece7854bfbb459698ca4f66c34cf4de45fe6b91"
-    )
+    expected = "6c05265decf395bfba70e0f14ece7854bfbb459698ca4f66c34cf4de45fe6b91"
+    assert hashlib.sha256(evidence.encode()).hexdigest() == expected
 
 
 def test_invoice_table_migration_is_add_only_without_backfill():
