@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal, cast
 
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
@@ -27,13 +27,7 @@ from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 from app import log
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.clerk import clerk
-from app.services.doctor_account_closure import (
-    ACCOUNT_CLOSURE_RETENTION_YEARS,
-    _aware as _closure_aware,
-    _seven_years_after as _closure_seven_years_after,
-    _sha256 as _closure_sha256,
-    _video_integrations,
-)
+from app.services import doctor_account_closure as _account_closure
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
@@ -69,7 +63,7 @@ from sqlmodel import Session, col, select
 CONFIRM_PHRASE = "DELETE"
 ACCOUNT_DELETION_PENDING = "deletion_pending"
 ACCOUNT_DELETION_DELETED = "deleted"
-SELF_DELETE_RETENTION_YEARS = ACCOUNT_CLOSURE_RETENTION_YEARS
+SELF_DELETE_RETENTION_YEARS = _account_closure.ACCOUNT_CLOSURE_RETENTION_YEARS
 SELF_DELETE_RESOURCE_TYPE = "doctor_self_delete"
 SELF_DELETE_OPERATOR_PREFIX = "self:doctor:"
 SELF_DELETE_REASON = "Authenticated self-delete requested by the account holder"
@@ -132,14 +126,14 @@ def apply_clinical_record_retention_policy(
 def _sha256(value: str) -> str:
     """Reuse master's closure digest helper (same bytes)."""
 
-    return _closure_sha256(value)
+    return _account_closure._sha256(value)
 
 
 def _aware(value: datetime | None) -> datetime:
     """Reuse master's timezone-aware clock helper with self-delete errors."""
 
     try:
-        return _closure_aware(value)
+        return _account_closure._aware(value)
     except ValueError as error:
         raise DoctorSelfDeleteError(str(error)) from error
 
@@ -147,7 +141,7 @@ def _aware(value: datetime | None) -> datetime:
 def _seven_years_after(value: datetime) -> datetime:
     """Reuse master's retention-window helper (ACCOUNT_CLOSURE_RETENTION_YEARS)."""
 
-    return _closure_seven_years_after(value)
+    return _account_closure._seven_years_after(value)
 
 
 def _require_confirm(confirm: str) -> None:
@@ -281,7 +275,9 @@ def _delete_personal_settings(session: Session, doctor: Doctor) -> None:
     ).all():
         session.delete(preference)
     # Same video-OAuth cleanup path as master's operator account closure.
-    for integration in _video_integrations(session, doctor=doctor, lock=True):
+    for integration in _account_closure._video_integrations(
+        session, doctor=doctor, lock=True
+    ):
         session.delete(integration)
 
 
