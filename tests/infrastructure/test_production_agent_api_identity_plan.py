@@ -604,6 +604,16 @@ def test_invalid_schema_version_is_refused() -> None:
         m.evaluate(document, now=NOW)
 
 
+def test_boolean_schema_version_is_refused() -> None:
+    """True == 1 numerically, so only the type arm refuses this input."""
+
+    document = _document()
+    document["schema_version"] = True
+
+    with pytest.raises(m.IdentityPlanRefused, match="schema_version is invalid"):
+        m.evaluate(document, now=NOW)
+
+
 def test_invalid_mode_is_refused() -> None:
     document = _document()
     document["mode"] = "deploy"
@@ -620,9 +630,27 @@ def test_all_zero_candidate_source_sha_is_refused() -> None:
         m.evaluate(document, now=NOW)
 
 
+def test_non_hex_candidate_source_sha_is_refused() -> None:
+    document = _document()
+    document["candidate_source_sha"] = "g" * 40
+
+    with pytest.raises(m.IdentityPlanRefused, match="candidate_source_sha is invalid"):
+        m.evaluate(document, now=NOW)
+
+
 def test_plan_input_cannot_carry_verification_state() -> None:
     document = _document()
     document["expected_plan_sha256"] = f"sha256_{'a' * 64}"
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="plan input cannot contain verification state"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_plan_input_cannot_carry_after_snapshot() -> None:
+    document = _document()
+    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=False)
 
     with pytest.raises(
         m.IdentityPlanRefused, match="plan input cannot contain verification state"
@@ -638,6 +666,23 @@ def test_provider_and_public_identities_must_be_isolated() -> None:
         m.IdentityPlanRefused, match="provider and public identities are not isolated"
     ):
         m.evaluate(document, now=NOW)
+
+
+def test_provider_public_name_collision_is_refused_by_isolation_only() -> None:
+    """Distinct client/principal IDs keep unique-9 intact; only isolation refuses."""
+
+    document = _document()
+    provider = document["bindings"]["provider_identity"]
+    public = document["bindings"]["public_identity"]
+    public["name"] = provider["name"]
+    public["resource_id"] = provider["resource_id"]
+    assert public["client_id"] != provider["client_id"]
+    assert public["principal_id"] != provider["principal_id"]
+
+    with pytest.raises(m.IdentityPlanRefused) as caught:
+        m.evaluate(document, now=NOW)
+
+    assert str(caught.value) == "provider and public identities are not isolated"
 
 
 def test_production_identity_bindings_must_be_unique() -> None:
@@ -682,6 +727,42 @@ def test_scribe_role_definition_mismatch_is_refused() -> None:
         if role["id"] == SCRIBE_ROLE_ID
     )
     scribe["description"] = "Tampered scribe definition"
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="Scribe.Transcript.Write definition mismatch"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_scribe_role_disabled_is_refused() -> None:
+    """Keep app and resource definitions equal so only the is_enabled arm refuses."""
+
+    document = _document()
+    for snapshot_name in ("application", "resource_service_principal"):
+        scribe = next(
+            role
+            for role in document["before"][snapshot_name]["app_roles"]
+            if role["id"] == SCRIBE_ROLE_ID
+        )
+        scribe["is_enabled"] = False
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="Scribe.Transcript.Write definition mismatch"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_scribe_role_allowed_member_types_mismatch_is_refused() -> None:
+    """Keep app and resource equal so only the allowed_member_types arm refuses."""
+
+    document = _document()
+    for snapshot_name in ("application", "resource_service_principal"):
+        scribe = next(
+            role
+            for role in document["before"][snapshot_name]["app_roles"]
+            if role["id"] == SCRIBE_ROLE_ID
+        )
+        scribe["allowed_member_types"] = ["Application", "User"]
 
     with pytest.raises(
         m.IdentityPlanRefused, match="Scribe.Transcript.Write definition mismatch"
