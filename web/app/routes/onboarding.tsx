@@ -15,6 +15,10 @@ import { AnimatedCheckmark } from "~/components/shared/AnimatedCheckmark"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { PracticeAccessEndingNotice } from "~/components/shared/PracticeMemberAccess"
+import {
+  ScribePracticeSetup,
+  isScribeSetupRequest,
+} from "~/components/shared/ScribePracticeSetup"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   CheckRow,
@@ -102,9 +106,17 @@ export function canLeaveOnboarding(data: {
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  const scribeSetup = isScribeSetupRequest(request.url)
   const viewAsCheck = await checkViewAsStatus()
   if (viewAsCheck.state !== "ready") {
     return { viewAsCheck }
+  }
+  if (scribeSetup && viewAsCheck.status.active) {
+    return {
+      accountRecoveryRequired: false as const,
+      viewAsCheck,
+      scribeSetupBlocked: true as const,
+    }
   }
   if (viewAsCheck.status.active && viewAsCheck.status.diagnostic_code) {
     return {
@@ -132,7 +144,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 
   // The server's effective access decision includes exact-account grants. Do
   // not recompute authorization from the factual practice payload here.
-  if (canLeaveOnboarding(data)) {
+  if (canLeaveOnboarding(data) && !scribeSetup) {
     throw redirect(href("/notes"))
   }
 
@@ -145,6 +157,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   return {
     accountRecoveryRequired: false as const,
     viewAsCheck,
+    scribeSetup,
     ...data,
     email,
     channel,
@@ -183,7 +196,11 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
       </header>
       <main className="mx-auto max-w-5xl px-5 py-10">
         {!onboardingData ? (
-          <AccountRecoveryRequired />
+          "scribeSetupBlocked" in loaderData ? (
+            <ScribePracticeSetup practice={null} viewAs />
+          ) : (
+            <AccountRecoveryRequired />
+          )
         ) : onboardingData.organizationAccess?.state === "claim" ? (
           <OrganizationAccessFlow
             opportunity={onboardingData.organizationAccess}
@@ -200,6 +217,28 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           <OrganizationAccessRevoked practice={practice} />
         ) : practice?.access_ended ? (
           <PracticeAccessEndingNotice practice={practice} />
+        ) : onboardingData.scribeSetup ? (
+          <ScribePracticeSetup
+            practice={practice}
+            viewAs={onboardingData.viewAsCheck.status.active}
+            enrollment={
+              <PracticeFlow
+                practice={practice}
+                onPractice={setPractice}
+                channel={onboardingData.channel}
+                email={onboardingData.email}
+              />
+            }
+            agreement={
+              practice ? (
+                <BaaClickwrap
+                  practice={practice}
+                  onPractice={setPractice}
+                  onDecline={() => window.location.assign("/scribe/setup")}
+                />
+              ) : undefined
+            }
+          />
         ) : practiceReady(practice) ? (
           <OptionalSetup
             biography={onboardingData.biography}
