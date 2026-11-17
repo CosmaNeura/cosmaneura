@@ -1,18 +1,8 @@
-"""Authenticated self-delete for the caller's own Cosmaneura identity.
+"""Authenticated self-delete for the caller's own Cosmaneura identity (Apple 5.1.1(v)).
 
-Implements the Cosmas half of Apple Guideline 5.1.1(v) for Scribe. The caller
-deletes only themselves: identity comes from the verified Clerk session, never
-from a target user id. Clerk deletion uses the existing ``CLERK_PRIVATE_KEY``
-integration (``app.configuration.clerk.clerk``); no new secrets are introduced.
-
-Local soft-disable, retention window, video OAuth cleanup, and timestamp helpers
-reuse master's ``doctor_account_closure`` primitives. Self-delete then adds the
-Apple-required Clerk user removal and the ownerless-practice latch that the
-operator CLI deliberately does not perform.
-
-Clinical and practice records are not purged here. See
-``apply_clinical_record_retention_policy`` — the single retention hook where
-counsel/John will decide later what must be held.
+Reuses ``doctor_account_closure`` helpers for soft-disable / retention / video OAuth;
+adds Clerk user removal and the ownerless-practice latch. Clinical purge policy
+lives in ``apply_clinical_record_retention_policy``.
 """
 
 from __future__ import annotations
@@ -25,10 +15,15 @@ from typing import Any, Literal, cast
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 
 from app import log
-from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.clerk import clerk
 from app.services import doctor_account_closure as _account_closure
 from app.services.external_webhook_inbox import provider_log_ref
+from app.services.public_entitlements import (
+    ClinicianSeatPolicyError,
+    active_clinician_seat_count,
+    record_active_clinician_seat_quantity,
+)
+from app.services.stripe_billing import has_nonterminal_subscription
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
     get_active_runtime_superadmin_capability_kinds,
@@ -36,14 +31,7 @@ from app.services.superadmin_capability import (
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
-from app.models.authority import (
-    AuthorityActor,
-    AuthorityActorExternalIdentity,
-    AuthorityAuditEvent,
-    AuthorityTenant,
-    AuthorityTenantMembership,
-    MountContextSession,
-)
+from app.models.authority import AuthorityAuditEvent
 from app.models.doctor import Doctor
 from app.models.note_template_preference import NoteTemplatePreference
 from app.models.organization_access import OrganizationRosterApproval
@@ -72,6 +60,13 @@ SELF_DELETE_REASON = "Authenticated self-delete requested by the account holder"
 class DoctorSelfDeleteError(ValueError):
     """Privacy-safe refusal for the self-delete workflow."""
 
+    status_code: int = 400
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        if status_code is not None:
+            self.status_code = status_code
+
 
 DeletionStatus = Literal["deleted", "already_deleted"]
 
@@ -79,20 +74,19 @@ DeletionStatus = Literal["deleted", "already_deleted"]
 @dataclass(frozen=True)
 class DoctorSelfDeleteResult:
     status: DeletionStatus
-    doctor_id: TypeIDType
+    doctor_id: TypeIDType | None
     practice_id: TypeIDType | None
     practice_left_ownerless: bool
     clerk_identity_removed: bool
+    stripe_follow_up_required: bool
     changed: bool
 
 
 @dataclass(frozen=True)
-class _AuthorityScope:
-    identity: AuthorityActorExternalIdentity
-    actor: AuthorityActor
-    membership: AuthorityTenantMembership
-    tenant: AuthorityTenant
-    sessions: tuple[MountContextSession, ...]
+class PendingSelfDeleteRow:
+    doctor_id: TypeIDType
+    clerk_id: str
+    practice_id: TypeIDType | None
 
 
 def apply_clinical_record_retention_policy(
@@ -101,37 +95,17 @@ def apply_clinical_record_retention_policy(
     practice_id: TypeIDType | None,
     session: Session,
 ) -> None:
-    """RETENTION HOOK — single strategy point for clinical-record retention.
-
-    John is confirming retention policy with counsel. Until that decision lands,
-    this function holds nothing and deletes nothing clinical.
-
-    Kept (tied to the practice / historical record, not the deleted login):
-    - patients, appointments, notes, transcripts, visit audio references
-    - BAA acceptances and practice entity rows
-    - other members' accounts and practice workforce data
-    - append-only access / authority audit history
-
-    Removed elsewhere in this module (personal only):
-    - profile fields (email, biography, api_key, personal settings)
-    - local video OAuth credentials, note-template preferences
-    - the caller's practice membership access, authority mount sessions
-    - the caller's Clerk identity (via the existing Clerk server key)
-    """
+    """Retention hook: holds/deletes nothing clinical until counsel decides."""
 
     del doctor_id, practice_id, session
     return
 
 
 def _sha256(value: str) -> str:
-    """Reuse master's closure digest helper (same bytes)."""
-
     return _account_closure._sha256(value)
 
 
 def _aware(value: datetime | None) -> datetime:
-    """Reuse master's timezone-aware clock helper with self-delete errors."""
-
     try:
         return _account_closure._aware(value)
     except ValueError as error:
@@ -139,107 +113,65 @@ def _aware(value: datetime | None) -> datetime:
 
 
 def _seven_years_after(value: datetime) -> datetime:
-    """Reuse master's retention-window helper (ACCOUNT_CLOSURE_RETENTION_YEARS)."""
-
     return _account_closure._seven_years_after(value)
 
 
 def _require_confirm(confirm: str) -> None:
     if confirm != CONFIRM_PHRASE:
-        raise DoctorSelfDeleteError("confirm must be the exact phrase DELETE")
+        raise DoctorSelfDeleteError(
+            "confirm must be the exact phrase DELETE",
+            status_code=422,
+        )
 
 
 def _audit_step(
     *,
     event: str,
-    doctor_id: TypeIDType,
+    doctor_id: TypeIDType | None,
     practice_id: TypeIDType | None,
     result: str,
+    **extra: Any,
 ) -> None:
-    log.info(
-        "doctor_self_delete_step",
-        event_code=event,
-        doctor_id_hash=_sha256(str(doctor_id)),
-        doctor_ref=provider_log_ref(f"doctor:{doctor_id}"),
-        practice_id=str(practice_id) if practice_id is not None else None,
-        result=result,
-    )
+    payload: dict[str, Any] = {
+        "event_code": event,
+        "practice_id": str(practice_id) if practice_id is not None else None,
+        "result": result,
+    }
+    if doctor_id is not None:
+        payload["doctor_id_hash"] = _sha256(str(doctor_id))
+        payload["doctor_ref"] = provider_log_ref(f"doctor:{doctor_id}")
+    payload.update(extra)
+    log.info("doctor_self_delete_step", **payload)
 
 
-def _authority_scope(
-    session: Session, *, clerk_subject: str, lock: bool
-) -> _AuthorityScope | None:
-    subject_statement = select(AuthorityActorExternalIdentity).where(
-        AuthorityActorExternalIdentity.subject == clerk_subject
-    )
-    if lock:
-        subject_statement = subject_statement.with_for_update()
-    subject_rows = list(session.exec(subject_statement).all())
-    settings = AUTHORITY_KERNEL_SETTINGS
-    if not settings.has_valid_clerk_issuer():
+def _authority_scope(session: Session, *, clerk_subject: str, lock: bool):
+    """Reuse closure authority lookup; soft-fail so self-delete can continue."""
+    try:
+        return _account_closure._authority_scope(
+            session, clerk_subject=clerk_subject, lock=lock
+        )
+    except _account_closure.DoctorAccountClosureError:
         return None
-    active = [
-        row
-        for row in subject_rows
-        if row.issuer == settings.clerk_issuer and row.revoked_at is None
-    ]
-    if len(active) != 1:
-        return None
-    identity = active[0]
-    actor_statement = select(AuthorityActor).where(
-        AuthorityActor.id == identity.actor_id
-    )
-    if lock:
-        actor_statement = actor_statement.with_for_update()
-    actor = session.exec(actor_statement).one_or_none()
-    if actor is None or actor.actor_kind != "human":
-        return None
-    membership_statement = select(AuthorityTenantMembership).where(
-        AuthorityTenantMembership.actor_id == actor.id,
-        AuthorityTenantMembership.status == "active",
-    )
-    if lock:
-        membership_statement = membership_statement.with_for_update()
-    memberships = list(session.exec(membership_statement).all())
-    if len(memberships) != 1 or memberships[0].membership_kind != "provider":
-        return None
-    membership = memberships[0]
-    tenant = session.exec(
-        select(AuthorityTenant).where(AuthorityTenant.id == membership.tenant_id)
-    ).one_or_none()
-    if tenant is None:
-        return None
-    session_statement = select(MountContextSession).where(
-        MountContextSession.actor_id == actor.id,
-        MountContextSession.status == "active",
-        col(MountContextSession.revoked_at).is_(None),
-    )
-    if lock:
-        session_statement = session_statement.with_for_update()
-    sessions = tuple(session.exec(session_statement).all())
-    return _AuthorityScope(
-        identity=identity,
-        actor=actor,
-        membership=membership,
-        tenant=tenant,
-        sessions=sessions,
-    )
+
+
+def _clerk_unavailable() -> DoctorSelfDeleteError:
+    return DoctorSelfDeleteError("clerk identity could not be deleted", status_code=503)
 
 
 def _delete_clerk_identity(clerk_id: str) -> bool:
     """Delete the Clerk user through the existing server key. True if removed now."""
 
     if not isinstance(clerk_id, str) or not clerk_id.startswith("user_"):
-        raise DoctorSelfDeleteError("clerk identity is invalid")
+        raise DoctorSelfDeleteError("clerk identity is invalid", status_code=400)
     try:
         clerk.users.delete(user_id=clerk_id)
         return True
     except ClerkErrors as error:
         if type(error.status_code) is not int or error.status_code != 404:
-            raise DoctorSelfDeleteError("clerk identity could not be deleted") from None
+            raise _clerk_unavailable() from None
         data = error.data
         if not isinstance(data, ClerkErrorsData):
-            raise DoctorSelfDeleteError("clerk identity could not be deleted") from None
+            raise _clerk_unavailable() from None
         errors = data.errors
         if (
             not isinstance(errors, list)
@@ -248,18 +180,16 @@ def _delete_clerk_identity(clerk_id: str) -> bool:
             or type(errors[0].code) is not str
             or errors[0].code != "resource_not_found"
         ):
-            raise DoctorSelfDeleteError("clerk identity could not be deleted") from None
+            raise _clerk_unavailable() from None
         return False
     except DoctorSelfDeleteError:
         raise
     except Exception as error:
-        raise DoctorSelfDeleteError("clerk identity could not be deleted") from error
+        raise _clerk_unavailable() from error
 
 
 def _scrub_personal_profile(doctor: Doctor) -> None:
-    # Column is nullable; Doctor.email stays typed as `str` for call sites
-    # that assume a Clerk-backed address until scrub. Cast keeps pyright from
-    # forcing Optional across the codebase without a type: ignore directive.
+    # email column is nullable; cast keeps Doctor.email typed as str elsewhere.
     doctor.email = cast(Any, None)
     doctor.biography = ""
     doctor.api_key = None
@@ -281,10 +211,79 @@ def _delete_personal_settings(session: Session, doctor: Doctor) -> None:
         session.delete(integration)
 
 
+def _flag_stripe_seat_follow_up(
+    session: Session,
+    *,
+    practice: Practice,
+    doctor_id: TypeIDType,
+) -> bool:
+    """Flag seat-sync follow-up without canceling Stripe or refusing delete."""
+
+    if (
+        not has_nonterminal_subscription(practice)
+        or not practice.stripe_subscription_id
+    ):
+        return False
+    try:
+        record_active_clinician_seat_quantity(session, practice)
+        target = practice.stripe_quantity_sync_target
+    except ClinicianSeatPolicyError:
+        try:
+            target = active_clinician_seat_count(session, practice.id)
+        except ClinicianSeatPolicyError:
+            target = 0
+        practice.stripe_quantity_sync_required = True
+        practice.stripe_quantity_sync_target = target
+        practice.stripe_quantity_sync_version += 1
+        practice.stripe_quantity_sync_error = None
+        session.add(practice)
+    _audit_step(
+        event="doctor_self_delete.stripe_seat_sync_required",
+        doctor_id=doctor_id,
+        practice_id=practice.id,
+        result="queued",
+        stripe_quantity_sync_required=True,
+        stripe_quantity_sync_target=target,
+        stripe_subscription_present=True,
+    )
+    return True
+
+
+def delete_clerk_only_identity(
+    *,
+    clerk_id: str,
+    confirm: str,
+    clerk_deleter=None,
+) -> DoctorSelfDeleteResult:
+    """Remove a Clerk subject that never received a Doctor row."""
+
+    _require_confirm(confirm)
+    if clerk_deleter is None:
+        clerk_deleter = _delete_clerk_identity
+    removed = clerk_deleter(clerk_id)
+    _audit_step(
+        event="doctor_self_delete.clerk_only",
+        doctor_id=None,
+        practice_id=None,
+        result="deleted" if removed else "already_absent",
+        clerk_id_prefix=clerk_id[:12] if isinstance(clerk_id, str) else None,
+    )
+    return DoctorSelfDeleteResult(
+        status="deleted",
+        doctor_id=None,
+        practice_id=None,
+        practice_left_ownerless=False,
+        clerk_identity_removed=True,
+        stripe_follow_up_required=False,
+        changed=True,
+    )
+
+
 def delete_own_account(
     *,
     doctor_id: TypeIDType,
     confirm: str,
+    authenticated_doctor_id: TypeIDType | None = None,
     session: Session | None = None,
     now: datetime | None = None,
     clerk_deleter=None,
@@ -292,6 +291,11 @@ def delete_own_account(
     """Delete the authenticated caller's own account. Never accepts a target id."""
 
     _require_confirm(confirm)
+    if authenticated_doctor_id is not None:
+        assert_self_only(
+            authenticated_doctor_id=authenticated_doctor_id,
+            requested_doctor_id=doctor_id,
+        )
     if clerk_deleter is None:
         clerk_deleter = _delete_clerk_identity
     if session is None:
@@ -299,6 +303,7 @@ def delete_own_account(
             return delete_own_account(
                 doctor_id=doctor_id,
                 confirm=confirm,
+                authenticated_doctor_id=authenticated_doctor_id,
                 session=cast(Session, managed),
                 now=now,
                 clerk_deleter=clerk_deleter,
@@ -308,8 +313,8 @@ def delete_own_account(
     retain_until = _seven_years_after(current)
     operator_ref = f"{SELF_DELETE_OPERATOR_PREFIX}{doctor_id}"
     practice_left_ownerless = False
+    stripe_follow_up_required = False
     practice_id: TypeIDType | None = None
-    clerk_identity_removed = False
     clerk_id_for_delete: str | None = None
 
     try:
@@ -320,7 +325,10 @@ def delete_own_account(
             ).one_or_none(),
         )
         if doctor is None:
-            raise DoctorSelfDeleteError("provider account does not exist")
+            raise DoctorSelfDeleteError(
+                "provider account does not exist",
+                status_code=400,
+            )
 
         if doctor.account_deletion_status == ACCOUNT_DELETION_DELETED:
             _audit_step(
@@ -338,6 +346,7 @@ def delete_own_account(
                 practice_id=member.practice_id if member is not None else None,
                 practice_left_ownerless=False,
                 clerk_identity_removed=True,
+                stripe_follow_up_required=False,
                 changed=False,
             )
 
@@ -379,11 +388,13 @@ def delete_own_account(
                 )
             except SuperadminCapabilityError as error:
                 raise DoctorSelfDeleteError(
-                    "superadmin capability state could not be verified"
+                    "superadmin capability state could not be verified",
+                    status_code=409,
                 ) from error
             if protected:
                 raise DoctorSelfDeleteError(
-                    "active superadmin capabilities must be revoked before self-delete"
+                    "active superadmin capabilities must be revoked before self-delete",
+                    status_code=409,
                 )
 
             doctor.account_deletion_status = ACCOUNT_DELETION_PENDING
@@ -398,10 +409,14 @@ def delete_own_account(
 
             practice: Practice | None = None
             member: PracticeMember | None = None
+            held_active_seat = False
             if member_snapshot is not None:
                 practice = lock_practice_seats(session, member_snapshot.practice_id)
                 if practice is None:
-                    raise DoctorSelfDeleteError("provider practice does not exist")
+                    raise DoctorSelfDeleteError(
+                        "provider practice does not exist",
+                        status_code=400,
+                    )
                 practice_id = practice.id
                 member = cast(
                     PracticeMember,
@@ -411,6 +426,10 @@ def delete_own_account(
                         .with_for_update()
                         .execution_options(populate_existing=True)
                     ).one(),
+                )
+                held_active_seat = (
+                    member.access_revoked_at is None
+                    and member.seat_state == ClinicianSeatState.active.value
                 )
 
             apply_clinical_record_retention_policy(
@@ -429,6 +448,10 @@ def delete_own_account(
             _scrub_personal_profile(doctor)
             doctor.deleted_at = current
             session.add(doctor)
+
+            revoke_digest = _sha256(
+                f"self-delete:{doctor.id}:{practice_id}:{current.isoformat()}"
+            )
 
             if member is not None and practice is not None:
                 if member.access_revoked_at is None:
@@ -481,8 +504,17 @@ def delete_own_account(
                     grant.revoked_at = current
                     grant.revoked_by_ref = operator_ref
                     grant.revocation_reason = SELF_DELETE_REASON
+                    grant.revocation_plan_sha256 = revoke_digest
                     grant.retain_until = retain_until
                     session.add(grant)
+
+                # H1: never refuse or cancel Stripe; flag operator seat follow-up.
+                if held_active_seat or practice_left_ownerless:
+                    stripe_follow_up_required = _flag_stripe_seat_follow_up(
+                        session,
+                        practice=practice,
+                        doctor_id=doctor.id,
+                    )
 
             authority = _authority_scope(
                 session, clerk_subject=doctor.clerk_id, lock=True
@@ -509,9 +541,7 @@ def delete_own_account(
                         actor_id=authority.actor.id,
                         resource_type=SELF_DELETE_RESOURCE_TYPE,
                         resource_ref=f"self-delete:{_sha256(str(doctor.id))}",
-                        request_digest=_sha256(
-                            f"{doctor.id}:{practice_id}:{current.isoformat()}"
-                        ),
+                        request_digest=revoke_digest,
                         platform_refs=[],
                     )
                 )
@@ -527,11 +557,13 @@ def delete_own_account(
                         expires_at=retain_until,
                         document_reference=(
                             f"doctor-self-delete:{doctor.id}:"
-                            f"ownerless={int(practice_left_ownerless)}"
+                            f"ownerless={int(practice_left_ownerless)}:"
+                            f"stripe_follow_up={int(stripe_follow_up_required)}"
                         ),
                         evidence_sha256=_sha256(
                             f"self-delete:{doctor.id}:{practice.id}:"
-                            f"{int(practice_left_ownerless)}"
+                            f"{int(practice_left_ownerless)}:"
+                            f"{int(stripe_follow_up_required)}"
                         ),
                     )
                 )
@@ -554,7 +586,8 @@ def delete_own_account(
     except SQLAlchemyError:
         session.rollback()
         raise DoctorSelfDeleteError(
-            "self-delete database operation failed; verify state before retrying"
+            "self-delete database operation failed; verify state before retrying",
+            status_code=400,
         ) from None
 
     assert clerk_id_for_delete is not None
@@ -591,7 +624,8 @@ def delete_own_account(
         session.rollback()
         raise DoctorSelfDeleteError(
             "self-delete marked pending and Clerk removed, but final status "
-            "write failed; retry to mark deleted"
+            "write failed; retry to mark deleted",
+            status_code=503,
         ) from None
 
     return DoctorSelfDeleteResult(
@@ -600,16 +634,75 @@ def delete_own_account(
         practice_id=practice_id,
         practice_left_ownerless=practice_left_ownerless,
         clerk_identity_removed=True,
+        stripe_follow_up_required=stripe_follow_up_required,
         changed=True,
     )
+
+
+def list_pending_self_deletes(
+    *,
+    session: Session | None = None,
+    limit: int = 100,
+) -> tuple[PendingSelfDeleteRow, ...]:
+    if limit < 1 or limit > 1000:
+        raise DoctorSelfDeleteError("limit is invalid", status_code=400)
+    if session is None:
+        with get_session() as managed:
+            return list_pending_self_deletes(
+                session=cast(Session, managed),
+                limit=limit,
+            )
+
+    rows = session.exec(
+        select(Doctor)
+        .where(Doctor.account_deletion_status == ACCOUNT_DELETION_PENDING)
+        .order_by(col(Doctor.deleted_at).asc().nulls_last(), col(Doctor.id).asc())
+        .limit(limit)
+    ).all()
+    pending: list[PendingSelfDeleteRow] = []
+    for doctor in rows:
+        member = session.exec(
+            select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
+        ).one_or_none()
+        pending.append(
+            PendingSelfDeleteRow(
+                doctor_id=doctor.id,
+                clerk_id=doctor.clerk_id,
+                practice_id=member.practice_id if member is not None else None,
+            )
+        )
+    return tuple(pending)
+
+
+def sweep_pending_self_deletes(
+    *,
+    apply: bool = False,
+    limit: int = 100,
+    session: Session | None = None,
+    clerk_deleter=None,
+) -> tuple[PendingSelfDeleteRow, ...]:
+    """Dry-run or finish deletion_pending rows (no schedule/infra)."""
+    pending = list_pending_self_deletes(session=session, limit=limit)
+    if not apply:
+        return pending
+    for row in pending:
+        delete_own_account(
+            doctor_id=row.doctor_id,
+            confirm=CONFIRM_PHRASE,
+            authenticated_doctor_id=row.doctor_id,
+            session=session,
+            clerk_deleter=clerk_deleter,
+        )
+    return pending
 
 
 def assert_self_only(
     *, authenticated_doctor_id: TypeIDType, requested_doctor_id
 ) -> None:
-    """Refuse any attempt to target another account id (defense in depth)."""
-
     if requested_doctor_id is not None and not hmac.compare_digest(
         str(authenticated_doctor_id), str(requested_doctor_id)
     ):
-        raise DoctorSelfDeleteError("cannot delete another account")
+        raise DoctorSelfDeleteError(
+            "cannot delete another account",
+            status_code=400,
+        )

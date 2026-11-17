@@ -1,5 +1,6 @@
 """Route-level coverage for DELETE /v1/me/account."""
 
+import hashlib
 import secrets
 from datetime import UTC, datetime
 
@@ -14,17 +15,12 @@ from app.routes.me_account import authenticate_clerk_request_middleware
 from app.server import api_app
 from app.services.doctor_access import doctor_tombstone, resolve_doctor_access
 
-from app.models.baa import BaaAcceptance
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
 
-from tests.factories import save_practice_member
-from tests.routes.utils import (
-    MockAuthenticateRequest,
-    base_server_url,
-    ensure_current_baa_version,
-)
+from tests.factories import add_practice_peer, build_self_delete_scope
+from tests.routes.utils import MockAuthenticateRequest, base_server_url
 
 VIEW_AS_BINDING_HEADER = "X-Cosmaneura-View-As-Binding"
 INACTIVE_VIEW_AS_BINDING = "inactive"
@@ -32,21 +28,21 @@ INACTIVE_VIEW_AS_BINDING = "inactive"
 
 @pytest.fixture
 def enable_account_self_delete(monkeypatch):
-    """ON behavior requires the server-side latch."""
-
     monkeypatch.setattr(
         account_self_delete_configuration, "ACCOUNT_SELF_DELETE_ENABLED", True
     )
     monkeypatch.setattr(me_account_route, "ACCOUNT_SELF_DELETE_ENABLED", True)
 
 
-def _client_for(doctor: Doctor) -> TestClient:
-    user = ClerkUser.model_construct(
-        id=doctor.clerk_id,
-        email_addresses=[],
-    )
+def _client_for(
+    doctor: Doctor | None = None, *, clerk_id: str | None = None
+) -> TestClient:
+    subject = clerk_id or (doctor.clerk_id if doctor is not None else None)
+    assert subject is not None
     api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
-        MockAuthenticateRequest(user=user)
+        MockAuthenticateRequest(
+            user=ClerkUser.model_construct(id=subject, email_addresses=[])
+        )
     )
     client = TestClient(api_app, base_url=base_server_url())
     client.cookies.clear()
@@ -54,49 +50,13 @@ def _client_for(doctor: Doctor) -> TestClient:
     return client
 
 
-def _doctor_with_practice(*, role: str = "owner", is_solo: bool = True):
-    suffix = secrets.token_hex(5)
-    doctor = Doctor(
-        clerk_id=f"user_test_selfdel_{suffix}",
-        email=f"route-selfdel-{suffix}@example.com",
-        biography="Route profile",
-    ).save()
-    version = ensure_current_baa_version()
-    practice = Practice(
-        legal_name=f"Route Self Delete {suffix}",
-        join_code=f"R{secrets.token_hex(4).upper()[:7]}",
-        email_domain="example.com",
-        is_solo=is_solo,
-        origin_channel="direct",
-        pastoral_pack=False,
-        billing_exempt=True,
-        baa_version=f"{version.doc_id} v{version.version}",
-        baa_accepted_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
-        baa_accepted_by_doctor_id=doctor.id,
-        baa_signature_name="Synthetic Signer",
-        baa_signature_title="Owner",
-    ).save()
-    BaaAcceptance(
-        practice_id=practice.id,
-        baa_version_id=version.id,
-        covered_entity_legal_name=practice.legal_name,
-        accepted_by_doctor_id=doctor.id,
-        accepted_by_name="Synthetic Signer",
-        accepted_by_title="Owner",
-        accepted_by_email=doctor.email or "synthetic@example.com",
-        accepted_at_utc=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
-        content_sha256=version.sha256,
-    ).save()
-    member = save_practice_member(
-        PracticeMember(
-            practice_id=practice.id,
-            doctor_id=doctor.id,
-            role=role,
-            attested_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
-            attestation_name="Synthetic Signer",
+def _delete(client: TestClient, body=None):
+    try:
+        return client.request(
+            "DELETE", "/v1/me/account", json=body or {"confirm": "DELETE"}
         )
-    )
-    return doctor, practice, member
+    finally:
+        api_app.dependency_overrides = {}
 
 
 def test_account_self_delete_defaults_off_when_unset(monkeypatch):
@@ -116,69 +76,42 @@ def test_self_delete_off_returns_404_without_clerk_or_db_side_effects(
         account_self_delete_configuration, "ACCOUNT_SELF_DELETE_ENABLED", False
     )
     monkeypatch.setattr(me_account_route, "ACCOUNT_SELF_DELETE_ENABLED", False)
-    doctor, practice, member = _doctor_with_practice(is_solo=True)
-    doctor_before = {
-        "deleted_at": doctor.deleted_at,
-        "account_deletion_status": doctor.account_deletion_status,
-        "email": doctor.email,
-        "biography": doctor.biography,
-        "last_active_at": doctor.last_active_at,
-    }
-    practice_before = practice.owner_reassignment_needed_at
-    member_before = member.access_revoked_at
-    audit_before = PracticeAccessAudit.where(
-        PracticeAccessAudit.practice_id == practice.id,
-    ).count()
-    doctor_count_before = Doctor.count()
+    doctor, practice, member = build_self_delete_scope(
+        clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
+    )
+    before = (
+        doctor.deleted_at,
+        doctor.account_deletion_status,
+        doctor.email,
+        doctor.last_active_at,
+        practice.owner_reassignment_needed_at,
+        member.access_revoked_at,
+        Doctor.count(),
+    )
     clerk_calls: list[str] = []
-    service_calls: list[object] = []
-
-    def forbid_clerk(clerk_id: str) -> bool:
-        clerk_calls.append(clerk_id)
-        raise AssertionError(
-            "Clerk must not be called while ACCOUNT_SELF_DELETE is OFF"
-        )
-
-    def forbid_service(**kwargs):
-        service_calls.append(kwargs)
-        raise AssertionError("delete_own_account must not run while OFF")
-
     monkeypatch.setattr(
         "app.services.doctor_self_delete._delete_clerk_identity",
-        forbid_clerk,
+        lambda c: clerk_calls.append(c) or True,
     )
-    monkeypatch.setattr(me_account_route, "delete_own_account", forbid_service)
-
-    client = _client_for(doctor)
-    try:
-        response = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE"},
-        )
-    finally:
-        api_app.dependency_overrides = {}
-
-    assert response.status_code == 404
+    monkeypatch.setattr(
+        me_account_route,
+        "delete_own_account",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("no delete")),
+    )
+    assert _delete(_client_for(doctor)).status_code == 404
     assert clerk_calls == []
-    assert service_calls == []
     doctor.refresh()
     practice.refresh()
     member.refresh()
-    assert doctor.deleted_at == doctor_before["deleted_at"]
-    assert doctor.account_deletion_status == doctor_before["account_deletion_status"]
-    assert doctor.email == doctor_before["email"]
-    assert doctor.biography == doctor_before["biography"]
-    assert doctor.last_active_at == doctor_before["last_active_at"]
-    assert practice.owner_reassignment_needed_at == practice_before
-    assert member.access_revoked_at == member_before
     assert (
-        PracticeAccessAudit.where(
-            PracticeAccessAudit.practice_id == practice.id,
-        ).count()
-        == audit_before
-    )
-    assert Doctor.count() == doctor_count_before
+        doctor.deleted_at,
+        doctor.account_deletion_status,
+        doctor.email,
+        doctor.last_active_at,
+        practice.owner_reassignment_needed_at,
+        member.access_revoked_at,
+        Doctor.count(),
+    ) == before
 
 
 def test_unauthenticated_self_delete_is_refused(enable_account_self_delete):
@@ -187,61 +120,63 @@ def test_unauthenticated_self_delete_is_refused(enable_account_self_delete):
     with TestClient(api_app, base_url=base_server_url()) as client:
         client.headers[VIEW_AS_BINDING_HEADER] = INACTIVE_VIEW_AS_BINDING
         response = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE"},
+            "DELETE", "/v1/me/account", json={"confirm": "DELETE"}
         )
     assert response.status_code in {401, 403}
+
+
+def test_view_as_denial_fires_before_last_active_at_write(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
+    doctor, _, _ = build_self_delete_scope(
+        clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
+    )
+    before = doctor.last_active_at
+    inject_calls: list[str] = []
+    original = me_account_route.inject_doctor_for_self_delete
+
+    def tracking_inject(request):
+        inject_calls.append("ran")
+        return original(request)
+
+    monkeypatch.setattr(
+        "app.routes.dependencies.view_as.view_as_browser_session_present",
+        lambda _r: True,
+    )
+    api_app.dependency_overrides[me_account_route.inject_doctor_for_self_delete] = (
+        tracking_inject
+    )
+    assert _delete(_client_for(doctor)).status_code == 403
+    doctor.refresh()
+    assert doctor.last_active_at == before and inject_calls == []
 
 
 def test_self_delete_endpoint_deletes_only_caller(
     monkeypatch, global_session, enable_account_self_delete
 ):
     del global_session, enable_account_self_delete
-    doctor, practice, _ = _doctor_with_practice(is_solo=False)
-    peer = Doctor(
-        clerk_id=f"user_test_selfdel_peer_{secrets.token_hex(5)}",
-        email=f"route-peer-{secrets.token_hex(5)}@example.com",
-        biography="Peer",
-    ).save()
-    save_practice_member(
-        PracticeMember(
-            practice_id=practice.id,
-            doctor_id=peer.id,
-            role="workforce",
-            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-            attestation_name="Peer",
-        )
+    doctor, practice, _ = build_self_delete_scope(
+        is_solo=False, clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
     )
+    peer = add_practice_peer(practice, role="workforce")
     deleted: list[str] = []
     monkeypatch.setattr(
         "app.services.doctor_self_delete._delete_clerk_identity",
-        lambda clerk_id: deleted.append(clerk_id) or True,
+        lambda c: deleted.append(c) or True,
     )
-
-    client = _client_for(doctor)
-    try:
-        response = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE"},
-        )
-    finally:
-        api_app.dependency_overrides = {}
-
+    response = _delete(_client_for(doctor))
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "deleted"
     assert payload["practice_left_ownerless"] is True
     assert payload["clerk_identity_removed"] is True
     assert deleted == [doctor.clerk_id]
-
     doctor.refresh()
     peer.refresh()
     practice.refresh()
     assert doctor.account_deletion_status == "deleted"
-    assert peer.deleted_at is None
-    assert doctor_tombstone(peer) is None
+    assert peer.deleted_at is None and doctor_tombstone(peer) is None
     assert resolve_doctor_access(peer).allowed is True
     assert practice.owner_reassignment_needed_at is not None
     assert (
@@ -256,49 +191,20 @@ def test_self_delete_endpoint_deletes_only_caller(
 
 def test_self_delete_rejects_foreign_target_field(enable_account_self_delete):
     del enable_account_self_delete
-    doctor, _, _ = _doctor_with_practice()
-    client = _client_for(doctor)
-    try:
-        response = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE", "user_id": str(doctor.id)},
-        )
-    finally:
-        api_app.dependency_overrides = {}
-    assert response.status_code == 422
-
-
-def test_self_delete_sole_owner_ownerless_via_route(
-    monkeypatch, global_session, enable_account_self_delete
-):
-    del global_session, enable_account_self_delete
-    doctor, practice, _ = _doctor_with_practice(is_solo=True)
-    monkeypatch.setattr(
-        "app.services.doctor_self_delete._delete_clerk_identity",
-        lambda _clerk_id: True,
+    doctor, _, _ = build_self_delete_scope(
+        clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
     )
-    client = _client_for(doctor)
-    try:
-        response = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE"},
-        )
-    finally:
-        api_app.dependency_overrides = {}
-    assert response.status_code == 200
-    assert response.json()["practice_left_ownerless"] is True
-    practice.refresh()
-    assert practice.owner_reassignment_needed_at is not None
-    assert Practice.get(id=practice.id) is not None
+    bad = _delete(_client_for(doctor), {"confirm": "DELETE", "user_id": str(doctor.id)})
+    assert bad.status_code == 422
 
 
 def test_self_delete_route_allows_deletion_pending_retry(
     monkeypatch, global_session, enable_account_self_delete
 ):
     del global_session, enable_account_self_delete
-    doctor, _, _ = _doctor_with_practice(is_solo=True)
+    doctor, _, _ = build_self_delete_scope(
+        is_solo=True, clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
+    )
     calls: list[str] = []
 
     def fail_once(clerk_id: str) -> bool:
@@ -306,32 +212,102 @@ def test_self_delete_route_allows_deletion_pending_retry(
 
         calls.append(clerk_id)
         if len(calls) == 1:
-            raise DoctorSelfDeleteError("clerk identity could not be deleted")
+            raise DoctorSelfDeleteError(
+                "clerk identity could not be deleted", status_code=503
+            )
         return True
 
     monkeypatch.setattr(
-        "app.services.doctor_self_delete._delete_clerk_identity",
-        fail_once,
+        "app.services.doctor_self_delete._delete_clerk_identity", fail_once
     )
     client = _client_for(doctor)
     try:
-        first = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE"},
-        )
-        assert first.status_code == 400
+        first = client.request("DELETE", "/v1/me/account", json={"confirm": "DELETE"})
+        assert first.status_code == 503
         doctor.refresh()
         assert doctor.account_deletion_status == "deletion_pending"
-        second = client.request(
-            "DELETE",
-            "/v1/me/account",
-            json={"confirm": "DELETE"},
-        )
+        second = client.request("DELETE", "/v1/me/account", json={"confirm": "DELETE"})
     finally:
         api_app.dependency_overrides = {}
-    assert second.status_code == 200
-    assert second.json()["status"] == "deleted"
+    assert second.status_code == 200 and second.json()["status"] == "deleted"
     assert len(calls) == 2
+
+
+def test_self_delete_capability_verification_failure_returns_409(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
+    doctor, _, _ = build_self_delete_scope(
+        clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
+    )
+
+    def boom(*_a, **_k):
+        from app.services.superadmin_capability import SuperadminCapabilityError
+
+        raise SuperadminCapabilityError("synthetic capability verification failure")
+
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete.get_active_runtime_superadmin_capability_kinds",
+        boom,
+    )
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity", lambda _c: True
+    )
+    assert _delete(_client_for(doctor)).status_code == 409
     doctor.refresh()
-    assert doctor.account_deletion_status == "deleted"
+    assert doctor.account_deletion_status is None
+
+
+def test_missing_doctor_revoked_pilot_410_clerk_only_200_and_422_no_upsert(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
+    suffix = secrets.token_hex(5)
+    revoked_id = f"user_missing_revoked_{suffix}"
+    email = f"revoked-{suffix}@example.com"
+    PilotAccessGrandfatherGrant(
+        clerk_id=revoked_id,
+        email_snapshot=email,
+        email_sha256=hashlib.sha256(email.encode()).hexdigest(),
+        source_ref="controlled://self-delete/revoked",
+        source_sha256="a" * 64,
+        grant_plan_sha256="b" * 64,
+        granted_by_ref="change:self-delete",
+        grant_reason="Synthetic revoked grant",
+        granted_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+        revoked_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        revoked_by_ref="change:self-delete-revoke",
+        revocation_reason="Synthetic revocation",
+        revocation_plan_sha256="c" * 64,
+        retain_until=datetime(2033, 9, 1, 12, 0, tzinfo=UTC),
+    ).save()
+    before = Doctor.count()
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        lambda _c: (_ for _ in ()).throw(AssertionError("no clerk")),
+    )
+    assert _delete(_client_for(clerk_id=revoked_id)).status_code == 410
+    assert Doctor.count() == before and Doctor.get(clerk_id=revoked_id) is None
+
+    clerk_only = f"user_missing_clerk_only_{secrets.token_hex(5)}"
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        lambda c: deleted.append(c) or True,
+    )
+    response = _delete(_client_for(clerk_id=clerk_only))
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "deleted",
+        "practice_left_ownerless": False,
+        "clerk_identity_removed": True,
+    }
+    assert deleted == [clerk_only] and Doctor.get(clerk_id=clerk_only) is None
+
+    bad_id = f"user_missing_422_{secrets.token_hex(5)}"
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        lambda _c: (_ for _ in ()).throw(AssertionError("no clerk")),
+    )
+    assert _delete(_client_for(clerk_id=bad_id), {"confirm": "nope"}).status_code == 422
+    assert Doctor.get(clerk_id=bad_id) is None

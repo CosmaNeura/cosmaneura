@@ -428,3 +428,84 @@ def save_practice_member(member: PracticeMember) -> PracticeMember:
         session.commit()
         session.refresh(member)
     return member
+
+
+def build_self_delete_scope(
+    *,
+    is_solo: bool = True,
+    role: str = "owner",
+    clerk_prefix: str = "user_selfdel",
+    email_prefix: str = "selfdel",
+):
+    """Synthetic doctor+practice+member for authenticated self-delete tests."""
+    import secrets
+    from datetime import UTC, datetime
+
+    from app.models.baa import BaaAcceptance
+    from app.models.practice import Practice
+
+    from tests.routes.utils import ensure_current_baa_version
+
+    suffix = secrets.token_hex(5)
+    doctor = Doctor(
+        clerk_id=f"{clerk_prefix}_{suffix}",
+        email=f"{email_prefix}-{suffix}@example.com",
+        biography="Synthetic personal profile text",
+    ).save()
+    version = ensure_current_baa_version()
+    practice = Practice(
+        legal_name=f"Self Delete Practice {suffix}",
+        join_code=f"S{secrets.token_hex(4).upper()[:7]}",
+        email_domain="example.com",
+        is_solo=is_solo,
+        origin_channel="direct",
+        pastoral_pack=False,
+        billing_exempt=True,
+        baa_version=f"{version.doc_id} v{version.version}",
+        baa_accepted_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+        baa_accepted_by_doctor_id=doctor.id,
+        baa_signature_name="Synthetic Signer",
+        baa_signature_title="Owner",
+    ).save()
+    BaaAcceptance(
+        practice_id=practice.id,
+        baa_version_id=version.id,
+        covered_entity_legal_name=practice.legal_name,
+        accepted_by_doctor_id=doctor.id,
+        accepted_by_name="Synthetic Signer",
+        accepted_by_title="Owner",
+        accepted_by_email=doctor.email or "synthetic@example.com",
+        accepted_at_utc=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+        content_sha256=version.sha256,
+    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role=role,
+            attested_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            attestation_name="Synthetic Signer",
+        )
+    )
+    return doctor, practice, member
+
+
+def add_practice_peer(practice, *, role: str):
+    import secrets
+    from datetime import UTC, datetime
+
+    peer = Doctor(
+        clerk_id=f"user_selfdel_peer_{secrets.token_hex(5)}",
+        email=f"peer-{secrets.token_hex(5)}@example.com",
+        biography="Peer",
+    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=peer.id,
+            role=role,
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Peer",
+        )
+    )
+    return peer

@@ -7,10 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FLAG = "ACCOUNT_SELF_DELETE_ENABLED"
 
-
 def _read(path: str) -> str:
     return (ROOT / path).read_text()
-
 
 def _shell_array(source: str, name: str) -> list[str]:
     start = source.index(f"\n{name}=(") + 1
@@ -23,7 +21,6 @@ def _shell_array(source: str, name: str) -> list[str]:
         if token and not token.startswith("#")
     ]
 
-
 def test_account_self_delete_is_on_in_staging_non_secret_config_only() -> None:
     staging = _read(".env.staging.backend")
     assert f"export {FLAG}=true" in staging
@@ -34,7 +31,6 @@ def test_account_self_delete_is_on_in_staging_non_secret_config_only() -> None:
 
     shared = _read(".env.shared")
     assert FLAG not in shared
-
 
 def test_account_self_delete_is_api_only_public_runtime() -> None:
     deploy = _read("infra-staging/deploy.sh")

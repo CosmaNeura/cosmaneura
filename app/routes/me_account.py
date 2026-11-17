@@ -1,13 +1,8 @@
-"""Authenticated self-delete surface for Scribe (Apple 5.1.1(v)).
+"""DELETE /v1/me/account — authenticated self-delete for Scribe (Apple 5.1.1(v)).
 
-Path contract for the Scribe iOS app:
-
-    DELETE /v1/me/account
-    Authorization: Bearer <Clerk session JWT>
-    Body: {"confirm": "DELETE"}
-
-Identity comes only from the verified token. The body must not (and cannot)
-name a target user. Response is JSON with status deleted|already_deleted.
+Body ``{"confirm":"DELETE"}``; identity from Clerk JWT only. Status codes:
+200, 404 (latch off), 409 (capabilities), 410 (disabled/revoked pilot),
+422 (confirm/body), 503 (retryable Clerk / deletion_pending finish).
 """
 
 from __future__ import annotations
@@ -25,9 +20,11 @@ from app.routes.dependencies.clerk import AuthenticateClerkRequest
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services.doctor_self_delete import (
     DoctorSelfDeleteError,
+    delete_clerk_only_identity,
     delete_own_account,
 )
 from app.services.external_webhook_inbox import provider_log_ref
+from app.services.pilot_access_grandfather import revoked_pilot_access_grant
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -37,35 +34,35 @@ authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_K
 
 
 def require_account_self_delete_enabled() -> None:
-    """Refuse the surface while the latch is OFF.
-
-    Runs before auth and doctor injection so a dark deployment performs no
-    Clerk call, DB write, or audit side effect beyond normal request logging.
-    """
+    """404 while the latch is OFF — before auth/inject side effects."""
 
     if not ACCOUNT_SELF_DELETE_ENABLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
 def inject_doctor_for_self_delete(request: Request) -> None:
-    """Resolve the caller without recreating a fully deleted account.
+    """Resolve the caller without creating a Doctor row (never upserts)."""
 
-    Unlike the general inject_doctor_record dependency, a completed self-delete
-    is admitted so the handler can return already_deleted instead of 410.
-    """
-
-    # Defense in depth: never touch the DB while the latch is dark, even if a
-    # dependency solver runs this after a failed gate check.
     if not ACCOUNT_SELF_DELETE_ENABLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    request.state.self_delete_clerk_only = False
+    request.state.self_delete_clerk_id = None
 
     clerk_id = request.state.auth_state.payload["sub"]
     doctor = Doctor.get(clerk_id=clerk_id)
     if doctor is None:
-        doctor = Doctor.upsert(data={"clerk_id": clerk_id}, unique_by="clerk_id")
-    elif doctor.account_deletion_status in {"deleted", "deletion_pending"}:
-        # Admit completed deletes (already_deleted) and mid-flight retries so
-        # Clerk identity removal can finish after a transient provider failure.
+        if revoked_pilot_access_grant(clerk_id) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Your Account has Been Disabled",
+            )
+        request.state.self_delete_clerk_only = True
+        request.state.self_delete_clerk_id = clerk_id
+        request.state.doctor = None
+        return
+
+    if doctor.account_deletion_status in {"deleted", "deletion_pending"}:
         request.state.doctor = doctor
         doctor_ref = provider_log_ref(f"doctor:{doctor.id}")
         context["doctor_ref"] = doctor_ref
@@ -73,12 +70,11 @@ def inject_doctor_for_self_delete(request: Request) -> None:
         return
 
     if doctor.deleted_at is not None:
-        # Operator closure or incomplete state — do not treat as self-delete
-        # idempotency; the account is disabled.
         raise HTTPException(
             status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
 
+    # deny_view_as_browser_activity runs earlier, so this cannot fire in view-as.
     doctor.last_active_at = datetime.now(timezone.utc)
     doctor.save()
     request.state.doctor = doctor
@@ -94,6 +90,7 @@ me_account_api_app = APIRouter(
     dependencies=[
         Depends(require_account_self_delete_enabled),
         Depends(authenticate_clerk_request_middleware),
+        Depends(deny_view_as_browser_activity),
         Depends(inject_doctor_for_self_delete),
     ],
 )
@@ -119,6 +116,18 @@ def _session_dependency():
         yield session
 
 
+def _map_self_delete_error(error: DoctorSelfDeleteError) -> HTTPException:
+    code = getattr(error, "status_code", status.HTTP_400_BAD_REQUEST)
+    if code not in {
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    }:
+        code = status.HTTP_400_BAD_REQUEST
+    return HTTPException(status_code=code, detail=str(error))
+
+
 @me_account_api_app.delete(
     "/account",
     name="delete_my_account",
@@ -134,8 +143,32 @@ def delete_my_account(
     if not ACCOUNT_SELF_DELETE_ENABLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    deny_view_as_browser_activity(request)
-    doctor: Doctor = request.state.doctor
+    if getattr(request.state, "self_delete_clerk_only", False):
+        clerk_id = getattr(request.state, "self_delete_clerk_id", None)
+        if not isinstance(clerk_id, str) or not clerk_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="clerk identity is invalid",
+            )
+        try:
+            result = delete_clerk_only_identity(
+                clerk_id=clerk_id,
+                confirm=body.confirm,
+            )
+        except DoctorSelfDeleteError as error:
+            raise _map_self_delete_error(error) from error
+        return DeleteMyAccountResponse(
+            status=result.status,
+            practice_left_ownerless=False,
+            clerk_identity_removed=result.clerk_identity_removed,
+        )
+
+    doctor: Doctor | None = getattr(request.state, "doctor", None)
+    if doctor is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Your Account has Been Disabled",
+        )
 
     if doctor.account_deletion_status == "deleted":
         return DeleteMyAccountResponse(
@@ -148,16 +181,11 @@ def delete_my_account(
         result = delete_own_account(
             doctor_id=doctor.id,
             confirm=body.confirm,
+            authenticated_doctor_id=doctor.id,
             session=session,
         )
     except DoctorSelfDeleteError as error:
-        detail = str(error)
-        code = status.HTTP_400_BAD_REQUEST
-        if "confirm" in detail:
-            code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        elif "capabilities" in detail:
-            code = status.HTTP_409_CONFLICT
-        raise HTTPException(status_code=code, detail=detail) from error
+        raise _map_self_delete_error(error) from error
 
     return DeleteMyAccountResponse(
         status=result.status,
