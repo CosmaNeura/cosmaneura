@@ -239,8 +239,14 @@ def test_bill_by_invoice_refuses_bound_marker_or_open_checkout_practice(
             "--reason",
             "Synthetic",
         ]
-        result = CliRunner().invoke(cli_app, args + ["--no-dry-run"])
-        assert result.exit_code != 0 and "operator-ref" in result.output
+        result = CliRunner().invoke(
+            cli_app,
+            args + ["--no-dry-run"],
+            env={"NO_COLOR": "1", "TERM": "dumb"},
+            color=False,
+        )
+        assert result.exit_code == 2
+        assert "--operator-ref" in result.output
     assert invoice_remote == []
     assert _access(practice) == before
 
