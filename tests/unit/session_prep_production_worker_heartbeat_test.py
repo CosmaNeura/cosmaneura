@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from app.jobs import heartbeat
 
 SENTINEL = "SYNTHETIC-PRIVATE-CHART-PROVIDER-CREDENTIAL-SENTINEL"
 DSN = "https://synthetic@example.invalid/1"
+HTTP_DSN = "http://synthetic@example.invalid/1"
 
 
 def value() -> dict[str, Any]:
@@ -51,6 +53,29 @@ def envelope(payload: dict[str, Any] | None = None) -> Envelope:
         }
     )
     result.add_checkin(payload)
+    return result
+
+
+def padded_canonical_bytes(target_size: int) -> tuple[dict[str, Any], bytes]:
+    """Build otherwise-valid check-in JSON of an exact byte length via whitespace."""
+
+    payload = value()
+    compact = json.dumps(payload, separators=(",", ":")).encode()
+    if len(compact) > target_size:
+        raise AssertionError(
+            f"canonical payload is {len(compact)} bytes; cannot pad to {target_size}"
+        )
+    padded = b"{" + (b" " * (target_size - len(compact))) + compact[1:]
+    assert len(padded) == target_size
+    assert json.loads(padded) == payload
+    return payload, padded
+
+
+def envelope_with_raw(payload: dict[str, Any], raw: bytes) -> Envelope:
+    result = envelope(payload)
+    item = Item(payload=PayloadRef(bytes=raw), type="check_in")
+    item.headers["content_type"] = "application/json"
+    result.items = [item]
     return result
 
 
@@ -383,3 +408,141 @@ def test_infrastructure_switch_is_default_off_and_worker_only() -> None:
         "!var.enable_session_prep_production_worker_heartbeat || var.session_prep_production_rollout.enabled"
         in main
     )
+
+
+def test_valid_json_over_1kib_is_rejected_for_size() -> None:
+    payload, raw = padded_canonical_bytes(1025)
+    assert heartbeat_health._closed_envelope(envelope_with_raw(payload, raw)) is False
+
+
+def test_valid_json_exactly_1kib_is_accepted() -> None:
+    payload, raw = padded_canonical_bytes(1024)
+    assert heartbeat_health._closed_envelope(envelope_with_raw(payload, raw)) is True
+
+
+def test_duplicate_json_key_with_matching_ids_is_rejected() -> None:
+    payload = value()
+    raw = json.dumps(payload).replace(
+        '"status": "ok"', '"status": "ok", "status": "ok"'
+    )
+    forged = envelope_with_raw(payload, raw.encode())
+    assert forged.headers["event_id"] == payload["event_id"] == payload["check_in_id"]
+    assert heartbeat_health._closed_envelope(forged) is False
+
+
+@pytest.mark.parametrize(
+    "extra_header,extra_value",
+    [
+        ("trace", {"op": SENTINEL}),
+        ("dsn", DSN),
+        ("sent_from", SENTINEL),
+    ],
+)
+def test_extra_or_unknown_envelope_headers_are_rejected(
+    extra_header: str, extra_value: Any
+) -> None:
+    forged = envelope()
+    forged.headers[extra_header] = extra_value
+    assert set(forged.headers) != {"event_id", "sent_at"}
+    assert heartbeat_health._closed_envelope(forged) is False
+
+
+def test_missing_sent_at_is_rejected() -> None:
+    """Missing sent_at must stay rejected.
+
+    Primary guard is the exact envelope header set. A KeyError on
+    ``headers["sent_at"]`` is a secondary fail-closed path, so removing only
+    the header-set equality still rejects; the dedicated mutation-proof for
+    that equality is ``test_extra_or_unknown_envelope_headers_are_rejected``.
+    """
+
+    forged = envelope()
+    del forged.headers["sent_at"]
+    assert "sent_at" not in forged.headers
+    assert set(forged.headers) != {"event_id", "sent_at"}
+    assert heartbeat_health._closed_envelope(forged) is False
+
+
+@pytest.mark.parametrize(
+    "sent_at",
+    [
+        SENTINEL,
+        "2020-01-01T00:00:00",
+        "2020-01-01T00:00:00+05:00",
+        1,
+        None,
+        True,
+    ],
+)
+def test_bad_sent_at_is_rejected(sent_at: Any) -> None:
+    forged = envelope()
+    forged.headers["sent_at"] = sent_at
+    assert heartbeat_health._closed_envelope(forged) is False
+
+
+def test_header_payload_event_id_mismatch_is_rejected() -> None:
+    payload = value()
+    forged = envelope(payload)
+    mismatched = "a" * 32
+    assert mismatched != payload["event_id"]
+    forged.headers["event_id"] = mismatched
+    assert heartbeat_health._closed_envelope(forged) is False
+
+
+def test_http_dsn_is_refused_by_client_construction() -> None:
+    with pytest.raises(ValueError, match="Production Session Prep heartbeat DSN"):
+        heartbeat_health._make_client(HTTP_DSN)
+
+
+def test_http_dsn_cannot_send_through_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    heartbeat_health.close_production_heartbeat_client()
+    calls: list[Any] = []
+
+    class LocalTransport(heartbeat_health._ProductionHeartbeatTransport):
+        def _make_pool(self) -> Any:
+            return SimpleNamespace(
+                request=lambda method, url, **kwargs: calls.append(
+                    (method, url, kwargs)
+                )
+                or SimpleNamespace(status=200, headers={}, close=lambda: None)
+            )
+
+    monkeypatch.setattr(
+        heartbeat_health, "_ProductionHeartbeatTransport", LocalTransport
+    )
+    monkeypatch.setattr(heartbeat_health, "is_production", lambda: True)
+    monkeypatch.setattr(
+        heartbeat_health,
+        "config",
+        lambda name, **_kwargs: HTTP_DSN if name == "SENTRY_DSN" else "true",
+    )
+    assert heartbeat_health.capture_production_worker_heartbeat() is None
+    assert calls == []
+    assert heartbeat_health._client is None
+    heartbeat_health.close_production_heartbeat_client()
+
+
+def test_truly_empty_environment_keeps_heartbeat_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default-off with real decouple.config against a cleared process environment."""
+
+    heartbeat_health.close_production_heartbeat_client()
+    monkeypatch.setattr(heartbeat_health, "is_production", lambda: True)
+    # Replace the live mapping with an empty one; do not mock config().
+    monkeypatch.setattr(os, "environ", {})
+    constructs: list[str] = []
+
+    def refuse_construct(dsn: str) -> Any:
+        constructs.append(dsn)
+        raise AssertionError("empty environment constructed a heartbeat client")
+
+    monkeypatch.setattr(heartbeat_health, "_make_client", refuse_construct)
+    assert os.environ == {}
+    assert heartbeat_health.production_heartbeat_enabled() is False
+    assert heartbeat_health.capture_production_worker_heartbeat() is None
+    assert constructs == []
+    assert heartbeat_health._client is None
+    heartbeat_health.close_production_heartbeat_client()
