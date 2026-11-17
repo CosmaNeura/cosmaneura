@@ -495,6 +495,107 @@ def test_verification_is_bound_to_the_reviewed_plan() -> None:
     _rejects(document)
 
 
+def _verification_from_document(document: dict[str, Any]) -> dict[str, Any]:
+    plan = m.evaluate(document, now=NOW)
+    document["mode"] = "verify"
+    document["expected_plan_sha256"] = plan["plan_sha256"]
+    return document
+
+
+def test_verification_refuses_when_provider_assignment_is_still_absent() -> None:
+    """after equals before aside from a newer observed_at must not verify."""
+
+    document = _verification_from_document(_document())
+    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=False)
+
+    _rejects(document)
+
+
+@pytest.mark.parametrize(
+    "observed_at",
+    [
+        NOW - timedelta(minutes=30) - timedelta(microseconds=1),
+        NOW + timedelta(minutes=1) + timedelta(microseconds=1),
+    ],
+)
+def test_stale_or_future_observed_at_is_refused(observed_at: datetime) -> None:
+    _rejects(_document(observed_at=observed_at))
+
+
+def test_observed_at_at_exact_thirty_minute_boundary_is_allowed() -> None:
+    report = m.evaluate(
+        _document(observed_at=NOW - timedelta(minutes=30)),
+        now=NOW,
+    )
+
+    assert report["status"] == "ready"
+    assert report["assignment_action"] == "create_required"
+
+
+def test_verification_refuses_when_after_is_not_newer_than_before() -> None:
+    document = _verification()
+    document["after"]["observed_at"] = document["before"]["observed_at"]
+
+    _rejects(document)
+
+
+def test_already_complete_verification_allows_unchanged_after() -> None:
+    document = _verification_from_document(_document(with_target=True))
+    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=True)
+
+    report = m.evaluate(document, now=NOW)
+
+    assert report["assignment_action"] == "verified"
+    assert report["status"] == "ready"
+
+
+def test_already_complete_verification_refuses_recreated_assignment_id() -> None:
+    document = _verification_from_document(_document(with_target=True))
+    recreated = _assignment(
+        _uuid(99),
+        PROVIDER_PRINCIPAL_ID,
+        RESOURCE_SERVICE_PRINCIPAL_ID,
+        AGENT_ROLE_ID,
+    )
+    after = _snapshot(observed_at=AFTER_AT, with_target=False)
+    after["agent_api_resource_assignments"]["items"].append(deepcopy(recreated))
+    after["provider_outgoing_assignments"]["items"].append(deepcopy(recreated))
+    document["after"] = after
+
+    _rejects(document)
+
+
+def test_non_production_environment_is_refused_without_duplicate_keys() -> None:
+    document = _document()
+    document["environment"] = "staging"
+
+    _rejects(document)
+
+
+def test_one_view_only_public_grant_is_refused() -> None:
+    document = _document()
+    document["before"]["agent_api_resource_assignments"]["items"].append(
+        deepcopy(PUBLIC_TARGET_ASSIGNMENT)
+    )
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="public assignment views do not match"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_verification_refuses_unrelated_immutable_field_change_in_after() -> None:
+    document = _verification()
+    unrelated = next(
+        role
+        for role in document["after"]["application"]["app_roles"]
+        if role["id"] == UNRELATED_ROLE_ID
+    )
+    unrelated["description"] = "Mutated unrelated role description"
+
+    _rejects(document)
+
+
 def test_cli_emits_no_private_identifiers(tmp_path: Path, capsys: Any) -> None:
     document = _document(observed_at=datetime.now(UTC))
     path = tmp_path / "private-plan.json"
