@@ -93,40 +93,33 @@ def test_ensure_creates_four_appointments_and_is_idempotent(
         "zoom-synthetic-join-2026-11-17:4",
     ]
 
-    patients = list(Patient.where(Patient.doctor_id == doctor.id).all())
-    assert {patient.name for patient in patients} == {
-        "Synthetic Patient Alpha - NOT A REAL PERSON",
-        "Synthetic Patient Bravo - NOT A REAL PERSON",
-    }
+    assert Patient.where(Patient.doctor_id == doctor.id).count() == 2
     assert Appointment.where(Appointment.doctor_id == doctor.id).count() == 4
 
-    alpha = next(
-        patient
-        for patient in patients
-        if patient.name == "Synthetic Patient Alpha - NOT A REAL PERSON"
+    alpha = Patient.get(
+        doctor_id=doctor.id,
+        name="Synthetic Patient Alpha - NOT A REAL PERSON",
     )
-    bravo = next(
-        patient
-        for patient in patients
-        if patient.name == "Synthetic Patient Bravo - NOT A REAL PERSON"
+    bravo = Patient.get(
+        doctor_id=doctor.id,
+        name="Synthetic Patient Bravo - NOT A REAL PERSON",
     )
-    assert alpha.date_of_birth == datetime(1990, 1, 15, tzinfo=UTC).replace(
-        tzinfo=None
-    )
-    assert bravo.date_of_birth == datetime(1991, 2, 20, tzinfo=UTC).replace(
-        tzinfo=None
-    )
+    assert alpha is not None
+    assert bravo is not None
+    assert alpha.date_of_birth == datetime(1990, 1, 15, tzinfo=UTC).replace(tzinfo=None)
+    assert bravo.date_of_birth == datetime(1991, 2, 20, tzinfo=UTC).replace(tzinfo=None)
 
-    appointments = {
-        row.external_id: row
-        for row in list(Appointment.where(Appointment.doctor_id == doctor.id).all())
+    expected_patients = {
+        1: alpha,
+        2: alpha,
+        3: bravo,
+        4: bravo,
     }
-    assert appointments["zoom-synthetic-join-2026-11-17:1"].patient_id == alpha.id
-    assert appointments["zoom-synthetic-join-2026-11-17:2"].patient_id == alpha.id
-    assert appointments["zoom-synthetic-join-2026-11-17:3"].patient_id == bravo.id
-    assert appointments["zoom-synthetic-join-2026-11-17:4"].patient_id == bravo.id
     for index in range(1, 5):
-        row = appointments[f"zoom-synthetic-join-2026-11-17:{index}"]
+        external_id = f"zoom-synthetic-join-2026-11-17:{index}"
+        row = Appointment.get(doctor_id=doctor.id, external_id=external_id)
+        assert row is not None
+        assert row.patient_id == expected_patients[index].id
         assert row.appointment_date == start + timedelta(hours=index - 1)
         assert row.appointment_name == (
             f"SYNTHETIC ZOOM JOIN TEST {index} - NO REAL PATIENT DATA"
