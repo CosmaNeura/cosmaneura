@@ -45,6 +45,7 @@ def test_cancel_commits_while_older_active_refresh_is_in_flight(
         "STRIPE_SECRET_KEY": "sk_test_x",
         "STRIPE_ACCOUNT_ID": "acct_test_cosmaneura",
         "STRIPE_PRICE_ID": "price_test_x",
+        "STRIPE_MCD_PRICE_ID": "price_test_mcd",
         "STRIPE_WEBHOOK_SECRET": "whsec_test_x",
         "STRIPE_API_VERSION": "2025-09-30.clover",
         "SUPPORTED_STRIPE_API_VERSION": "2025-09-30.clover",
@@ -88,14 +89,14 @@ def test_cancel_commits_while_older_active_refresh_is_in_flight(
         nonlocal refresh_blocked
         if path == "/account":
             return {"id": "acct_test_cosmaneura"}
-        if path == "/prices/price_test_x":
+        if path in {"/prices/price_test_x", "/prices/price_test_mcd"}:
             return {
-                "id": "price_test_x",
+                "id": path.rsplit("/", 1)[-1],
                 "active": True,
                 "livemode": False,
                 "type": "recurring",
                 "currency": "usd",
-                "unit_amount": 8900,
+                "unit_amount": 6000 if path.endswith("price_test_mcd") else 9000,
                 "billing_scheme": "per_unit",
                 "transform_quantity": None,
                 "recurring": {
@@ -162,6 +163,7 @@ def test_stale_invalid_contract_cannot_revoke_newer_valid_state(
         "STRIPE_SECRET_KEY": "sk_test_x",
         "STRIPE_ACCOUNT_ID": "acct_test_cosmaneura",
         "STRIPE_PRICE_ID": "price_test_x",
+        "STRIPE_MCD_PRICE_ID": "price_test_mcd",
         "STRIPE_WEBHOOK_SECRET": "whsec_test_x",
         "STRIPE_API_VERSION": "2025-09-30.clover",
         "SUPPORTED_STRIPE_API_VERSION": "2025-09-30.clover",
@@ -205,14 +207,14 @@ def test_stale_invalid_contract_cannot_revoke_newer_valid_state(
         nonlocal blocked
         if path == "/account":
             return {"id": "acct_test_cosmaneura"}
-        if path == "/prices/price_test_x":
+        if path in {"/prices/price_test_x", "/prices/price_test_mcd"}:
             return {
-                "id": "price_test_x",
+                "id": path.rsplit("/", 1)[-1],
                 "active": True,
                 "livemode": False,
                 "type": "recurring",
                 "currency": "usd",
-                "unit_amount": 8900,
+                "unit_amount": 6000 if path.endswith("price_test_mcd") else 9000,
                 "billing_scheme": "per_unit",
                 "transform_quantity": None,
                 "recurring": {
@@ -276,6 +278,7 @@ def test_overlapping_quantity_syncs_cannot_prorate_the_same_seats_twice(
         "STRIPE_SECRET_KEY": "sk_test_x",
         "STRIPE_ACCOUNT_ID": "acct_test_cosmaneura",
         "STRIPE_PRICE_ID": "price_test_x",
+        "STRIPE_MCD_PRICE_ID": "price_test_mcd",
         "STRIPE_WEBHOOK_SECRET": "whsec_test_x",
         "STRIPE_API_VERSION": "2025-09-30.clover",
         "SUPPORTED_STRIPE_API_VERSION": "2025-09-30.clover",
@@ -345,14 +348,14 @@ def test_overlapping_quantity_syncs_cannot_prorate_the_same_seats_twice(
         nonlocal blocked
         if path == "/account":
             return {"id": "acct_test_cosmaneura"}
-        if path == "/prices/price_test_x":
+        if path in {"/prices/price_test_x", "/prices/price_test_mcd"}:
             return {
-                "id": "price_test_x",
+                "id": path.rsplit("/", 1)[-1],
                 "active": True,
                 "livemode": False,
                 "type": "recurring",
                 "currency": "usd",
-                "unit_amount": 8900,
+                "unit_amount": 6000 if path.endswith("price_test_mcd") else 9000,
                 "billing_scheme": "per_unit",
                 "transform_quantity": None,
                 "recurring": {

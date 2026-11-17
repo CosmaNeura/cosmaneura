@@ -49,7 +49,7 @@ class RouteStripe:
             "livemode": False,
             "type": "recurring",
             "currency": "usd",
-            "unit_amount": 8900,
+            "unit_amount": 9000,
             "billing_scheme": "per_unit",
             "transform_quantity": None,
             "recurring": {
@@ -84,7 +84,10 @@ class RouteStripe:
         if path == "/account":
             return {"id": "acct_test_cosmaneura"}
         if path.startswith("/prices/"):
-            return deepcopy(self.price)
+            price = deepcopy(self.price)
+            if path.endswith("price_test_mcd"):
+                price.update(id="price_test_mcd", unit_amount=6000)
+            return price
         if path.startswith("/subscriptions/"):
             return deepcopy(self.subscriptions[path.rsplit("/", 1)[-1]])
         if path == "/checkout/sessions":
@@ -171,11 +174,15 @@ def _subscription(practice: Practice, *, status_value: str) -> dict:
 
 @pytest.fixture
 def stripe_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Startup price validation has its own mocked-Stripe service tests. Route
+    # fixtures install their transport after the TestClient lifespan begins.
+    monkeypatch.setattr(stripe_billing, "validate_startup_configuration", lambda: None)
     monkeypatch.setattr(stripe_config, "STRIPE_INTEGRATION_ENABLED", True)
     monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", True)
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_ACCOUNT_ID", "acct_test_cosmaneura")
     monkeypatch.setattr(stripe_config, "STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setattr(stripe_config, "STRIPE_MCD_PRICE_ID", "price_test_mcd")
     monkeypatch.setattr(
         stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", PORTAL_CONFIGURATION_ID
     )
@@ -1104,3 +1111,28 @@ def test_checkout_return_waits_for_durable_processing_and_recovers_clinical_acce
     assert [
         call for call in route_stripe.calls if call[1] == "/checkout/sessions"
     ] == calls
+
+
+def test_exempt_practice_not_redirected_to_billing_recovery(authenticated_client):
+    practice = _own_practice(_dev_doctor())
+    practice.billing_exempt = True
+    practice.subscription_status = "pending_verification"
+    practice.save()
+    response = authenticated_client.get(api_app.url_path_for("settings_data"))
+    assert response.status_code == 200
+    assert response.json()["billing_recovery_required"] is False
+    response = authenticated_client.get(api_app.url_path_for("practice_status"))
+    assert response.status_code == 200
+    assert response.json()["entitled"] is True
+
+
+@pytest.mark.parametrize(
+    "origin, amount", [("direct", 9000), ("catholic", 9000), ("mcd", 6000)]
+)
+def test_seat_summary_shows_practice_tier_amount(authenticated_client, origin, amount):
+    practice = _own_practice(_dev_doctor())
+    practice.origin_channel = origin
+    practice.save()
+    response = authenticated_client.get(api_app.url_path_for("practice_status"))
+    assert response.status_code == 200
+    assert response.json()["seat_summary"]["unit_amount"] == amount

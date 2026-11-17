@@ -81,7 +81,7 @@ class FakeStripe:
             return {
                 "id": price_id,
                 "livemode": False,
-                "active": price_id == "price_test_x",
+                "active": price_id in {"price_test_x", "price_test_mcd"},
             }
         if path == "/checkout/sessions":
             open_sessions = [
@@ -131,6 +131,7 @@ def test_preflight_fully_paginates_and_classifies_without_exposing_ids() -> None
         secret_key="sk_test_not_printed",
         account_id="acct_test_cosmaneura",
         price_id="price_test_x",
+        mcd_price_id="price_test_mcd",
         legacy_price_ids=("price_legacy_website",),
         live_mode=False,
         operator_ref="CHANGE-123",
@@ -153,6 +154,7 @@ def test_preflight_fully_paginates_and_classifies_without_exposing_ids() -> None
     assert evidence["stripe_account_id"] == "acct_test_cosmaneura"
     assert evidence["checkout_price_ids"] == (
         "price_test_x",
+        "price_test_mcd",
         "price_legacy_website",
     )
     assert evidence["drain_started_at"] == (NOW - timedelta(hours=25)).isoformat()
@@ -171,6 +173,7 @@ def test_apply_requires_exact_plan_then_expires_and_rescans_all_open_sessions() 
         "secret_key": "sk_test_not_printed",
         "account_id": "acct_test_cosmaneura",
         "price_id": "price_test_x",
+        "mcd_price_id": "price_test_mcd",
         "legacy_price_ids": (),
         "live_mode": False,
         "operator_ref": "CHANGE-123",
@@ -223,6 +226,7 @@ def test_attached_subscription_is_ambiguous_and_never_expired() -> None:
         "secret_key": "sk_test_not_printed",
         "account_id": "acct_test_cosmaneura",
         "price_id": "price_test_x",
+        "mcd_price_id": "price_test_mcd",
         "legacy_price_ids": (),
         "live_mode": False,
         "operator_ref": "CHANGE-123",
@@ -260,6 +264,7 @@ def test_zero_open_sessions_still_requires_full_maximum_lifetime_drain() -> None
         secret_key="sk_test_not_printed",
         account_id="acct_test_cosmaneura",
         price_id="price_test_x",
+        mcd_price_id="price_test_mcd",
         legacy_price_ids=(),
         live_mode=False,
         operator_ref="CHANGE-123",

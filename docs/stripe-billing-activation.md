@@ -1,5 +1,13 @@
 # Stripe billing activation
 
+There are two current per-clinician monthly prices: public $90 (`STRIPE_PRICE_ID`) and MCD $60 (`STRIPE_MCD_PRICE_ID`). Both must be distinct, USD, licensed monthly recurring per-unit prices in the configured account and mode. Startup retrieves and verifies both; acquisition readiness requires both. The founder-verified `origin_channel == "mcd"` selects MCD; direct and catholic select public through `price_id_for_practice`. Users cannot select a tier. Quantity is the active clinician seat count. Frozen Checkout retries preserve that tier mapping.
+
+`STRIPE_LEGACY_PRICE_IDS` is also read at runtime. Already-bound subscriptions accept either current price or listed $89 legacy prices; a wrong current tier alerts operators without revocation. New Checkout uses only the mapped current price.
+
+**Human staging prerequisite, outside F1:** create test-mode $90 and $60 prices and point the staging vault price-id and mcd-price-id fields at them. Create the legacy-price-ids vault field (empty is fine until a repoint). Before any repoint of price-id to $90, put the old $89 price ID in legacy-price-ids. F1 adds references only; it does not create prices, edit vault items, repoint settings or authorize deployment.
+
+The operator `bill-by-invoice --practice-id … --operator-ref … --reason …` defaults to dry-run. An explicit `--no-dry-run` creates an independent invoice-only Stripe customer and send_invoice subscription, due in 30 days by default (`--days-until-due`). It refuses a non-entitled practice, bound Core subscription, open Checkout, or existing nonterminal invoice operation. It never changes a comp or the Practice Stripe/access fields. Failed payments and seat-sync errors alert operators without blocking access. Reserved operation keys remain in the invoice row on ambiguous failures and must be reconciled before another invoice attempt.
+
 This is the required gate for changing `STRIPE_BILLING_ENABLED` from `false`
 to `true`. It addresses two properties that the flag itself cannot provide:
 
@@ -110,8 +118,9 @@ any change, confirm the properties above before relying on the portal.
 ```sh
 STRIPE_SECRET_KEY='...' \
 STRIPE_ACCOUNT_ID='acct_...' \
-STRIPE_PRICE_ID='price_...' \
-STRIPE_LEGACY_PRICE_IDS='price_old_1,price_old_2' \
+STRIPE_PRICE_ID='<public-price-id>' \
+STRIPE_MCD_PRICE_ID='<mcd-price-id>' \
+STRIPE_LEGACY_PRICE_IDS='<comma-separated-legacy-price-ids>' \
 python scripts/stripe_checkout_activation_preflight.py \
   --operator-ref '<deployment-ticket-or-change-id>' \
   --drain-started-at "$DRAIN_STARTED_AT" \
@@ -133,8 +142,9 @@ exact plan:
 ```sh
 STRIPE_SECRET_KEY='...' \
 STRIPE_ACCOUNT_ID='acct_...' \
-STRIPE_PRICE_ID='price_...' \
-STRIPE_LEGACY_PRICE_IDS='price_old_1,price_old_2' \
+STRIPE_PRICE_ID='<public-price-id>' \
+STRIPE_MCD_PRICE_ID='<mcd-price-id>' \
+STRIPE_LEGACY_PRICE_IDS='<comma-separated-legacy-price-ids>' \
 python scripts/stripe_checkout_activation_preflight.py \
   --operator-ref '<same-deployment-ticket-or-change-id>' \
   --drain-started-at "$DRAIN_STARTED_AT" \

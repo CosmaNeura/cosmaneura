@@ -5,6 +5,7 @@ Route method names are important as they will be used for the openapi spec which
 JavaScript client which will use these methods.
 """
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import arrow
@@ -92,7 +93,16 @@ class ORJSONSortedResponse(JSONResponse):
 
 # TODO not possible to type this properly :/ https://github.com/python/typing/discussions/1501
 # NOTE `api_app` and not `app` is used intentionally here to make imports more specific
+@asynccontextmanager
+async def billing_startup_lifespan(application: FastAPI):
+    from app.services import stripe_billing
+
+    stripe_billing.validate_startup_configuration()
+    yield
+
+
 api_app = FastAPI(
+    lifespan=billing_startup_lifespan,
     **fast_api_args,  # type: ignore
     default_response_class=ORJSONSortedResponse,
 )
