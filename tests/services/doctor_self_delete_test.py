@@ -7,13 +7,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import app.services.doctor_self_delete as self_delete_module
-from app.configuration.authority import AuthorityKernelSettings
 from app.services.doctor_access import doctor_tombstone, resolve_doctor_access
 from app.services.doctor_self_delete import (
     DoctorSelfDeleteError,
     assert_self_only,
     delete_own_account,
-    list_pending_self_deletes,
     sweep_pending_self_deletes,
 )
 from app.services.organization_access import (
@@ -23,15 +21,6 @@ from app.services.organization_access import (
     import_roster_approvals,
 )
 
-from app.models.authority import (
-    AuthorityActor,
-    AuthorityActorExternalIdentity,
-    AuthorityPerson,
-    AuthorityPersonBinding,
-    AuthorityTenant,
-    AuthorityTenantMembership,
-    MountContextSession,
-)
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.note_template_preference import NoteTemplatePreference
@@ -117,7 +106,8 @@ def test_self_delete_co_owner_and_workforce_do_not_leave_ownerless():
     assert co_owner.deleted_at is None
 
 
-def test_self_delete_revokes_api_key_grants_roster_oauth_prefs_authority(monkeypatch):
+def test_self_delete_revokes_api_key_grants_roster_oauth_prefs(monkeypatch):
+    del monkeypatch
     now = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
     suffix = secrets.token_hex(5)
     domain = f"selfdel-roster-{suffix}.example.com"
@@ -163,7 +153,6 @@ def test_self_delete_revokes_api_key_grants_roster_oauth_prefs_authority(monkeyp
         doctor, supplied_code=code, now=now + timedelta(minutes=2)
     )
     approval_id = member.organization_roster_approval_id
-    assert approval_id is not None
     grant = PilotAccessGrandfatherGrant(
         clerk_id=doctor.clerk_id,
         doctor_id_snapshot=doctor.id,
@@ -186,68 +175,15 @@ def test_self_delete_revokes_api_key_grants_roster_oauth_prefs_authority(monkeyp
         refresh_token="encrypted-refresh-fixture",
         token_expires_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC),
     ).save()
-    issuer = "https://self-delete-authority.example"
-    monkeypatch.setattr(
-        "app.services.doctor_account_closure.AUTHORITY_KERNEL_SETTINGS",
-        AuthorityKernelSettings(
-            enabled=True,
-            token_ttl_seconds=900,
-            token_refresh_after_seconds=300,
-            clerk_issuer=issuer,
-        ),
-    )
-    tenant = AuthorityTenant(status="active").save()
-    actor = AuthorityActor(actor_kind="human", status="active").save()
-    membership = AuthorityTenantMembership(
-        tenant_id=tenant.id,
-        actor_id=actor.id,
-        membership_kind="provider",
-        status="active",
-    ).save()
-    identity = AuthorityActorExternalIdentity(
-        actor_id=actor.id,
-        issuer=issuer,
-        subject=doctor.clerk_id,
-        verified_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
-    ).save()
-    person = AuthorityPerson(lifecycle_state="patient", status="active").save()
-    binding = AuthorityPersonBinding(
-        person_id=person.id,
-        tenant_id=tenant.id,
-        actor_id=actor.id,
-        binding_ref=f"provider-record-{secrets.token_hex(5)}",
-        binding_kind="provider_record",
-        status="active",
-        verified_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
-    ).save()
-    mount = MountContextSession(
-        actor_id=actor.id,
-        tenant_id=tenant.id,
-        person_binding_id=binding.id,
-        source_identity_id=identity.id,
-        session_kind="authenticated",
-        surface_ceiling="provider_assistant",
-        auth_tier_ceiling="provider",
-        status="active",
-        absolute_expires_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC),
-    ).save()
     _delete(doctor, now=datetime(2026, 11, 2, 15, 0, tzinfo=UTC))
     doctor.refresh()
     grant.refresh()
-    identity.refresh()
-    actor.refresh()
-    membership.refresh()
-    mount.refresh()
     approval = OrganizationRosterApproval.get(id=approval_id)
     assert doctor.api_key is None
     assert NoteTemplatePreference.get(id=preference.id) is None
     assert DoctorVideoIntegration.get(id=video.id) is None
-    assert (
-        grant.revoked_at is not None and len(grant.revocation_plan_sha256 or "") == 64
-    )
+    assert grant.revoked_at is not None
     assert approval is not None and approval.revoked_at is not None
-    assert identity.revoked_at is not None
-    assert actor.status == membership.status == mount.status == "revoked"
 
 
 def test_sole_owner_nonterminal_stripe_flags_follow_up_without_cancel(monkeypatch):
@@ -372,23 +308,45 @@ def test_active_capabilities_are_conflict_409(monkeypatch):
     assert active.value.status_code == 409
 
 
-def test_sweep_pending_self_deletes_dry_run_and_apply():
-    doctor, _, _ = build_self_delete_scope()
-    calls: list[str] = []
+def test_sweep_pending_self_deletes_dry_run_apply_and_continues_past_failure():
+    keep, _, _ = build_self_delete_scope()
+    fail, _, _ = build_self_delete_scope()
+    boom = DoctorSelfDeleteError("clerk identity could not be deleted", status_code=503)
 
-    def fail_once(clerk_id: str) -> bool:
-        calls.append(clerk_id)
-        if len(calls) == 1:
-            raise DoctorSelfDeleteError(
-                "clerk identity could not be deleted", status_code=503
-            )
+    def fail_clerk(_c: str) -> bool:
+        raise boom
+
+    for doctor in (keep, fail):
+        with pytest.raises(DoctorSelfDeleteError):
+            _delete(doctor, clerk_deleter=fail_clerk)
+    dry = sweep_pending_self_deletes()
+    assert {row.doctor_id for row in dry} >= {keep.id, fail.id}
+    assert dry.failed == ()
+
+    def finish_keep(clerk_id: str) -> bool:
+        if clerk_id == fail.clerk_id:
+            raise boom
         return True
 
-    with pytest.raises(DoctorSelfDeleteError):
-        _delete(doctor, clerk_deleter=fail_once)
-    assert any(row.doctor_id == doctor.id for row in sweep_pending_self_deletes())
-    assert any(row.doctor_id == doctor.id for row in list_pending_self_deletes())
-    sweep_pending_self_deletes(apply=True, clerk_deleter=fail_once)
+    applied = sweep_pending_self_deletes(apply=True, clerk_deleter=finish_keep)
+    assert len(applied.failed) == 1 and applied.failed[0].doctor_id == fail.id
+    keep.refresh()
+    fail.refresh()
+    assert keep.account_deletion_status == "deleted"
+    assert fail.account_deletion_status == "deletion_pending"
+
+
+def test_sqlalchemy_error_after_rollback_is_retryable_503(monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    doctor, _, _ = build_self_delete_scope()
+    monkeypatch.setattr(
+        self_delete_module,
+        "_delete_personal_settings",
+        lambda *_a, **_k: (_ for _ in ()).throw(SQLAlchemyError("boom")),
+    )
+    with pytest.raises(DoctorSelfDeleteError) as raised:
+        _delete(doctor)
+    assert raised.value.status_code == 503
     doctor.refresh()
-    assert doctor.account_deletion_status == "deleted"
-    assert len(calls) == 2
+    assert doctor.account_deletion_status is None

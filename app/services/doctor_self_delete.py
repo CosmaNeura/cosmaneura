@@ -587,7 +587,7 @@ def delete_own_account(
         session.rollback()
         raise DoctorSelfDeleteError(
             "self-delete database operation failed; verify state before retrying",
-            status_code=400,
+            status_code=503,
         ) from None
 
     assert clerk_id_for_delete is not None
@@ -674,26 +674,46 @@ def list_pending_self_deletes(
     return tuple(pending)
 
 
+@dataclass(frozen=True)
+class SweepPendingSelfDeletesResult:
+    pending: tuple[PendingSelfDeleteRow, ...]
+    failed: tuple[PendingSelfDeleteRow, ...] = ()
+
+    def __iter__(self):
+        return iter(self.pending)
+
+    def __len__(self) -> int:
+        return len(self.pending)
+
+
 def sweep_pending_self_deletes(
     *,
     apply: bool = False,
     limit: int = 100,
     session: Session | None = None,
     clerk_deleter=None,
-) -> tuple[PendingSelfDeleteRow, ...]:
+) -> SweepPendingSelfDeletesResult:
     """Dry-run or finish deletion_pending rows (no schedule/infra)."""
     pending = list_pending_self_deletes(session=session, limit=limit)
     if not apply:
-        return pending
+        return SweepPendingSelfDeletesResult(pending=pending)
+    failed: list[PendingSelfDeleteRow] = []
     for row in pending:
-        delete_own_account(
-            doctor_id=row.doctor_id,
-            confirm=CONFIRM_PHRASE,
-            authenticated_doctor_id=row.doctor_id,
-            session=session,
-            clerk_deleter=clerk_deleter,
-        )
-    return pending
+        try:
+            delete_own_account(
+                doctor_id=row.doctor_id,
+                confirm=CONFIRM_PHRASE,
+                authenticated_doctor_id=row.doctor_id,
+                session=session,
+                clerk_deleter=clerk_deleter,
+            )
+        except DoctorSelfDeleteError:
+            failed.append(row)
+            log.warning(
+                "pending self-delete sweep row failed",
+                doctor_ref=provider_log_ref(f"doctor:{row.doctor_id}"),
+            )
+    return SweepPendingSelfDeletesResult(pending=pending, failed=tuple(failed))
 
 
 def assert_self_only(

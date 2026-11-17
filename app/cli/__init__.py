@@ -748,17 +748,22 @@ def sweep_pending_self_deletes_command(
 
     try:
         with global_session():
-            pending = sweep_pending_self_deletes(apply=apply, limit=limit)
+            result = sweep_pending_self_deletes(apply=apply, limit=limit)
     except DoctorSelfDeleteError as exc:
         raise typer.BadParameter(str(exc)) from None
 
     mode = "applied" if apply else "DRY RUN"
-    typer.echo(f"{mode}: pending_self_deletes={len(pending)} limit={limit}")
-    for row in pending:
+    typer.echo(
+        f"{mode}: pending_self_deletes={len(result)} "
+        f"failed={len(result.failed)} limit={limit}"
+    )
+    for row in result:
         typer.echo(
             f"  doctor_id={row.doctor_id} practice_id={row.practice_id} "
             f"clerk_prefix={row.clerk_id[:12]}"
         )
+    for row in result.failed:
+        typer.echo(f"  FAILED doctor_id={row.doctor_id}")
 
 
 @app.command("authority-ingestion-status")

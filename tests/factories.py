@@ -441,7 +441,6 @@ def build_self_delete_scope(
     import secrets
     from datetime import UTC, datetime
 
-    from app.models.baa import BaaAcceptance
     from app.models.practice import Practice
 
     from tests.routes.utils import ensure_current_baa_version
@@ -466,17 +465,6 @@ def build_self_delete_scope(
         baa_accepted_by_doctor_id=doctor.id,
         baa_signature_name="Synthetic Signer",
         baa_signature_title="Owner",
-    ).save()
-    BaaAcceptance(
-        practice_id=practice.id,
-        baa_version_id=version.id,
-        covered_entity_legal_name=practice.legal_name,
-        accepted_by_doctor_id=doctor.id,
-        accepted_by_name="Synthetic Signer",
-        accepted_by_title="Owner",
-        accepted_by_email=doctor.email or "synthetic@example.com",
-        accepted_at_utc=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
-        content_sha256=version.sha256,
     ).save()
     member = save_practice_member(
         PracticeMember(

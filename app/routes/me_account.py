@@ -2,7 +2,7 @@
 
 Body ``{"confirm":"DELETE"}``; identity from Clerk JWT only. Status codes:
 200, 404 (latch off), 409 (capabilities), 410 (disabled/revoked pilot),
-422 (confirm/body), 503 (retryable Clerk / deletion_pending finish).
+422 (confirm/body), 503 (retryable Clerk / DB / deletion_pending finish).
 """
 
 from __future__ import annotations
