@@ -2,7 +2,7 @@
 
 Existing users walled by billing-on: found (see list).
 
-This is a code trace against `master` `4fce2310` merged into PR #965, not a
+This is a code trace against `master` `34d7f8b7` merged into PR #965, not a
 production account inventory. Both flags becoming true, with all other state
 unchanged, does **not** change access in the synthetic exempt, completed legacy
 pilot, paid, live legacy-trial, or never-paid fixtures. Enabling integration does
