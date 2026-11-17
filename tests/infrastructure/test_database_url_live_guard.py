@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -89,3 +91,66 @@ def test_query_parser_rejects_unknown_fields_and_invalid_selector() -> None:
         guard.read_query(io.StringIO('{"unexpected":"value"}'))
     with pytest.raises(guard.LiveGuardError, match="while disabled"):
         guard.validate_query(_query(selected="database-url-v2", enabled="false"))
+
+
+@pytest.mark.parametrize("selected", ["database-url", "database-url-v2"])
+def test_main_reports_only_the_validated_reference_name(
+    selected: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    credential = "synthetic-database-credential-must-not-be-output"
+    resource = _resource(selected, include_v2=True)
+    # Azure responses may contain values as well as reference names.
+    configuration: Any = resource["properties"]
+    configuration["configuration"]["secrets"][0]["value"] = credential
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        calls.append(command)
+        assert "show" in command
+        return SimpleNamespace(returncode=0, stdout=json.dumps(resource), stderr="")
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+    monkeypatch.setattr(
+        guard.sys,
+        "stdin",
+        io.StringIO(json.dumps(_query(selected=selected, enabled="true"))),
+    )
+
+    assert guard.main() == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "result": "verified",
+        "selected_secret": selected,
+        "workload_count": "4",
+    }
+    assert len(calls) == 4
+    assert credential not in captured.out
+
+
+@pytest.mark.parametrize("failure", ["invalid-selector", "invalid-json", "azure-error"])
+def test_main_failures_do_not_echo_input_or_azure_output(
+    failure: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    credential = "synthetic-database-credential-must-not-be-output"
+    query = _query()
+    if failure == "invalid-selector":
+        query["selected_secret"] = credential
+    raw = credential if failure == "invalid-json" else json.dumps(query)
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(returncode=1, stdout=credential, stderr=credential)
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+    monkeypatch.setattr(guard.sys, "stdin", io.StringIO(raw))
+
+    assert guard.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "code": "database_url_live_guard_failed",
+        "result": "failed",
+    }
+    assert len(calls) == (1 if failure == "azure-error" else 0)

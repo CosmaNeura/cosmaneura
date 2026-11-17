@@ -1,4 +1,7 @@
+from urllib.parse import parse_qs, urlsplit
+
 import httpx
+import pytest
 
 import app.services.openfda as openfda
 from app.services.openfda import fetch_label_sections
@@ -72,7 +75,23 @@ def test_flags_truncation_and_links_to_the_full_label(monkeypatch):
     sections = fetch_label_sections("bigdrug")
     assert sections is not None
     assert sections[0]["truncated"] is True
-    assert "dailymed.nlm.nih.gov" in sections[0]["source_url"]
+    assert sections[0]["source_url"] == (
+        "https://dailymed.nlm.nih.gov/dailymed/search.cfm?labeltype=all&query=bigdrug"
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["drug & labeltype=evil", "https://attacker.invalid/#label", "drug?x=1#section"],
+)
+def test_full_label_link_keeps_drug_names_in_the_query(name: str) -> None:
+    url = urlsplit(openfda.dailymed_search_url(name))
+
+    assert url.scheme == "https"
+    assert url.netloc == "dailymed.nlm.nih.gov"
+    assert url.path == "/dailymed/search.cfm"
+    assert not url.fragment
+    assert parse_qs(url.query) == {"labeltype": ["all"], "query": [name]}
 
 
 def test_does_not_flag_truncation_when_the_section_fits(monkeypatch):
