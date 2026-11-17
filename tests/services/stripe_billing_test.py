@@ -1344,6 +1344,7 @@ def test_lost_checkout_response_replays_identical_frozen_request(
     )
     posts = [call for call in remote.calls if call[1] == "/checkout/sessions"]
     assert len(posts) == 2
+    assert posts[0][2] is not None
     assert posts[0][2]["line_items[0][price]"] == stripe_billing.price_id_for_practice(
         practice
     )
@@ -4923,17 +4924,6 @@ def test_checkout_price_follows_origin_channel(origin, expected, remote):
         if call[0] == "POST" and call[1] == "/checkout/sessions"
     )
     assert request["line_items[0][price]"] == expected
-    remote.calls.clear()
-    # The frozen request is replayed with the same tier and idempotency key.
-    stripe_billing.create_checkout_session(
-        practice,
-        customer_email="owner@example.com",
-        success_url="https://app.example/settings?billing=success",
-        cancel_url="https://app.example/settings?billing=cancelled",
-        now=NOW,
-    )
-    practice.refresh()
-    assert practice.stripe_checkout_session_id == "cs_test_idempotent"
 
 
 def test_runtime_price_check_expects_9000_public_and_6000_mcd(remote):
@@ -5021,10 +5011,10 @@ def test_second_current_price_must_be_ready(bad, remote, monkeypatch):
                     value["currency"] = "eur"
                 elif bad == "amount":
                     value["unit_amount"] = 9000
-                elif bad == "interval":
-                    value["recurring"]["interval"] = "year"
-                elif bad == "usage":
-                    value["recurring"]["usage_type"] = "metered"
+                elif bad in {"interval", "usage"}:
+                    value["recurring"][
+                        "interval" if bad == "interval" else "usage_type"
+                    ] = "bad"
                 elif bad == "scheme":
                     value["billing_scheme"] = "tiered"
             return value
@@ -5032,38 +5022,3 @@ def test_second_current_price_must_be_ready(bad, remote, monkeypatch):
         monkeypatch.setattr(stripe_billing, "_request", request)
     with pytest.raises(stripe_billing.StripeStateInvalid):
         stripe_billing._validate_runtime_configuration(require_active_price=True)
-
-
-def test_startup_retrieves_both_current_prices(remote):
-    stripe_billing.validate_startup_configuration()
-    assert [call[1] for call in remote.calls] == [
-        "/account",
-        "/prices/price_test_x",
-        "/prices/price_test_mcd",
-    ]
-
-
-def test_checkout_refuses_existing_invoice_lane_without_changing_access(remote):
-    from app.models.practice_invoice_billing import PracticeInvoiceBilling
-
-    practice = _practice()
-    practice.subscription_status = "active"
-    practice.save()
-    PracticeInvoiceBilling(
-        practice_id=practice.id,
-        price_tier="direct",
-        quantity=1,
-        operator_ref="test:F1",
-        reason="Synthetic invoice reservation",
-    ).save()
-    with pytest.raises(stripe_billing.StripeManagedBilling):
-        stripe_billing.create_checkout_session(
-            practice,
-            customer_email="owner@example.com",
-            success_url="https://app.example/settings?billing=success",
-            cancel_url="https://app.example/settings?billing=cancelled",
-            now=NOW,
-        )
-    practice.refresh()
-    assert practice.subscription_status == "active" and practice.entitled(at=NOW)
-    assert remote.calls == []

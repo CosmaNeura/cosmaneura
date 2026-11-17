@@ -57,13 +57,12 @@ def _before(practice):
         and not practice.has_authoritative_stripe_subscription_binding()
     ):
         return False
-    if status == "active":
-        return True
-    if status == "trialing":
-        return practice.trial_ends_at is not None and practice.trial_ends_at > NOW
-    if status is not None or practice.acquisition_source == "public_self_service":
-        return False
-    return practice.trial_ends_at is not None and practice.trial_ends_at > NOW
+    trial_active = practice.trial_ends_at is not None and practice.trial_ends_at > NOW
+    return status == "active" or (
+        status in {None, "trialing"}
+        and trial_active
+        and (status is not None or practice.acquisition_source != "public_self_service")
+    )
 
 
 def test_reorder_never_reduces_entitlement():

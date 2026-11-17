@@ -10,7 +10,7 @@ from app.services.public_entitlements import active_clinician_seat_count
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.practice_invoice_billing import PracticeInvoiceBilling
 from sqlmodel import Session, col, select
@@ -49,12 +49,9 @@ def bill_by_invoice(
     if not 1 <= days_until_due <= 365:
         raise InvoiceBillingError("days_until_due must be between 1 and 365")
     with get_session() as session:
-        locked = session.exec(
-            select(Practice)
-            .where(Practice.id == practice.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).one()
+        locked = lock_practice_seats(session, practice.id)
+        if locked is None:
+            raise InvoiceBillingError("practice no longer exists")
         row = session.get(PracticeInvoiceBilling, locked.id)
         if not locked.entitled():
             raise InvoiceBillingError("practice must already be entitled")
@@ -83,25 +80,21 @@ def bill_by_invoice(
         if dry_run:
             return None
         stripe_billing._validate_runtime_configuration(require_active_price=True)
+        values: dict[str, Any] = dict(
+            price_tier=locked.origin_channel,
+            quantity=quantity,
+            operator_ref=operator,
+            reason=explanation,
+            days_until_due=days_until_due,
+        )
         if row is None:
-            row = PracticeInvoiceBilling(
-                practice_id=locked.id,
-                price_tier=locked.origin_channel,
-                quantity=quantity,
-                operator_ref=operator,
-                reason=explanation,
-                days_until_due=days_until_due,
-            )
+            row = PracticeInvoiceBilling(practice_id=locked.id, **values)
         else:
             row.operation_version += 1
-            row.stripe_customer_id = None
-            row.stripe_subscription_id = None
-            row.subscription_status = None
-            row.price_tier = locked.origin_channel
-            row.quantity = quantity
-            row.days_until_due = days_until_due
-            row.operator_ref = operator
-            row.reason = explanation
+            row.stripe_customer_id = row.stripe_subscription_id = (
+                row.subscription_status
+            ) = None
+            row.sqlmodel_update(values)
         session.add(row)
         # Persist the operation before any POST: ambiguous failures cannot create
         # a second invoice lane. Operators recover using the recorded key.
@@ -199,16 +192,20 @@ def _validate_invoice_subscription(
     return stripe_billing._subscription_item(subscription)
 
 
+def _locked_invoice_row(
+    session: Session, **identity: Any
+) -> PracticeInvoiceBilling | None:
+    return session.exec(
+        select(PracticeInvoiceBilling).filter_by(**identity).with_for_update()
+    ).one_or_none()
+
+
 def apply_invoice_event(
     subscription_id: str, event_type: str, created_at: datetime, obj: dict[str, Any]
 ) -> bool | None:
     """None means no match; matched stale events return without a Practice read."""
     with get_session() as session:
-        row = session.exec(
-            select(PracticeInvoiceBilling)
-            .where(PracticeInvoiceBilling.stripe_subscription_id == subscription_id)
-            .with_for_update()
-        ).one_or_none()
+        row = _locked_invoice_row(session, stripe_subscription_id=subscription_id)
         if row is None:
             return None
         if (
@@ -252,11 +249,9 @@ def mark_invoice_quantity(session: Session, practice_id: Any, quantity: int) -> 
 
 def sync_invoice_subscription_quantity(practice_id: Any) -> bool:
     with get_session() as session:
-        row = session.exec(
-            select(PracticeInvoiceBilling)
-            .where(PracticeInvoiceBilling.practice_id == practice_id)
-            .with_for_update()
-        ).one()
+        row = _locked_invoice_row(session, practice_id=practice_id)
+        if row is None:
+            return False
         if not row.stripe_subscription_id or row.subscription_status in TERMINAL:
             return False
         try:

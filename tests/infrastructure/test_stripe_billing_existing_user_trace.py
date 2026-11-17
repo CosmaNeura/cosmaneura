@@ -1,33 +1,35 @@
-"""Execute reviewed runtime functions with synthetic rows and mocked I/O.
-
-AST extraction avoids app startup, credentials, migrations and provider sockets.
-Business-rule bodies are compiled from this checkout, not copied into tests.
-ORM queries, exact-grant lookup, signature verification and logging are ports.
-"""
+"""Actual entitlement methods and extracted runtime bodies, with synthetic I/O."""
 
 from __future__ import annotations
+import __future__
 
 import ast
 import asyncio
 import copy
 import json
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass  # noqa: F401 - compiled runtime globals
 from datetime import datetime, timedelta, timezone
-from enum import Enum
+from enum import Enum  # noqa: F401 - compiled runtime globals
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import (
+    Any,
+    cast,  # noqa: F401 - compiled runtime globals
+)
 from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status  # noqa: F401 - compiled runtime globals
 from starlette.responses import JSONResponse
+
+from app.models.practice import Practice as EntitlementPractice
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 11, 16, tzinfo=timezone.utc)
 
 
-def load(path: str, names: tuple[str, ...], namespace: dict[str, Any], scope=None):
+def load(path: str, names: Iterable[str], namespace: dict[str, Any], scope=None):
     tree = ast.parse((ROOT / path).read_text())
     body = tree.body
     if scope:
@@ -42,23 +44,16 @@ def load(path: str, names: tuple[str, ...], namespace: dict[str, Any], scope=Non
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             node.decorator_list = []  # route registration is an I/O boundary
         selected.append(node)
-    module = ast.Module(
-        body=[
-            ast.ImportFrom(
-                module="__future__", names=[ast.alias(name="annotations")], level=0
-            ),
-            *selected,
-        ],
-        type_ignores=[],
+    module = ast.Module(body=selected, type_ignores=[])
+    exec(
+        compile(
+            ast.fix_missing_locations(module),
+            path,
+            "exec",
+            flags=__future__.annotations.compiler_flag,
+        ),
+        namespace,
     )
-    exec(compile(ast.fix_missing_locations(module), path, "exec"), namespace)
-
-
-class CredentialReadiness:
-    """A mock readiness result; no key or signing secret is constructed."""
-
-    def startswith(self, prefixes):
-        return True
 
 
 class Query:
@@ -68,8 +63,7 @@ class Query:
     def where(self, *args):
         return self
 
-    def with_for_update(self):
-        return self
+    with_for_update = where
 
 
 class Rows:
@@ -105,11 +99,10 @@ class Session:
     def add(self, row):
         self.added.append(row)
 
-    def commit(self):
+    def commit(self, *args):
         pass
 
-    def refresh(self, row):
-        pass
+    refresh = commit
 
     def __enter__(self):
         return self
@@ -120,15 +113,7 @@ class Session:
 
 def harness(kind: str):
     namespace: dict[str, Any] = {
-        "datetime": datetime,
-        "timezone": timezone,
-        "Enum": Enum,
-        "dataclass": dataclass,
-        "json": json,
-        "cast": cast,
-        "Any": Any,
-        "HTTPException": HTTPException,
-        "status": status,
+        **globals(),
         "log": Mock(),
         "select": Query,
         "Practice": SyntheticPractice,
@@ -137,26 +122,13 @@ def harness(kind: str):
         "StripeStateInvalid": type("SyntheticStripeStateInvalid", (Exception,), {}),
         "StripeSeatLimitExceeded": type("SyntheticSeatLimit", (Exception,), {}),
         "StripeSeatLedgerInvalid": type("SyntheticSeatLedger", (Exception,), {}),
-        "ENTITLED_SUBSCRIPTION_STATUSES": {"active", "trialing"},
-        "KNOWN_SUBSCRIPTION_STATUSES": {
-            "active",
-            "trialing",
-            "incomplete",
-            "incomplete_expired",
-            "past_due",
-            "canceled",
-            "unpaid",
-            "paused",
-            "pending_verification",
-            "invalid",
-        },
     }
     config = {
         "STRIPE_INTEGRATION_ENABLED": False,
         "STRIPE_BILLING_ENABLED": False,
         "STRIPE_LIVE_MODE": False,
-        "STRIPE_SECRET_KEY": CredentialReadiness(),
-        "STRIPE_WEBHOOK_SECRET": CredentialReadiness(),
+        "STRIPE_SECRET_KEY": "sk_test_synthetic",
+        "STRIPE_WEBHOOK_SECRET": "whsec_synthetic",
         "STRIPE_ACCOUNT_ID": "acct_test_synthetic",
         "STRIPE_PRICE_ID": "price_test_synthetic",
         "STRIPE_MCD_PRICE_ID": "price_test_mcd_synthetic",
@@ -167,27 +139,10 @@ def harness(kind: str):
     }
     load(
         "app/configuration/stripe.py",
-        (
-            "_secret_mode_matches",
-            "stripe_runtime_configured",
-            "stripe_webhook_configured",
-            "stripe_portal_configured",
-            "stripe_billing_configured",
-        ),
+        "_secret_mode_matches stripe_runtime_configured stripe_webhook_configured stripe_portal_configured stripe_billing_configured".split(),
         config,
     )
     namespace["stripe_config"] = SimpleNamespace(**config)
-    load("app/models/practice.py", ("PracticeAcquisitionSource",), namespace)
-    load(
-        "app/models/practice.py",
-        (
-            "billing_exemption_active",
-            "has_authoritative_stripe_subscription_binding",
-            "entitled",
-        ),
-        namespace,
-        scope="Practice",
-    )
     practice = SyntheticPractice(
         id="practice_test_synthetic",
         subscription_status=None,
@@ -210,12 +165,8 @@ def harness(kind: str):
         practice.stripe_customer_id = "cus_test_synthetic"
         practice.stripe_subscription_id = "sub_test_synthetic"
         practice.stripe_state_version = 1
-    for name in (
-        "billing_exemption_active",
-        "has_authoritative_stripe_subscription_binding",
-        "entitled",
-    ):
-        setattr(practice, name, namespace[name].__get__(practice))
+    for name in "billing_exemption_active has_authoritative_stripe_subscription_binding entitled".split():
+        setattr(practice, name, getattr(EntitlementPractice, name).__get__(practice))
     practice.baa_in_force = lambda **kwargs: True
     practice.refresh = lambda: None
     pilot = (
@@ -238,13 +189,7 @@ def harness(kind: str):
     )
     load(
         "app/services/doctor_access.py",
-        (
-            "DoctorAccessDecision",
-            "_denied",
-            "_membership_tombstone",
-            "_has_valid_legacy_pilot_access",
-            "_decide",
-        ),
+        "DoctorAccessDecision _denied _membership_tombstone _has_valid_legacy_pilot_access _decide".split(),
         namespace,
     )
 
@@ -324,34 +269,17 @@ def test_flags_alone_preserve_current_access_and_stored_state(kind, allowed):
 
 
 def deliver_failed_invoice(namespace, config, practice):
+    invoice_types = set(
+        "invoice.payment_failed invoice.paid invoice.payment_succeeded".split()
+    )
     namespace.update(
-        {
-            "_isolated_state_session": lambda: Session(practice),
-            "INVOICE_EVENT_TYPES": {
-                "invoice.payment_failed",
-                "invoice.paid",
-                "invoice.payment_succeeded",
-            },
-            "MIRRORED_EVENT_TYPES": {
-                "invoice.payment_failed",
-                "invoice.paid",
-                "invoice.payment_succeeded",
-            },
-        }
+        _isolated_state_session=lambda: Session(practice),
+        INVOICE_EVENT_TYPES=invoice_types,
+        MIRRORED_EVENT_TYPES=invoice_types,
     )
     load(
         "app/services/stripe_billing.py",
-        (
-            "_validate_livemode",
-            "_stripe_timestamp",
-            "_event_created_at",
-            "_stripe_reference_id",
-            "_invoice_event_details",
-            "_event_subscription_id",
-            "validate_stripe_event_envelope",
-            "_minimal_stripe_event",
-            "enqueue_stripe_event",
-        ),
+        "_validate_livemode _stripe_timestamp _event_created_at _stripe_reference_id _invoice_event_details _event_subscription_id validate_stripe_event_envelope _minimal_stripe_event enqueue_stripe_event".split(),
         namespace,
     )
     namespace.update(
@@ -482,29 +410,25 @@ def test_existing_exempt_access_should_survive_invalid_bound_contract():
 
 def test_trace_names_every_runtime_flag_and_readiness_call_site():
     trace = (ROOT / "docs/stripe-billing-existing-user-trace.md").read_text()
-    helpers = {
-        "stripe_runtime_configured",
-        "stripe_webhook_configured",
-        "stripe_portal_configured",
-        "stripe_billing_configured",
-        "_request",
-        "_validate_runtime_configuration",
-    }
+    helpers = set(
+        "stripe_runtime_configured stripe_webhook_configured stripe_portal_configured stripe_billing_configured _request _validate_runtime_configuration".split()
+    )
     flag_names = {"STRIPE_BILLING_ENABLED", "STRIPE_INTEGRATION_ENABLED"}
-    sites = set()
-    for path in (ROOT / "app").rglob("*.py"):
-        tree = ast.parse(path.read_text())
-        for function in ast.walk(tree):
-            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for node in ast.walk(function):
-                called = (
-                    getattr(node.func, "id", getattr(node.func, "attr", ""))
-                    if isinstance(node, ast.Call)
-                    else ""
-                )
-                referenced = getattr(node, "id", getattr(node, "attr", ""))
-                if called in helpers or referenced in flag_names:
-                    sites.add(function.name)
+
+    def identifier(node):
+        return getattr(node, "id", getattr(node, "attr", ""))
+
+    def relevant(node):
+        return identifier(node) in flag_names or (
+            isinstance(node, ast.Call) and identifier(node.func) in helpers
+        )
+
+    sites = {
+        function.name
+        for path in (ROOT / "app").rglob("*.py")
+        for function in ast.walk(ast.parse(path.read_text()))
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(relevant(node) for node in ast.walk(function))
+    }
     assert sites
     assert {name for name in sites if name not in trace} == set()
