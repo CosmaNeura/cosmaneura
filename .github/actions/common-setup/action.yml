@@ -12,6 +12,12 @@ inputs:
   enable_cache:
     description: Restore and save shared tool and dependency caches.
     default: "true"
+  enable_uv_cache:
+    description: >
+      Opt-in restore/save of ~/.cache/uv (wheels/sdists). Default false so
+      deploy, release, and infra apply hosts do not pay cache I/O. Set true
+      only from Pull Request Checks.
+    default: "false"
 runs:
   using: 'composite'
   steps:
@@ -76,3 +82,11 @@ runs:
         key: ${{ runner.os }}-node-modules-${{ hashFiles('web/pnpm-lock.yaml') }}
         restore-keys: |
           ${{ runner.os }}-node-modules
+    # uv's package cache (wheels/sdists). Opt-in via enable_uv_cache so
+    # deploy/release/infra jobs never restore or save this path. Exact key
+    # only (OS + arch + uv.lock); no bare OS-uv- prefix restore.
+    - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      if: inputs.enable_uv_cache == 'true'
+      with:
+        path: ~/.cache/uv
+        key: ${{ runner.os }}-${{ runner.arch }}-uv-${{ hashFiles('uv.lock') }}

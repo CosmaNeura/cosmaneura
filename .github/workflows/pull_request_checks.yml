@@ -54,7 +54,10 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: zsh
-      - run: just up --fast
+          enable_uv_cache: "true"
+      # Wait for compose healthchecks. `--fast` races db_migrate once uv cache
+      # makes py_setup finish before Postgres accepts connections.
+      - run: just up
       - run: just py_setup
       - run: just py_lint
       - run: just db_migrate
@@ -65,68 +68,37 @@ jobs:
     needs: [ci-mode]
     if: needs.ci-mode.outputs.full != 'false'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Keep <=60: repo contract test_every_workflow_job_has_a_finite_timeout.
+    # Coverage-heavy bootstrap recipes take ~15-17m each, so they stay in
+    # 2-recipe pairs rather than one long bundle.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - shard: application
             apt-packages: zsh
-          - shard: infrastructure-general
+          - shard: infrastructure-core
             apt-packages: zsh
-          - shard: infrastructure-controller
+          - shard: infrastructure-sanitizer-source-foundation-pair
             apt-packages: zsh
-          - shard: infrastructure-receipt-io
+          - shard: infrastructure-sanitizer-source-state-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-foundation
+          - shard: infrastructure-sanitizer-evidence-exec
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-state-authority
+          - shard: infrastructure-sanitizer-observer-bundle
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-state-context
+          - shard: infrastructure-sanitizer-connection-plan-state-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-state-integrity
+          - shard: infrastructure-sanitizer-connection-plan-output-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-evidence
+          - shard: infrastructure-sanitizer-bootstrap-binding-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-evidence-integrity
+          - shard: infrastructure-sanitizer-bootstrap-ancestry-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-executor
+          - shard: infrastructure-sanitizer-bootstrap-output-pair
             apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-runtime
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-output
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan-state
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan-output
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-connection-plan-contract
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-digest
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-ancestry
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-state
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-output
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-duplicate
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-tamper
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-bootstrap-binding-failure
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-observer-integrity
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-data-contract-executor
-            apt-packages: zsh
-          - shard: infrastructure-sanitizer-source-snapshot
+          - shard: infrastructure-sanitizer-bootstrap-integrity-pair
             apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
@@ -141,10 +113,13 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: ${{ matrix.apt-packages }}
+          enable_uv_cache: "true"
       - name: Install SHA-verified Localias
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
-      - run: just up --fast
+      # Wait for compose healthchecks. `--fast` races db_migrate once uv cache
+      # makes py_setup finish before Postgres accepts connections.
+      - run: just up
       - run: just py_setup
       - name: Install integration Chromium headless shell
         if: ${{ matrix.shard == 'integration' }}
