@@ -66,8 +66,6 @@ def _before(practice):
 
 
 def test_reorder_never_reduces_entitlement():
-    # Every known status and the unknown-status equivalence class, every source,
-    # all trial/exemption boundary states, and both binding states.
     clocks = [None, NOW - timedelta(seconds=1), NOW, NOW + timedelta(seconds=1)]
     sources = [source.value for source in PracticeAcquisitionSource] + ["unknown"]
     for status, source, trial, exempt, expiry, bound in product(

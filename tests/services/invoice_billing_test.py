@@ -20,14 +20,12 @@ from app.models.practice_invoice_billing import PracticeInvoiceBilling
 
 from tests.services.stripe_billing_test import (
     NOW,
+    _event as _subscription_event,
     _organization_doctor,
     _practice,
     _subscription,
+    configured_stripe as configured_stripe,
 )
-from tests.services.stripe_billing_test import (
-    _event as _subscription_event,
-)
-from tests.services.stripe_billing_test import configured_stripe as configured_stripe
 
 ALERT = "invoice-only billing needs operator attention"
 
@@ -239,14 +237,11 @@ def test_bill_by_invoice_refuses_bound_marker_or_open_checkout_practice(
             "--reason",
             "Synthetic",
         ]
+        env = {"NO_COLOR": "1", "TERM": "dumb"}
         result = CliRunner().invoke(
-            cli_app,
-            args + ["--no-dry-run"],
-            env={"NO_COLOR": "1", "TERM": "dumb"},
-            color=False,
+            cli_app, args + ["--no-dry-run"], env=env, color=False
         )
-        assert result.exit_code == 2
-        assert "--operator-ref" in result.output
+        assert result.exit_code == 2 and "--operator-ref" in result.output
     assert invoice_remote == []
     assert _access(practice) == before
 
@@ -279,7 +274,6 @@ def test_invoice_seat_change_updates_only_invoice_record(
     assert row.quantity == 2
     assert invoice_remote[1][2]["items[0][quantity]"] == "2"
     assert invoice_remote[1][2]["items[0][price]"] == "price_test_mcd"
-    # Remove and then add a clinician through the same ledger hook used by Core.
     for state, count in [("inactive", 1), ("active", 2)]:
         member.seat_state = state
         save_practice_member(member)

@@ -13,10 +13,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum  # noqa: F401 - compiled runtime globals
 from pathlib import Path
 from types import SimpleNamespace
-from typing import (
-    Any,
-    cast,  # noqa: F401 - compiled runtime globals
-)
+from typing import Any, cast  # noqa: F401 - compiled runtime globals
 from unittest.mock import Mock
 
 import pytest
@@ -353,7 +350,6 @@ def test_existing_access_should_survive_billing_on_and_signed_failure(kind):
 @pytest.mark.parametrize("kind", ["exempt", "legacy_pilot", "legacy_trial"])
 def test_unbound_existing_accounts_are_not_matched_by_subscription_events(kind):
     namespace, config, practice, decide = harness(kind)
-    # Only database matching is mocked: no bound subscription means no row.
     original = Session.exec
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(Session, "exec", lambda self, query: Rows(None))
