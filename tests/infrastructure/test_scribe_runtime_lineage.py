@@ -141,3 +141,12 @@ def test_fresh_runtime_module_required(history, condition):
             runtime.symlink_to(repository / lineage.MODULE_PATH)
     with pytest.raises(lineage.LineageRejected, match="runtime"):
         lineage.verify(repository, labels, runtime)
+
+
+def test_source_revision_has_one_definition_and_documentation_matches():
+    from scripts.scribe_runtime_pin import SCRIBE_SOURCE_REVISION
+
+    assert lineage.SCRIBE_SOURCE_REVISION == SCRIBE_SOURCE_REVISION
+    root = Path(__file__).resolve().parents[2]
+    readme = (root / "infra/README.md").read_text()
+    assert f"Scribe source at `{SCRIBE_SOURCE_REVISION}`" in readme

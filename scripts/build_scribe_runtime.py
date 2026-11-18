@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -107,6 +108,164 @@ def source_context(repository: Path, output: Path) -> None:
     )
 
 
+def prepare_runtime(
+    core_image: str, root: Path, builder: str | None = None
+) -> tuple[Path, str, str, str, str, list[str]]:
+    """Run the identical refused-unless-reviewed builder and package path."""
+    core_archive = root / "core.tar"
+    command(["docker", "image", "save", "--output", str(core_archive), core_image])
+    core_digest, core = docker_archive_to_oci(core_archive, root / "core-oci")
+    if core.get("architecture") != "amd64" or core.get("os") != "linux":
+        raise ValueError("scribe_runtime_core_platform_rejected")
+    core_config = core.get("config")
+    if not isinstance(core_config, dict):
+        raise ValueError("scribe_runtime_core_config_rejected")
+    core_revision = (core_config.get("Labels") or {}).get(
+        "org.opencontainers.image.revision", ""
+    )
+    if not re.fullmatch(r"[0-9a-f]{40}", core_revision):
+        raise ValueError("scribe_runtime_core_revision_rejected")
+    core_user = core_config.get("User") or "0:0"
+    if not re.fullmatch(r"[0-9]+(?::[0-9]+)?", core_user):
+        raise ValueError("scribe_runtime_core_user_rejected")
+    repository = root / "source"
+    command(
+        [
+            "git",
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            SCRIBE_SOURCE_REPOSITORY,
+            str(repository),
+        ]
+    )
+    command(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "checkout",
+            "--quiet",
+            "--detach",
+            SCRIBE_SOURCE_REVISION,
+        ]
+    )
+    context = root / "context"
+    context.mkdir()
+    source_context(repository, context)
+    core_ref = "core-substrate@" + core_digest
+    core_context = f"{core_ref}=oci-layout://{root / 'core-oci'}@{core_digest}"
+    base = [
+        "docker",
+        "buildx",
+        "build",
+        "--platform",
+        "linux/amd64",
+        "--provenance=false",
+        "--sbom=false",
+    ]
+    if builder:
+        base.extend(["--builder", builder])
+    stage = root / "runtime-stage.tar"
+    command(
+        [
+            *base,
+            "--target",
+            "scribe-builder",
+            "--build-context",
+            core_context,
+            "--build-arg",
+            "CORE_IMAGE=" + core_ref,
+            "--build-arg",
+            "UV_BUILDER_IMAGE=" + UV_BUILDER_IMAGE,
+            "--build-arg",
+            "CORE_SOURCE_REVISION=" + core_revision,
+            "--build-arg",
+            "SCRIBE_SOURCE_REVISION=" + SCRIBE_SOURCE_REVISION,
+            "--build-arg",
+            "CORE_RUNTIME_USER=" + core_user,
+            "--output",
+            "type=docker,dest=" + str(stage),
+            "-f",
+            str(context / "Dockerfile.core-bundle"),
+            str(context),
+        ]
+    )
+    # Export/load only an untagged local builder image. Inspect its saved
+    # configuration digest; never select a registry tag or publish it.
+    with tarfile.open(stage) as archive:
+        source = archive.extractfile("manifest.json")
+        if source is None:
+            raise ValueError("scribe_runtime_build_archive_rejected")
+        entries = json.load(source)
+        if len(entries) != 1 or entries[0].get("RepoTags"):
+            raise ValueError("scribe_runtime_build_archive_rejected")
+        source = archive.extractfile(entries[0]["Config"])
+        if source is None:
+            raise ValueError("scribe_runtime_build_archive_rejected")
+        source.read()
+    loaded = command(["docker", "image", "load", "--input", str(stage)])
+    identities = re.findall(r"(?m)^Loaded image ID: (sha256:[0-9a-f]{64})$", loaded)
+    if len(identities) != 1:
+        raise ValueError("scribe_runtime_loaded_image_ambiguous")
+    image_id = identities[0]
+    container = command(
+        [
+            "docker",
+            "create",
+            "--network",
+            "none",
+            "--entrypoint",
+            "/bin/true",
+            image_id,
+        ]
+    )
+    try:
+        runtime = root / "runtime"
+        command(["docker", "cp", container + ":/opt/scribe/runtime", str(runtime)])
+    finally:
+        command(["docker", "rm", container])
+    module = (
+        runtime
+        / "lib/python3.13/site-packages/cosmaneura_scribe"
+        / Path(MODULE_PATH).name
+    )
+    if digest(module.read_bytes()) != "sha256:" + RUNTIME_SHA256:
+        raise ValueError("scribe_runtime_built_module_rejected")
+    normalize_build_runtime(runtime)
+    actual = package(runtime, root / "runtime-oci")
+    return runtime, actual, core_ref, core_context, core_revision, base
+
+
+def derive_runtime_digest(
+    core_image: str, manifest_out: Path, builder: str | None = None
+) -> str:
+    """Derive on the real builder path without building or tagging a Core layer."""
+    with tempfile.TemporaryDirectory(prefix="core-scribe-derive-") as temporary:
+        runtime, actual, *_ = prepare_runtime(core_image, Path(temporary), builder)
+        entries = []
+        for path in [runtime, *sorted(runtime.rglob("*"))]:
+            info = path.lstat()
+            entry: dict[str, object] = {
+                "path": path.relative_to(runtime).as_posix(),
+                "mode": f"{stat.S_IMODE(info.st_mode):04o}",
+            }
+            if path.is_symlink():
+                target = str(path.readlink())
+                entry.update(type="symlink", size=len(target.encode()), target=target)
+            elif path.is_dir():
+                entry.update(type="directory", size=0)
+            elif path.is_file():
+                entry.update(
+                    type="file", size=info.st_size, sha256=digest(path.read_bytes())
+                )
+            else:
+                raise ValueError("scribe_runtime_manifest_entry_rejected")
+            entries.append(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+        manifest_out.write_text("\n".join(entries) + "\n")
+        return actual
+
+
 def build(
     core_image: str,
     output_image: str | None,
@@ -115,133 +274,14 @@ def build(
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="core-scribe-build-") as temporary:
         root = Path(temporary)
-        core_archive = root / "core.tar"
-        command(["docker", "image", "save", "--output", str(core_archive), core_image])
-        core_digest, core = docker_archive_to_oci(core_archive, root / "core-oci")
-        if core.get("architecture") != "amd64" or core.get("os") != "linux":
-            raise ValueError("scribe_runtime_core_platform_rejected")
-        core_config = core.get("config")
-        if not isinstance(core_config, dict):
-            raise ValueError("scribe_runtime_core_config_rejected")
-        core_revision = (core_config.get("Labels") or {}).get(
-            "org.opencontainers.image.revision", ""
+        runtime, actual, core_ref, core_context, core_revision, base = prepare_runtime(
+            core_image, root, builder
         )
-        if not re.fullmatch(r"[0-9a-f]{40}", core_revision):
-            raise ValueError("scribe_runtime_core_revision_rejected")
-        core_user = core_config.get("User") or "0:0"
-        if not re.fullmatch(r"[0-9]+(?::[0-9]+)?", core_user):
-            raise ValueError("scribe_runtime_core_user_rejected")
-        repository = root / "source"
-        command(
-            [
-                "git",
-                "clone",
-                "--quiet",
-                "--no-checkout",
-                SCRIBE_SOURCE_REPOSITORY,
-                str(repository),
-            ]
-        )
-        command(
-            [
-                "git",
-                "-C",
-                str(repository),
-                "checkout",
-                "--quiet",
-                "--detach",
-                SCRIBE_SOURCE_REVISION,
-            ]
-        )
-        context = root / "context"
-        context.mkdir()
-        source_context(repository, context)
-        core_ref = "core-substrate@" + core_digest
-        core_context = f"{core_ref}=oci-layout://{root / 'core-oci'}@{core_digest}"
-        base = [
-            "docker",
-            "buildx",
-            "build",
-            "--platform",
-            "linux/amd64",
-            "--provenance=false",
-            "--sbom=false",
-        ]
-        if builder:
-            base.extend(["--builder", builder])
-        stage = root / "runtime-stage.tar"
         export = (
             ["--output", "type=oci,dest=" + str(output_oci)]
             if output_oci
             else ["--load", "--tag", output_image]
         )
-        command(
-            [
-                *base,
-                "--target",
-                "scribe-builder",
-                "--build-context",
-                core_context,
-                "--build-arg",
-                "CORE_IMAGE=" + core_ref,
-                "--build-arg",
-                "UV_BUILDER_IMAGE=" + UV_BUILDER_IMAGE,
-                "--build-arg",
-                "CORE_SOURCE_REVISION=" + core_revision,
-                "--build-arg",
-                "SCRIBE_SOURCE_REVISION=" + SCRIBE_SOURCE_REVISION,
-                "--build-arg",
-                "CORE_RUNTIME_USER=" + core_user,
-                "--output",
-                "type=docker,dest=" + str(stage),
-                "-f",
-                str(context / "Dockerfile.core-bundle"),
-                str(context),
-            ]
-        )
-        # Export/load only an untagged local builder image. Inspect its saved
-        # configuration digest; never select a registry tag or publish it.
-        with tarfile.open(stage) as archive:
-            source = archive.extractfile("manifest.json")
-            if source is None:
-                raise ValueError("scribe_runtime_build_archive_rejected")
-            entries = json.load(source)
-            if len(entries) != 1 or entries[0].get("RepoTags"):
-                raise ValueError("scribe_runtime_build_archive_rejected")
-            source = archive.extractfile(entries[0]["Config"])
-            if source is None:
-                raise ValueError("scribe_runtime_build_archive_rejected")
-            source.read()
-        loaded = command(["docker", "image", "load", "--input", str(stage)])
-        identities = re.findall(r"(?m)^Loaded image ID: (sha256:[0-9a-f]{64})$", loaded)
-        if len(identities) != 1:
-            raise ValueError("scribe_runtime_loaded_image_ambiguous")
-        image_id = identities[0]
-        container = command(
-            [
-                "docker",
-                "create",
-                "--network",
-                "none",
-                "--entrypoint",
-                "/bin/true",
-                image_id,
-            ]
-        )
-        try:
-            runtime = root / "runtime"
-            command(["docker", "cp", container + ":/opt/scribe/runtime", str(runtime)])
-        finally:
-            command(["docker", "rm", container])
-        module = (
-            runtime
-            / "lib/python3.13/site-packages/cosmaneura_scribe"
-            / Path(MODULE_PATH).name
-        )
-        if digest(module.read_bytes()) != "sha256:" + RUNTIME_SHA256:
-            raise ValueError("scribe_runtime_built_module_rejected")
-        normalize_build_runtime(runtime)
-        actual = package(runtime, root / "runtime-oci")
         verify_runtime(runtime, actual)
         runtime_ref = "scribe-runtime@" + SCRIBE_RUNTIME_IMAGE_DIGEST
         layer = root / "layer"
@@ -273,10 +313,21 @@ def main() -> int:
     output = parser.add_mutually_exclusive_group(required=True)
     output.add_argument("--output-image")
     output.add_argument("--output-oci", type=Path)
+    output.add_argument("--derive-runtime-digest", action="store_true")
+    parser.add_argument("--manifest-out", type=Path)
     parser.add_argument("--builder")
     args = parser.parse_args()
+    if args.derive_runtime_digest != (args.manifest_out is not None):
+        parser.error("--derive-runtime-digest requires --manifest-out, exclusively")
     try:
-        print(build(args.core_image, args.output_image, args.builder, args.output_oci))
+        if args.derive_runtime_digest:
+            print(
+                derive_runtime_digest(args.core_image, args.manifest_out, args.builder)
+            )
+        else:
+            print(
+                build(args.core_image, args.output_image, args.builder, args.output_oci)
+            )
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         print("scribe_runtime_build_refused")
         return 1

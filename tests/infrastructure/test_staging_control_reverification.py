@@ -14,10 +14,6 @@ from scripts.verify_staging_candidate import (
 )
 
 SCHEMA = "89c31f0ae275"
-# This reviewed tree matches the pinned audited inventory. Production build
-# changes may intentionally invalidate staging admission without changing the
-# immutable staging audit; the synthetic controller must start at its audit.
-AUDITED_FIXTURE_REVISION = "9afa0425fa0f576b1be109f7679b8f2d66c0b61e"
 
 
 @pytest.fixture
@@ -50,17 +46,9 @@ def repo(tmp_path: Path):
     for path in audit["files"]:
         destination = tmp_path / path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(
-            subprocess.check_output(
-                ["git", "show", f"{AUDITED_FIXTURE_REVISION}:{path}"], cwd=source_root
-            )
-        )
-        mode = subprocess.check_output(
-            ["git", "ls-tree", AUDITED_FIXTURE_REVISION, "--", path],
-            cwd=source_root,
-            text=True,
-        ).split()[0]
-        destination.chmod(0o755 if mode == "100755" else 0o644)
+        source = source_root / path
+        destination.write_bytes(source.read_bytes())
+        destination.chmod(source.stat().st_mode & 0o777)
     write(manifest_path, (source_root / manifest_path).read_text())
     write(
         "scripts/verify_staging_candidate.py",

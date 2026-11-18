@@ -12,7 +12,8 @@ import json
 import subprocess
 from pathlib import Path
 
-SCRIBE_SOURCE_REVISION = "45e979fd680ed7b9aa5e3a5a4f6f7e72ff27618f"
+from scripts.scribe_runtime_pin import SCRIBE_SOURCE_REVISION
+
 REPAIR_REVISION = "0784c2451f42da7fb46abafddc3db18a5ca6bbda"
 FOLLOWUP_REVISION = "91f11b5fe823da6d2d31cfe3807adab355795578"
 REPAIR_SHA256 = "b183e873ae9d65deb29a675522a0fa4fedcc555c4100fe6f7c409d76320c6947"

@@ -141,6 +141,11 @@ jobs:
             .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+            scripts/build_scribe_runtime.py \
+            scripts/scribe_runtime_check.py \
+            scripts/scribe_runtime_lineage.py \
+            scripts/scribe_runtime_oci.py \
+            scripts/scribe_runtime_pin.py \
             scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
@@ -193,6 +198,8 @@ jobs:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
           PYTHON_ENV: production
+      - name: Refuse release without the pinned executable Scribe runtime
+        run: just _scribe_runtime_prepare_check
       - name: Remove resolved production frontend configuration
         if: always()
         env:

@@ -164,9 +164,80 @@ jobs:
             ${{ env.TEST_RESULTS_DIRECTORY }}
             ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
 
+  scribe-runtime-real-build:
+    needs: [ci-mode]
+    if: needs.ci-mode.outputs.full != 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/install-nixpacks
+      - name: Build real amd64 Core substrate
+        # Runner's default Docker builder; no --env from 1Password-backed files
+        # and no --cache-from registry. No registry login or secrets.
+        run: nixpacks build . --platform=linux/amd64 --name core-proof:pr --label org.opencontainers.image.revision="$(git rev-parse HEAD)"
+      - name: Derive twice from cold builder caches
+        id: derive
+        run: |
+          set -euo pipefail
+          docker builder prune -af
+          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-a.txt)
+          docker builder prune -af
+          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-b.txt)
+          pin=$(python3 -c 'from scripts.scribe_runtime_pin import SCRIBE_RUNTIME_IMAGE_DIGEST; print(SCRIBE_RUNTIME_IMAGE_DIGEST)')
+          printf 'Cold derivation A: `%s`\n\nCold derivation B: `%s`\n\nReviewed pin: `%s`\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_STEP_SUMMARY"
+          printf 'digest_a=%s\ndigest_b=%s\npin=%s\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_OUTPUT"
+          printf 'Cold derivation A: %s\nCold derivation B: %s\nReviewed pin: %s\n' "$digest_a" "$digest_b" "$pin"
+          if [[ "$digest_a" != "$digest_b" ]] || ! cmp runtime-a.txt runtime-b.txt; then
+            echo "::error::Scribe runtime is non-reproducible across two cold derivations."
+            exit 1
+          fi
+      - name: Upload public runtime manifests
+        if: ${{ always() && steps.derive.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scribe-runtime-cold-manifests
+          path: |
+            runtime-a.txt
+            runtime-b.txt
+          if-no-files-found: warn
+      - name: Assert hosted runtime equals reviewed pin
+        env:
+          DERIVED: ${{ steps.derive.outputs.digest_a }}
+          PIN: ${{ steps.derive.outputs.pin }}
+        run: |
+          if [[ "$DERIVED" != "$PIN" ]]; then
+            echo "::error::Hosted runtime digest $DERIVED differs from SCRIBE_RUNTIME_IMAGE_DIGEST $PIN."
+            exit 1
+          fi
+      - name: Build and verify the real bundled path
+        run: |
+          set -euo pipefail
+          python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --output-image core-proof:bundled
+          python3 -m scripts.scribe_runtime_check --image core-proof:bundled
+          set +e
+          python3 -m scripts.scribe_runtime_check --image core-proof:pr
+          plain_status=$?
+          set -e
+          [[ "$plain_status" == 1 ]] || { echo "::error::Plain Core must exit 1; got $plain_status."; exit 1; }
+      - uses: ./.github/actions/common-setup
+        with:
+          apt-packages: zsh
+      - name: Run existing opt-in real image tests
+        env:
+          CORE_SCRIBE_SYNTHETIC_PLAIN_IMAGE: core-proof:pr
+          CORE_SCRIBE_SYNTHETIC_BUNDLED_IMAGE: core-proof:bundled
+          PYTHON_ENV: test
+        run: uv run --frozen pytest --noconftest tests/infrastructure/test_scribe_runtime_image.py::test_real_docker_synthetic_image_without_runtime_refuses tests/infrastructure/test_scribe_runtime_image.py::test_real_docker_synthetic_image_with_runtime_passes
+
   app:
     name: Backend
-    needs: [backend-quality, backend-tests, ci-mode]
+    needs: [backend-quality, backend-tests, ci-mode, scribe-runtime-real-build]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -175,12 +246,14 @@ jobs:
         env:
           BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
           BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
+          SCRIBE_RUNTIME_REAL_BUILD_RESULT: ${{ needs.scribe-runtime-real-build.result }}
         run: |
-          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
-            if [[ "$BACKEND_TESTS_RESULT" == "skipped" ]]; then
+          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" || "$SCRIBE_RUNTIME_REAL_BUILD_RESULT" != "success" ]]; then
+            if [[ "$BACKEND_TESTS_RESULT" == "skipped" || "$SCRIBE_RUNTIME_REAL_BUILD_RESULT" == "skipped" ]]; then
               echo "::error::Light draft run is red by design (backend-tests skipped). Add the ci:full label for a full run."
             else
               echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
+              echo "::error::Scribe runtime real build result: $SCRIBE_RUNTIME_REAL_BUILD_RESULT."
             fi
             exit 1
           fi
