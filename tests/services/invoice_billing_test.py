@@ -20,12 +20,14 @@ from app.models.practice_invoice_billing import PracticeInvoiceBilling
 
 from tests.services.stripe_billing_test import (
     NOW,
-    _event as _subscription_event,
     _organization_doctor,
     _practice,
     _subscription,
-    configured_stripe as configured_stripe,
 )
+from tests.services.stripe_billing_test import (
+    _event as _subscription_event,
+)
+from tests.services.stripe_billing_test import configured_stripe as configured_stripe
 
 ALERT = "invoice-only billing needs operator attention"
 

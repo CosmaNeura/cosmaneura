@@ -75,8 +75,6 @@ describe("existing account with both Stripe readiness flags on", () => {
       )
       expect(screen.queryByRole("alert") !== null).toBe(paused)
 
-      // These are the API readiness facts produced by both configured flags.
-      // Entitlement, membership and grant facts are deliberately unchanged.
       const after = {
         ...before,
         billing_enabled: true,
