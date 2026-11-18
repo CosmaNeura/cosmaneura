@@ -174,9 +174,6 @@ def _subscription(practice: Practice, *, status_value: str) -> dict:
 
 @pytest.fixture
 def stripe_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Startup price validation has its own mocked-Stripe service tests. Route
-    # fixtures install their transport after the TestClient lifespan begins.
-    monkeypatch.setattr(stripe_billing, "validate_startup_configuration", lambda: None)
     monkeypatch.setattr(stripe_config, "STRIPE_INTEGRATION_ENABLED", True)
     monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", True)
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
@@ -1136,3 +1133,12 @@ def test_seat_summary_shows_practice_tier_amount(authenticated_client, origin, a
     response = authenticated_client.get(api_app.url_path_for("practice_status"))
     assert response.status_code == 200
     assert response.json()["seat_summary"]["unit_amount"] == amount
+
+
+def test_boot_never_waits_on_stripe(stripe_configured, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        stripe_billing, "_request", lambda *args, **_: calls.append(args)
+    )
+    with TestClient(api_app, base_url="api.example.com"):
+        assert calls == []  # prices are validated lazily, fail-closed, per Stripe call

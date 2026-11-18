@@ -491,19 +491,6 @@ def _validate_price(
         )
 
 
-def validate_startup_configuration() -> None:
-    """Refuse an enabled integration with an unverified current-price contract."""
-    if (
-        stripe_config.STRIPE_BILLING_ENABLED
-        and not stripe_config.STRIPE_INTEGRATION_ENABLED
-    ):
-        raise StripeStateInvalid("Stripe acquisition requires integration")
-    if stripe_config.STRIPE_INTEGRATION_ENABLED:
-        _validate_runtime_configuration(
-            require_active_price=stripe_config.STRIPE_BILLING_ENABLED
-        )
-
-
 def _validate_runtime_configuration(*, require_active_price: bool = False) -> None:
     _validate_runtime_account()
     # Archiving a price must stop new sales without disabling cancellation,
@@ -734,20 +721,23 @@ def _retrieve_subscription(
             raise StripeStateInvalid(
                 "Stripe returned a different subscription than requested"
             )
-        item = _subscription_item(validated)
-        price = item["price"]
-        price_id = price.get("id") if isinstance(price, dict) else price
-        expected_amount = (
-            PUBLIC_PRICE_UNIT_AMOUNT
-            if price_id == stripe_config.STRIPE_PRICE_ID
-            else MCD_PRICE_UNIT_AMOUNT
-            if price_id == stripe_config.STRIPE_MCD_PRICE_ID
-            else LEGACY_PRICE_UNIT_AMOUNT
-        )
-        _validate_price(cast(str, price_id), expected_amount, require_active=False)
-        return validated
+        price = _subscription_item(validated)["price"]
     except StripeStateInvalid as exc:
         raise StripeSubscriptionContractInvalid(subscription, exc) from exc
+    price_id = price.get("id") if isinstance(price, dict) else price
+    expected_amount = (
+        PUBLIC_PRICE_UNIT_AMOUNT
+        if price_id == stripe_config.STRIPE_PRICE_ID
+        else MCD_PRICE_UNIT_AMOUNT
+        if price_id == stripe_config.STRIPE_MCD_PRICE_ID
+        else LEGACY_PRICE_UNIT_AMOUNT
+    )
+    try:  # An accepted price ID with a drifted price object alerts; never revokes.
+        _validate_price(cast(str, price_id), expected_amount, require_active=False)
+    except StripeStateInvalid:
+        log.error("Stripe bound price check failed; access unchanged")
+        raise
+    return validated
 
 
 def _contract_snapshot_matches_binding(

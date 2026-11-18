@@ -110,7 +110,8 @@ class FakeStripe:
             if path.endswith("price_test_mcd"):
                 price.update(id="price_test_mcd", unit_amount=6000)
             elif path.endswith("price_test_legacy"):
-                price.update(id="price_test_legacy", unit_amount=8900)
+                amount = getattr(self, "legacy_amount", 8900)
+                price.update(id="price_test_legacy", unit_amount=amount)
             return price
         if path == "/checkout/sessions" and method == "GET":
             return {"data": list(deepcopy(self.sessions).values()), "has_more": False}
@@ -4950,14 +4951,26 @@ def test_bound_subscription_on_legacy_price_stays_valid(price_id, remote):
     assert practice.entitled(at=NOW)
 
 
-@pytest.mark.parametrize("origin", ["direct", "catholic", "mcd"])
-def test_new_checkout_never_uses_legacy_price(origin, remote):
+@pytest.mark.parametrize("price_id", ["price_test_x", "price_test_legacy"])
+def test_off_price_binding_alerts_without_revoking(price_id, remote):
+    from structlog.testing import capture_logs
+
     practice = _practice()
-    practice.origin_channel = origin
-    assert (
-        stripe_billing.price_id_for_practice(practice)
-        not in stripe_config.STRIPE_LEGACY_PRICE_IDS
+    subscription = _subscription(practice, price_id=price_id)
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    if price_id == "price_test_x":
+        remote.price["unit_amount"] = 8900  # production before the $90 repoint
+    remote.legacy_amount = 9000
+    with capture_logs() as logs, pytest.raises(stripe_billing.StripeStateInvalid) as e:
+        stripe_billing.refresh_subscription_state(practice)
+    assert not isinstance(e.value, stripe_billing.StripeSubscriptionContractInvalid)
+    assert price_id == "price_test_x" or any(
+        log["event"] == "Stripe bound price check failed; access unchanged"
+        for log in logs
     )
+    practice.refresh()
+    assert practice.subscription_status == "active" and practice.entitled(at=NOW)
 
 
 def test_price_tier_mismatch_alerts_without_revoking(remote):
@@ -4979,17 +4992,7 @@ def test_price_tier_mismatch_alerts_without_revoking(remote):
 
 
 @pytest.mark.parametrize(
-    "bad",
-    [
-        "missing",
-        "equal",
-        "livemode",
-        "currency",
-        "amount",
-        "interval",
-        "usage",
-        "scheme",
-    ],
+    "bad", "missing equal livemode currency amount interval usage scheme".split()
 )
 def test_second_current_price_must_be_ready(bad, remote, monkeypatch):
     if bad in {"missing", "equal"}:

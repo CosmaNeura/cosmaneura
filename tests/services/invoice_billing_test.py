@@ -248,6 +248,21 @@ def test_bill_by_invoice_refuses_bound_marker_or_open_checkout_practice(
     assert _access(practice) == before
 
 
+def test_reservation_persists_before_first_post_and_refuses_retry(
+    practice, invoice_remote, monkeypatch
+):
+    outage = Mock(side_effect=RuntimeError("synthetic outage"))
+    monkeypatch.setattr(stripe, "_request", outage)
+    with pytest.raises(RuntimeError):
+        _issue(practice)
+    row = PracticeInvoiceBilling.get(practice_id=practice.id)
+    assert row is not None and row.stripe_customer_id is None
+    assert outage.call_count == 1 and invoice.invoice_billing_open(row)
+    with pytest.raises(invoice.InvoiceBillingError, match="unresolved"):
+        _issue(practice)
+    assert outage.call_count == 1
+
+
 def test_invoice_seat_change_updates_only_invoice_record(
     practice, invoice_remote, monkeypatch
 ):
