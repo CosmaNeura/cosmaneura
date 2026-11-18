@@ -12,6 +12,7 @@ import json
 import re
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
@@ -328,7 +329,14 @@ def main() -> int:
             print(
                 build(args.core_image, args.output_image, args.builder, args.output_oci)
             )
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        subprocess.SubprocessError,
+    ) as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         print("scribe_runtime_build_refused")
         return 1
     return 0

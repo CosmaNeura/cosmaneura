@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -45,6 +46,11 @@ def command(arguments: list[str]) -> str:
         check=False,
     )
     if result.returncode:
+        stderr_tail = "\n".join(result.stderr.splitlines()[-20:])[-4000:]
+        print(
+            f"{' '.join(arguments[:3])}: exit code {result.returncode}\n{stderr_tail}",
+            file=sys.stderr,
+        )
         raise ValueError("scribe_runtime_command_rejected")
     return result.stdout.strip()
 

@@ -404,6 +404,52 @@ def test_real_builder_path_refusals_bound_without_docker(
     )
 
 
+def test_failing_command_reports_only_argv_head_and_bounded_stderr_tail(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "synthetic-scrubbed-token")
+    stderr = "discarded synthetic line\n" + "\n".join(
+        f"synthetic stderr {index}: " + "x" * 220 for index in range(20)
+    )
+
+    def run(arguments, **kwargs):
+        assert "OP_SERVICE_ACCOUNT_TOKEN" not in kwargs["env"]
+        return subprocess.CompletedProcess(arguments, 17, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+    with pytest.raises(ValueError, match="^scribe_runtime_command_rejected$"):
+        guard.command(["docker", "buildx", "build", "synthetic-private-argument"])
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    head = "docker buildx build: exit code 17\n"
+    tail = "\n".join(stderr.splitlines()[-20:])[-4000:]
+    assert captured.err == head + tail + "\n"
+    assert "synthetic-private-argument" not in captured.err
+    assert "discarded synthetic line" not in captured.err
+    assert "synthetic-scrubbed-token" not in captured.err
+
+
+def test_build_cli_refusal_reports_code_to_stderr(monkeypatch, capsys):
+    def refuse(*args):
+        raise ValueError("scribe_runtime_command_rejected")
+
+    monkeypatch.setattr(builder, "build", refuse)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_scribe_runtime",
+            "--core-image",
+            "synthetic-core",
+            "--output-image",
+            "synthetic-output",
+        ],
+    )
+    assert builder.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == "scribe_runtime_build_refused\n"
+    assert captured.err == "ValueError: scribe_runtime_command_rejected\n"
+
+
 def test_derive_cli_uses_same_helper_without_layer_or_tags(
     synthetic_builder, tmp_path, monkeypatch, capsys
 ):
@@ -511,14 +557,14 @@ def test_image_guard_behaviorally_checks_core_python_closure(
     assert checked == [True]
 
 
-def test_release_guard_after_build_before_push_and_azure():
+def test_live_release_guard_after_build_before_publish_and_azure():
     root = Path(__file__).resolve().parents[2]
-    source = (root / ".github/workflows/production_release_verified.yml").read_text()
+    source = (root / ".github/workflows/build_and_publish_local.yml").read_text()
     guard_index = source.index("run: just _scribe_runtime_prepare_check")
     assert (
         source.index("run: just build\n")
         < guard_index
-        < source.index("run: just build_push")
+        < source.index("python3 scripts/production_core_candidate.py publish")
     )
     assert guard_index < source.index("azure/login@")
 
@@ -529,7 +575,6 @@ def test_release_guard_after_build_before_push_and_azure():
         "build_and_publish_local",
         "infra_apply_local",
         "infra_production_plan_local",
-        "production_release_verified",
     ],
 )
 def test_runtime_scripts_bound_to_every_applicability_and_configuration_list(workflow):

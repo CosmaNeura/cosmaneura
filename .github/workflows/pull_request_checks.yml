@@ -179,16 +179,20 @@ jobs:
       - uses: ./.github/actions/install-nixpacks
       - name: Build real amd64 Core substrate
         # Runner's default Docker builder; no --env from 1Password-backed files
-        # and no --cache-from registry. No registry login or secrets.
+        # No registry login and no repository secrets are used.
         run: nixpacks build . --platform=linux/amd64 --name core-proof:pr --label org.opencontainers.image.revision="$(git rev-parse HEAD)"
       - name: Derive twice from cold builder caches
         id: derive
         run: |
           set -euo pipefail
           docker builder prune -af
-          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-a.txt)
+          docker buildx create --name scribe-proof-a --driver docker-container --driver-opt image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb --bootstrap
+          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --builder scribe-proof-a --derive-runtime-digest --manifest-out runtime-a.txt)
+          docker buildx rm scribe-proof-a
           docker builder prune -af
-          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-b.txt)
+          docker buildx create --name scribe-proof-b --driver docker-container --driver-opt image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb --bootstrap
+          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --builder scribe-proof-b --derive-runtime-digest --manifest-out runtime-b.txt)
+          docker buildx rm scribe-proof-b
           pin=$(python3 -c 'from scripts.scribe_runtime_pin import SCRIBE_RUNTIME_IMAGE_DIGEST; print(SCRIBE_RUNTIME_IMAGE_DIGEST)')
           printf 'Cold derivation A: `%s`\n\nCold derivation B: `%s`\n\nReviewed pin: `%s`\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_STEP_SUMMARY"
           printf 'digest_a=%s\ndigest_b=%s\npin=%s\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_OUTPUT"
@@ -218,13 +222,15 @@ jobs:
       - name: Build and verify the real bundled path
         run: |
           set -euo pipefail
-          python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --output-image core-proof:bundled
+          docker buildx create --name scribe-proof-bundle --driver docker-container --driver-opt image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb --bootstrap
+          python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --builder scribe-proof-bundle --output-image core-proof:bundled
           python3 -m scripts.scribe_runtime_check --image core-proof:bundled
           set +e
           python3 -m scripts.scribe_runtime_check --image core-proof:pr
           plain_status=$?
           set -e
           [[ "$plain_status" == 1 ]] || { echo "::error::Plain Core must exit 1; got $plain_status."; exit 1; }
+          docker buildx rm scribe-proof-bundle
       - uses: ./.github/actions/common-setup
         with:
           apt-packages: zsh
