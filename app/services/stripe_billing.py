@@ -171,6 +171,8 @@ KNOWN_SUBSCRIPTION_STATUSES = {
     "paused",
 }
 TERMINAL_SUBSCRIPTION_STATUSES = {"canceled", "incomplete_expired"}
+# Core-only projections: keep the binding, never keep or show a bound amount.
+REFUSED_BOUND_AMOUNT_STATUSES = frozenset({"invalid", "pending_verification"})
 
 
 class StripeNotConfigured(Exception):
@@ -455,6 +457,45 @@ def price_unit_amount_for_practice(practice: Practice) -> int:
     )
 
 
+def _bound_price_unit_amount(price_id: object) -> int:
+    """Per-seat amount an accepted bound price must carry in Stripe."""
+
+    if price_id == stripe_config.STRIPE_PRICE_ID:
+        return PUBLIC_PRICE_UNIT_AMOUNT
+    if price_id == stripe_config.STRIPE_MCD_PRICE_ID:
+        return MCD_PRICE_UNIT_AMOUNT
+    return LEGACY_PRICE_UNIT_AMOUNT
+
+
+def _status_keeps_bound_unit_amount(status: object) -> bool:
+    """Whether a subscription status may store or expose a bound unit amount.
+
+    Used for both the bind write guard (raw Stripe status) and seat-summary
+    display (mirrored status) so the two cannot disagree.
+    """
+
+    return (
+        status not in TERMINAL_SUBSCRIPTION_STATUSES
+        and status not in REFUSED_BOUND_AMOUNT_STATUSES
+    )
+
+
+def seat_summary_unit_amount(practice: Practice) -> int | None:
+    """Per-seat amount to display, from persisted state only (no Stripe call).
+
+    Without a live subscription this is the tier Checkout would use. With one,
+    it is the amount Core last verified for the bound price; unknown is hidden,
+    never guessed. Refused Core projections (invalid / pending_verification)
+    never surface a stale bound amount.
+    """
+
+    if not has_nonterminal_subscription(practice):
+        return price_unit_amount_for_practice(practice)
+    if not _status_keeps_bound_unit_amount(practice.subscription_status):
+        return None
+    return practice.stripe_bound_unit_amount
+
+
 def _validate_runtime_price(*, require_active: bool) -> None:
     public = stripe_config.STRIPE_PRICE_ID
     mcd = stripe_config.STRIPE_MCD_PRICE_ID
@@ -725,13 +766,7 @@ def _retrieve_subscription(
     except StripeStateInvalid as exc:
         raise StripeSubscriptionContractInvalid(subscription, exc) from exc
     price_id = price.get("id") if isinstance(price, dict) else price
-    expected_amount = (
-        PUBLIC_PRICE_UNIT_AMOUNT
-        if price_id == stripe_config.STRIPE_PRICE_ID
-        else MCD_PRICE_UNIT_AMOUNT
-        if price_id == stripe_config.STRIPE_MCD_PRICE_ID
-        else LEGACY_PRICE_UNIT_AMOUNT
-    )
+    expected_amount = _bound_price_unit_amount(price_id)
     try:  # An accepted price ID with a drifted price object alerts; never revokes.
         _validate_price(cast(str, price_id), expected_amount, require_active=False)
     except StripeStateInvalid:
@@ -1365,6 +1400,7 @@ def _apply_authoritative_subscription(
                 )
             if contract_error is not None:
                 row.subscription_status = "invalid"
+                row.stripe_bound_unit_amount = None
                 row.stripe_state_version += 1
                 if isinstance(
                     contract_error,
@@ -1410,6 +1446,16 @@ def _apply_authoritative_subscription(
                 str, remote_entitlement_contract
             )
             row.subscription_status = mirrored_status
+            if _status_keeps_bound_unit_amount(subscription.get("status")):
+                # _retrieve_subscription verified this amount against Stripe.
+                bound_price = _subscription_item(
+                    subscription, enforce_quantity_bounds=False
+                )["price"]
+                row.stripe_bound_unit_amount = _bound_price_unit_amount(
+                    bound_price.get("id")
+                    if isinstance(bound_price, dict)
+                    else bound_price
+                )
             if not same_subscription:
                 row.stripe_trial_clock_policy = trial_clock_policy
             elif (

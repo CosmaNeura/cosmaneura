@@ -81,13 +81,18 @@ function SeatSummary({ practice }: { practice: PracticeStatus }) {
 
   let line: string | null = null
   if (billed !== null) {
-    const cost = `${formatMoney(billed * summary.unit_amount, summary.currency)}/${summary.interval}`
+    // A null amount means Core has not yet verified the bound price: show the
+    // seats, never a guessed cost.
+    const cost =
+      summary.unit_amount === null
+        ? ""
+        : ` · ${formatMoney(billed * summary.unit_amount, summary.currency)}/${summary.interval}${trialing ? " after your trial" : ""}`
     line =
       summary.account_kind === "solo"
-        ? `Solo practice · ${seats(billed)} · ${cost}${trialing ? " after your trial" : ""}`
+        ? `Solo practice · ${seats(billed)}${cost}`
         : paying
-          ? `You are paying for ${seats(billed)} · ${cost}`
-          : `Your subscription covers ${seats(billed)} · ${cost}${trialing ? " after your trial" : ""}`
+          ? `You are paying for ${seats(billed)}${cost}`
+          : `Your subscription covers ${seats(billed)}${cost}`
   }
   if (!line && !summary.seat_sync_pending) return null
 

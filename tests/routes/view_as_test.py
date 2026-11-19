@@ -28,6 +28,7 @@ from tests.factories import (
 )
 from tests.routes.utils import (
     MOCK_CLERK_ISSUER,
+    MOCK_CLERK_SESSION_ID,
     get_clerk_dev_user,
     grant_test_superadmin_capability,
     provision_practice_in_force,
@@ -416,7 +417,7 @@ def test_deleted_browser_cookie_cannot_issue_sovereign_context_token(
         VerifiedClerkIdentity(
             issuer=MOCK_CLERK_ISSUER,
             subject=clerk_subject,
-            clerk_session_id="sess_2raFxvjuCPNPEQqhO0vQr25gr9o",
+            clerk_session_id=MOCK_CLERK_SESSION_ID,
         )
     )
     api_app.dependency_overrides[get_authority_kernel_settings] = lambda: (
