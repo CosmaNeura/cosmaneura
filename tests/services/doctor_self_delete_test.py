@@ -48,6 +48,22 @@ def _delete(doctor: Doctor, *, clerk_deleter=None, now=None):
     )
 
 
+def _grant(doctor: Doctor, **kw) -> PilotAccessGrandfatherGrant:
+    return PilotAccessGrandfatherGrant(
+        clerk_id=doctor.clerk_id,
+        doctor_id_snapshot=doctor.id,
+        email_snapshot=doctor.email,
+        email_sha256=hashlib.sha256(doctor.email.encode()).hexdigest(),
+        source_ref="controlled://self-delete-test/pilot-export",
+        source_sha256="a" * 64,
+        grant_plan_sha256="b" * 64,
+        granted_by_ref="change:self-delete-test",
+        grant_reason="Synthetic pilot grant for self-delete",
+        granted_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        **kw,
+    ).save()
+
+
 def test_self_delete_removes_only_that_user_and_leaves_colleague_intact():
     owner, practice, _ = build_self_delete_scope(is_solo=False)
     colleague = add_practice_peer(practice, role="workforce")
@@ -152,19 +168,7 @@ def test_self_delete_revokes_api_key_grants_roster_oauth_prefs(monkeypatch):
         doctor, supplied_code=code, now=now + timedelta(minutes=2)
     )
     approval_id = member.organization_roster_approval_id
-    grant = PilotAccessGrandfatherGrant(
-        clerk_id=doctor.clerk_id,
-        doctor_id_snapshot=doctor.id,
-        practice_id_snapshot=practice.id,
-        email_snapshot=doctor.email,
-        email_sha256=hashlib.sha256(doctor.email.encode()).hexdigest(),
-        source_ref="controlled://self-delete-test/pilot-export",
-        source_sha256="a" * 64,
-        grant_plan_sha256="b" * 64,
-        granted_by_ref="change:self-delete-test",
-        grant_reason="Synthetic pilot grant for self-delete",
-        granted_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-    ).save()
+    grant = _grant(doctor, practice_id_snapshot=practice.id)
     preference = NoteTemplatePreference(doctor_id=doctor.id, revision=1).save()
     video = DoctorVideoIntegration(
         doctor_id=doctor.id,
@@ -358,3 +362,25 @@ def test_self_delete_locks_practice_before_doctor():
         event.remove(Engine, "before_cursor_execute", record)
     locks = [s.split("FROM ", 1)[1].split()[0] for s in sql if "FOR UPDATE" in s]
     assert locks[:2] == ["practice", "doctor"]
+
+
+def test_self_delete_revokes_grant_without_membership():
+    doctor = Doctor(
+        clerk_id="user_nomember", email="nomember@example.com", biography="Synthetic"
+    ).save()
+    grant = _grant(doctor)
+    _delete(doctor)
+    grant.refresh()
+    assert grant.revoked_at is not None and grant.retain_until is not None
+
+
+def test_member_reload_is_filtered_by_practice(monkeypatch):
+    doctor, _, member = build_self_delete_scope()
+    _, other, other_member = build_self_delete_scope()
+    monkeypatch.setattr(self_delete_module, "lock_practice_seats", lambda *_: other)
+    with pytest.raises(DoctorSelfDeleteError) as raised:
+        _delete(doctor)
+    assert raised.value.status_code == 503
+    member.refresh()
+    other_member.refresh()
+    assert member.access_revoked_at is other_member.access_revoked_at is None

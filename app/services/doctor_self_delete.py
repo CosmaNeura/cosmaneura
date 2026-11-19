@@ -467,6 +467,23 @@ def delete_own_account(
                 f"self-delete:{doctor.id}:{practice_id}:{current.isoformat()}"
             )
 
+            for grant in session.exec(
+                select(PilotAccessGrandfatherGrant).where(
+                    col(PilotAccessGrandfatherGrant.revoked_at).is_(None),
+                    or_(
+                        col(PilotAccessGrandfatherGrant.doctor_id_snapshot)
+                        == doctor.id,
+                        col(PilotAccessGrandfatherGrant.clerk_id) == doctor.clerk_id,
+                    ),
+                )
+            ).all():
+                grant.revoked_at = current
+                grant.revoked_by_ref = operator_ref
+                grant.revocation_reason = SELF_DELETE_REASON
+                grant.revocation_plan_sha256 = revoke_digest
+                grant.retain_until = retain_until
+                session.add(grant)
+
             if member is not None and practice is not None:
                 if member.access_revoked_at is None:
                     member.access_revoked_at = current
@@ -503,24 +520,6 @@ def delete_own_account(
                         approval.revocation_reason = SELF_DELETE_REASON
                         approval.retain_until = retain_until
                         session.add(approval)
-
-                for grant in session.exec(
-                    select(PilotAccessGrandfatherGrant).where(
-                        col(PilotAccessGrandfatherGrant.revoked_at).is_(None),
-                        or_(
-                            col(PilotAccessGrandfatherGrant.doctor_id_snapshot)
-                            == doctor.id,
-                            col(PilotAccessGrandfatherGrant.clerk_id)
-                            == doctor.clerk_id,
-                        ),
-                    )
-                ).all():
-                    grant.revoked_at = current
-                    grant.revoked_by_ref = operator_ref
-                    grant.revocation_reason = SELF_DELETE_REASON
-                    grant.revocation_plan_sha256 = revoke_digest
-                    grant.retain_until = retain_until
-                    session.add(grant)
 
                 # H1: never refuse or cancel Stripe; flag operator seat follow-up.
                 if held_active_seat or practice_left_ownerless:
