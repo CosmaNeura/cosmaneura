@@ -1548,7 +1548,7 @@ def _billing_seat_summary(practice: Practice) -> "BillingSeatSummary | None":
                 or (billed is not None and billed != active)
             )
         ),
-        unit_amount=stripe_billing.price_unit_amount_for_practice(practice),
+        unit_amount=stripe_billing.seat_summary_unit_amount(practice),
         currency=stripe_billing.EXPECTED_PRICE_CURRENCY,
         interval=stripe_billing.EXPECTED_PRICE_INTERVAL,
     )
@@ -1560,8 +1560,8 @@ class BillingSeatSummary(BaseModel, extra="forbid"):
     billed_seats: int | None
     "Stripe-confirmed quantity; null while unconfirmed or without a live subscription."
     seat_sync_pending: bool
-    unit_amount: int
-    "Per-seat price in the currency's minor unit; Checkout refuses any other price."
+    unit_amount: int | None
+    "Per-seat minor-unit price; null while the bound subscription price is unknown."
     currency: Literal["usd"]
     interval: Literal["month"]
 
