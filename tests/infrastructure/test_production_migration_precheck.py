@@ -23,9 +23,10 @@ CONTRACT = precheck.house.repository_migration_contract(ROOT)
 @pytest.fixture(scope="module")
 def repository_scripts(tmp_path_factory):
     config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option(
-        "script_location", str(ROOT / config.get_main_option("script_location"))
-    )
+    script_location = config.get_main_option("script_location")
+    if script_location is None:
+        raise RuntimeError("Missing script_location in alembic.ini")
+    config.set_main_option("script_location", str(ROOT / script_location))
     source = ScriptDirectory.from_config(config)
     fixture = tmp_path_factory.mktemp("migration-metadata")
     versions = fixture / "versions"
@@ -48,6 +49,8 @@ def repository_scripts(tmp_path_factory):
                     "branch_labels",
                     "depends_on",
                 }:
+                    if node.value is None:
+                        raise RuntimeError(f"Missing value for {target.id} in {path}")
                     metadata[target.id] = ast.literal_eval(node.value)
         if "revision" in metadata:
             (versions / path.name).write_text(
