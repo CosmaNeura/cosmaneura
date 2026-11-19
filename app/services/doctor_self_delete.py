@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
@@ -80,13 +80,6 @@ class DoctorSelfDeleteResult:
     clerk_identity_removed: bool
     stripe_follow_up_required: bool
     changed: bool
-
-
-@dataclass(frozen=True)
-class PendingSelfDeleteRow:
-    doctor_id: TypeIDType
-    clerk_id: str
-    practice_id: TypeIDType | None
 
 
 def apply_clinical_record_retention_policy(
@@ -211,6 +204,16 @@ def _delete_personal_settings(session: Session, doctor: Doctor) -> None:
         session.delete(integration)
 
 
+def _checkout_can_still_complete(practice: Practice, now: datetime) -> bool:
+    """Stripe Checkout lives at most 24h; +1h covers an unrecorded session."""
+
+    if practice.stripe_checkout_session_id is not None:
+        return (practice.stripe_checkout_session_expires_at or now) >= now
+    created = practice.stripe_checkout_request_created_at or now
+    pending = practice.stripe_checkout_request_json is not None
+    return pending and created + timedelta(hours=25) > now
+
+
 def _flag_stripe_seat_follow_up(
     session: Session,
     *,
@@ -318,6 +321,14 @@ def delete_own_account(
     clerk_id_for_delete: str | None = None
 
     try:
+        # Join, invitation, roster and closure paths lock Practice before Doctor.
+        locked = session.exec(
+            select(PracticeMember.practice_id).where(
+                PracticeMember.doctor_id == doctor_id
+            )
+        ).one_or_none()
+        if locked is not None:
+            lock_practice_seats(session, locked)
         doctor = cast(
             Doctor | None,
             session.exec(
@@ -422,7 +433,10 @@ def delete_own_account(
                     PracticeMember,
                     session.exec(
                         select(PracticeMember)
-                        .where(PracticeMember.doctor_id == doctor.id)
+                        .where(
+                            PracticeMember.doctor_id == doctor.id,
+                            PracticeMember.practice_id == practice.id,
+                        )
                         .with_for_update()
                         .execution_options(populate_existing=True)
                     ).one(),
@@ -514,6 +528,26 @@ def delete_own_account(
                         session,
                         practice=practice,
                         doctor_id=doctor.id,
+                    )
+                # Never refuse: a Checkout that can still complete goes to an operator.
+                if practice_left_ownerless and _checkout_can_still_complete(
+                    practice, current
+                ):
+                    stripe_follow_up_required = True
+                    session.add(
+                        PracticeAccessAudit(
+                            practice_id=practice.id,
+                            action=PracticeAccessAction.stripe_checkout_follow_up_required.value,
+                            operator_ref=operator_ref,
+                            reason="Sole owner self-deleted while Checkout could complete",
+                            effective_at=current,
+                            document_reference="stripe-checkout:"
+                            f"{practice.stripe_checkout_session_id or 'request'}",
+                        )
+                    )
+                    log.error(
+                        "sole owner self-deleted with an open Stripe Checkout",
+                        practice_ref=provider_log_ref(f"practice:{practice.id}"),
                     )
 
             authority = _authority_scope(
@@ -637,83 +671,6 @@ def delete_own_account(
         stripe_follow_up_required=stripe_follow_up_required,
         changed=True,
     )
-
-
-def list_pending_self_deletes(
-    *,
-    session: Session | None = None,
-    limit: int = 100,
-) -> tuple[PendingSelfDeleteRow, ...]:
-    if limit < 1 or limit > 1000:
-        raise DoctorSelfDeleteError("limit is invalid", status_code=400)
-    if session is None:
-        with get_session() as managed:
-            return list_pending_self_deletes(
-                session=cast(Session, managed),
-                limit=limit,
-            )
-
-    rows = session.exec(
-        select(Doctor)
-        .where(Doctor.account_deletion_status == ACCOUNT_DELETION_PENDING)
-        .order_by(col(Doctor.deleted_at).asc().nulls_last(), col(Doctor.id).asc())
-        .limit(limit)
-    ).all()
-    pending: list[PendingSelfDeleteRow] = []
-    for doctor in rows:
-        member = session.exec(
-            select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
-        ).one_or_none()
-        pending.append(
-            PendingSelfDeleteRow(
-                doctor_id=doctor.id,
-                clerk_id=doctor.clerk_id,
-                practice_id=member.practice_id if member is not None else None,
-            )
-        )
-    return tuple(pending)
-
-
-@dataclass(frozen=True)
-class SweepPendingSelfDeletesResult:
-    pending: tuple[PendingSelfDeleteRow, ...]
-    failed: tuple[PendingSelfDeleteRow, ...] = ()
-
-    def __iter__(self):
-        return iter(self.pending)
-
-    def __len__(self) -> int:
-        return len(self.pending)
-
-
-def sweep_pending_self_deletes(
-    *,
-    apply: bool = False,
-    limit: int = 100,
-    session: Session | None = None,
-    clerk_deleter=None,
-) -> SweepPendingSelfDeletesResult:
-    """Dry-run or finish deletion_pending rows (no schedule/infra)."""
-    pending = list_pending_self_deletes(session=session, limit=limit)
-    if not apply:
-        return SweepPendingSelfDeletesResult(pending=pending)
-    failed: list[PendingSelfDeleteRow] = []
-    for row in pending:
-        try:
-            delete_own_account(
-                doctor_id=row.doctor_id,
-                confirm=CONFIRM_PHRASE,
-                authenticated_doctor_id=row.doctor_id,
-                session=session,
-                clerk_deleter=clerk_deleter,
-            )
-        except DoctorSelfDeleteError:
-            failed.append(row)
-            log.warning(
-                "pending self-delete sweep row failed",
-                doctor_ref=provider_log_ref(f"doctor:{row.doctor_id}"),
-            )
-    return SweepPendingSelfDeletesResult(pending=pending, failed=tuple(failed))
 
 
 def assert_self_only(

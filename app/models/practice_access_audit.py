@@ -33,6 +33,7 @@ class PracticeAccessAction(str, Enum):
     pilot_practice_snapshot_bound = "pilot_practice_snapshot_bound"
     doctor_account_closed = "doctor_account_closed"
     doctor_self_deleted = "doctor_self_deleted"
+    stripe_checkout_follow_up_required = "stripe_checkout_follow_up_required"
     practice_member_access_revoked = "practice_member_access_revoked"
     practice_member_access_restored = "practice_member_access_restored"
 

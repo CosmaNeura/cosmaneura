@@ -1239,6 +1239,34 @@ def _apply_authoritative_subscription(
                     # invariant, without leaving a stale active entitlement.
                     contract_error = exc
 
+            if (
+                row.owner_reassignment_needed_at is not None
+                and not same_subscription
+                and mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
+            ):
+                # The sole owner self-deleted; flag, never cancel or bind silently.
+                from app.models.practice_access_audit import (
+                    PracticeAccessAction as Action,
+                )
+                from app.models.practice_access_audit import (
+                    PracticeAccessAudit,
+                )
+
+                session.add(
+                    PracticeAccessAudit(
+                        practice_id=row.id,
+                        action=Action.stripe_checkout_follow_up_required.value,
+                        operator_ref="system:stripe-billing",
+                        reason="Stripe subscription arrived after owner self-delete",
+                        effective_at=datetime.now(timezone.utc),
+                        document_reference=f"stripe-subscription:{subscription['id']}",
+                    )
+                )
+                log.error(
+                    "Stripe subscription arrived after owner self-delete",
+                    practice_ref=provider_log_ref(f"practice:{practice.id}"),
+                    subscription_ref=provider_log_ref(subscription["id"]),
+                )
             if contract_error is not None:
                 row.subscription_status = "invalid"
                 row.stripe_state_version += 1

@@ -4881,3 +4881,47 @@ def test_a_superseded_subscription_event_without_receipt_metadata_is_refused(
         )
 
     assert "receipt metadata is incomplete" in str(raised.value)
+
+
+def test_checkout_completing_after_owner_self_delete_flags_and_never_binds(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_after_delete"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.owner_reassignment_needed_at = NOW
+    practice.save()
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLimitExceeded("no active clinician")
+        ),
+    )
+    subscription = _subscription(practice, subscription_id="sub_after_delete")
+    remote.subscriptions[subscription["id"]] = subscription
+    event = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id="evt_after_delete",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"] = {
+        "id": "cs_after_delete",
+        "client_reference_id": str(practice.id),
+        "subscription": subscription["id"],
+    }
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    flag = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_checkout_follow_up_required"
+    )
+    assert flag and flag.document_reference == "stripe-subscription:sub_after_delete"

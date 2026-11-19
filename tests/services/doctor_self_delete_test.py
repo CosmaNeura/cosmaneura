@@ -12,7 +12,6 @@ from app.services.doctor_self_delete import (
     DoctorSelfDeleteError,
     assert_self_only,
     delete_own_account,
-    sweep_pending_self_deletes,
 )
 from app.services.organization_access import (
     RosterApprovalInput,
@@ -308,34 +307,6 @@ def test_active_capabilities_are_conflict_409(monkeypatch):
     assert active.value.status_code == 409
 
 
-def test_sweep_pending_self_deletes_dry_run_apply_and_continues_past_failure():
-    keep, _, _ = build_self_delete_scope()
-    fail, _, _ = build_self_delete_scope()
-    boom = DoctorSelfDeleteError("clerk identity could not be deleted", status_code=503)
-
-    def fail_clerk(_c: str) -> bool:
-        raise boom
-
-    for doctor in (keep, fail):
-        with pytest.raises(DoctorSelfDeleteError):
-            _delete(doctor, clerk_deleter=fail_clerk)
-    dry = sweep_pending_self_deletes()
-    assert {row.doctor_id for row in dry} >= {keep.id, fail.id}
-    assert dry.failed == ()
-
-    def finish_keep(clerk_id: str) -> bool:
-        if clerk_id == fail.clerk_id:
-            raise boom
-        return True
-
-    applied = sweep_pending_self_deletes(apply=True, clerk_deleter=finish_keep)
-    assert len(applied.failed) == 1 and applied.failed[0].doctor_id == fail.id
-    keep.refresh()
-    fail.refresh()
-    assert keep.account_deletion_status == "deleted"
-    assert fail.account_deletion_status == "deletion_pending"
-
-
 def test_sqlalchemy_error_after_rollback_is_retryable_503(monkeypatch):
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -350,3 +321,39 @@ def test_sqlalchemy_error_after_rollback_is_retryable_503(monkeypatch):
     assert raised.value.status_code == 503
     doctor.refresh()
     assert doctor.account_deletion_status is None
+
+
+@pytest.mark.parametrize("pending", ["session", "request"])
+def test_sole_owner_open_checkout_deletes_and_flags_operator(pending):
+    doctor, practice, _ = build_self_delete_scope(is_solo=True)
+    now = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
+    if pending == "session":
+        practice.stripe_checkout_session_id = f"cs_test_{secrets.token_hex(4)}"
+        practice.stripe_checkout_session_expires_at = now + timedelta(hours=2)
+    else:
+        practice.stripe_checkout_request_json = "{}"
+        practice.stripe_checkout_request_created_at = now - timedelta(hours=1)
+    practice.save()
+    result = _delete(doctor, now=now)
+    assert result.status == "deleted" and result.stripe_follow_up_required
+    flag = PracticeAccessAudit.get(
+        practice_id=practice.id,
+        action=PracticeAccessAction.stripe_checkout_follow_up_required.value,
+    )
+    assert flag is not None and flag.document_reference.startswith("stripe-checkout:")
+
+
+def test_self_delete_locks_practice_before_doctor():
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    doctor, _, _ = build_self_delete_scope(is_solo=True)
+    sql: list[str] = []
+    record = lambda _c, _cur, statement, *_a: sql.append(statement)  # noqa: E731
+    event.listen(Engine, "before_cursor_execute", record)
+    try:
+        _delete(doctor)
+    finally:
+        event.remove(Engine, "before_cursor_execute", record)
+    locks = [s.split(" FROM ")[1].split()[0] for s in sql if "FOR UPDATE" in s]
+    assert locks[:2] == ["practice", "doctor"]
