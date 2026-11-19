@@ -47,8 +47,14 @@ def _before(practice):
     status = practice.subscription_status
     if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
         return False
-    if status in {"pending_verification", "invalid"}:
+    if status == "pending_verification":
         return False
+    if status == "invalid":
+        # Bound invalid revokes. Unbound invalid (refused late Checkout) must
+        # still honor an open local trial for remaining clinicians.
+        if practice.has_authoritative_stripe_subscription_binding():
+            return False
+        status = None
     if practice.billing_exemption_active(at=NOW):
         return True
     if (

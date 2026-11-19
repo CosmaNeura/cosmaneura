@@ -58,21 +58,33 @@ def _seed():
 def test_owner_reassignment_needed_at_clears_on_ownership_transfer():
     practice, old, new, emails = _seed()
     assert practice.owner_reassignment_needed_at == NOW
+    assert old.clerk_id is not None and new.clerk_id is not None
+    assert new.email is not None
 
-    args = dict(
+    transfer_ref = f"synthetic-reassign-{secrets.token_hex(4)}"
+    plan = transfer_practice_owner(
         practice_id=practice.id,
         expected_owner_subject=old.clerk_id,
         new_owner_subject=new.clerk_id,
         new_owner_email_confirmation=new.email,
-        transfer_ref=f"synthetic-reassign-{secrets.token_hex(4)}",
+        transfer_ref=transfer_ref,
         operator_ref="synthetic-operator",
         reason="owner_correction",
         verify_primary_email=emails.get,
         now=NOW,
     )
-    plan = transfer_practice_owner(**args)
     applied = transfer_practice_owner(
-        **args, apply=True, confirm_plan_sha256=plan.plan_sha256
+        practice_id=practice.id,
+        expected_owner_subject=old.clerk_id,
+        new_owner_subject=new.clerk_id,
+        new_owner_email_confirmation=new.email,
+        transfer_ref=transfer_ref,
+        operator_ref="synthetic-operator",
+        reason="owner_correction",
+        verify_primary_email=emails.get,
+        now=NOW,
+        apply=True,
+        confirm_plan_sha256=plan.plan_sha256,
     )
 
     practice.refresh()
