@@ -1,8 +1,9 @@
 """DELETE /v1/me/account — authenticated self-delete for Scribe (Apple 5.1.1(v)).
 
 Body ``{"confirm":"DELETE"}``; identity from Clerk JWT only. Status codes:
-200, 404 (latch off), 409 (capabilities), 410 (disabled/revoked pilot),
-422 (confirm/body), 503 (retryable Clerk / DB / deletion_pending finish).
+200, 403 (stale Clerk ``fva`` / re-auth required), 404 (latch off),
+409 (capabilities), 410 (disabled/revoked pilot), 422 (confirm/body),
+503 (retryable Clerk / DB / deletion_pending finish).
 """
 
 from __future__ import annotations
@@ -19,9 +20,11 @@ from app.configuration.clerk import CLERK_PRIVATE_KEY
 from app.routes.dependencies.clerk import AuthenticateClerkRequest
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services.doctor_self_delete import (
+    SELF_DELETE_PRIVACY_DISCLOSURE,
     DoctorSelfDeleteError,
     delete_clerk_only_identity,
     delete_own_account,
+    require_fresh_clerk_authentication,
 )
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.pilot_access_grandfather import revoked_pilot_access_grant
@@ -99,8 +102,14 @@ me_account_api_app = APIRouter(
 class DeleteMyAccountRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    confirm: str = Field(min_length=1, max_length=32)
-    "Must be the exact phrase DELETE. No target user id is accepted."
+    confirm: str = Field(
+        min_length=1,
+        max_length=32,
+        description=(
+            "Must be the exact phrase DELETE. No target user id is accepted. "
+            f"Confirmation UIs must show: {SELF_DELETE_PRIVACY_DISCLOSURE}"
+        ),
+    )
 
 
 class DeleteMyAccountResponse(BaseModel):
@@ -120,12 +129,24 @@ def _map_self_delete_error(error: DoctorSelfDeleteError) -> HTTPException:
     code = getattr(error, "status_code", status.HTTP_400_BAD_REQUEST)
     if code not in {
         status.HTTP_400_BAD_REQUEST,
+        status.HTTP_403_FORBIDDEN,
         status.HTTP_409_CONFLICT,
         status.HTTP_422_UNPROCESSABLE_ENTITY,
         status.HTTP_503_SERVICE_UNAVAILABLE,
     }:
         code = status.HTTP_400_BAD_REQUEST
     return HTTPException(status_code=code, detail=str(error))
+
+
+def _require_fresh_session(request: Request) -> None:
+    """Step-up gate: Clerk ``fva`` must show a recent first-factor verification."""
+
+    auth_state = getattr(request.state, "auth_state", None)
+    payload = getattr(auth_state, "payload", None)
+    try:
+        require_fresh_clerk_authentication(payload)
+    except DoctorSelfDeleteError as error:
+        raise _map_self_delete_error(error) from error
 
 
 @me_account_api_app.delete(
@@ -138,7 +159,12 @@ def delete_my_account(
     body: DeleteMyAccountRequest,
     session: Session = Depends(_session_dependency),
 ) -> DeleteMyAccountResponse:
-    """Delete the signed-in user's Cosmaneura identity and personal data."""
+    """Delete the signed-in user's Cosmaneura identity and personal data.
+
+    Requires a fresh Clerk first-factor verification (session ``fva`` within
+    10 minutes). Retention disclosure for confirmation UIs:
+    ``SELF_DELETE_PRIVACY_DISCLOSURE``.
+    """
 
     if not ACCOUNT_SELF_DELETE_ENABLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -150,6 +176,7 @@ def delete_my_account(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="clerk identity is invalid",
             )
+        _require_fresh_session(request)
         try:
             result = delete_clerk_only_identity(
                 clerk_id=clerk_id,
@@ -177,6 +204,7 @@ def delete_my_account(
             clerk_identity_removed=True,
         )
 
+    _require_fresh_session(request)
     try:
         result = delete_own_account(
             doctor_id=doctor.id,

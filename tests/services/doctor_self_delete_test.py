@@ -9,9 +9,11 @@ import pytest
 import app.services.doctor_self_delete as self_delete_module
 from app.services.doctor_access import doctor_tombstone, resolve_doctor_access
 from app.services.doctor_self_delete import (
+    SELF_DELETE_PRIVACY_DISCLOSURE,
     DoctorSelfDeleteError,
     assert_self_only,
     delete_own_account,
+    require_fresh_clerk_authentication,
 )
 from app.services.organization_access import (
     RosterApprovalInput,
@@ -384,3 +386,35 @@ def test_member_reload_is_filtered_by_practice(monkeypatch):
     member.refresh()
     other_member.refresh()
     assert member.access_revoked_at is other_member.access_revoked_at is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"fva": [-1, -1]},
+        {"fva": [11, -1]},
+        {"fva": ["0", -1]},
+        {"fva": []},
+    ],
+)
+def test_require_fresh_clerk_authentication_rejects_stale_or_missing_fva(payload):
+    with pytest.raises(DoctorSelfDeleteError) as raised:
+        require_fresh_clerk_authentication(payload)
+    assert raised.value.status_code == 403
+    assert "Recent authentication required" in str(raised.value)
+
+
+def test_require_fresh_clerk_authentication_accepts_recent_first_factor():
+    require_fresh_clerk_authentication({"fva": [0, -1]})
+    require_fresh_clerk_authentication({"fva": [10, 3]})
+
+
+def test_self_delete_privacy_disclosure_states_retained_names_and_emails():
+    assert (
+        "Names and email addresses are kept in records"
+        in SELF_DELETE_PRIVACY_DISCLOSURE
+    )
+    assert "HIPAA" in SELF_DELETE_PRIVACY_DISCLOSURE
+    assert "BAA" in SELF_DELETE_PRIVACY_DISCLOSURE

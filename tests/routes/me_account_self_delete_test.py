@@ -35,13 +35,18 @@ def enable_account_self_delete(monkeypatch):
 
 
 def _client_for(
-    doctor: Doctor | None = None, *, clerk_id: str | None = None
+    doctor: Doctor | None = None,
+    *,
+    clerk_id: str | None = None,
+    fva: list[int] | None = None,
 ) -> TestClient:
     subject = clerk_id or (doctor.clerk_id if doctor is not None else None)
     assert subject is not None
     api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
         MockAuthenticateRequest(
-            user=ClerkUser.model_construct(id=subject, email_addresses=[])
+            user=ClerkUser.model_construct(id=subject, email_addresses=[]),
+            # Fresh first-factor verification (Clerk Delete-account window).
+            fva=fva if fva is not None else [0, -1],
         )
     )
     client = TestClient(api_app, base_url=base_server_url())
@@ -196,6 +201,55 @@ def test_self_delete_rejects_foreign_target_field(enable_account_self_delete):
     )
     bad = _delete(_client_for(doctor), {"confirm": "DELETE", "user_id": str(doctor.id)})
     assert bad.status_code == 422
+
+
+def test_self_delete_rejects_stale_clerk_factor_verification(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
+    doctor, _, _ = build_self_delete_scope(
+        clerk_prefix="user_test_selfdel", email_prefix="route-selfdel"
+    )
+    clerk_calls: list[str] = []
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        lambda c: clerk_calls.append(c) or True,
+    )
+    # fva[0]=11 → first factor older than the 10-minute Delete-account window.
+    response = _delete(_client_for(doctor, fva=[11, -1]))
+    assert response.status_code == 403
+    assert "Recent authentication required" in response.json()["detail"]
+    assert clerk_calls == []
+    doctor.refresh()
+    assert doctor.account_deletion_status is None
+    assert doctor.deleted_at is None
+
+
+def test_self_delete_privacy_disclosure_names_retained_identifiers():
+    import re
+    from pathlib import Path
+
+    from app.services.doctor_self_delete import SELF_DELETE_PRIVACY_DISCLOSURE
+
+    assert (
+        "Names and email addresses are kept in records"
+        in SELF_DELETE_PRIVACY_DISCLOSURE
+    )
+    assert "HIPAA" in SELF_DELETE_PRIVACY_DISCLOSURE
+    assert "BAA" in SELF_DELETE_PRIVACY_DISCLOSURE
+    docs = re.sub(
+        r"\s+",
+        " ",
+        Path("web/public/documentation.html").read_text(encoding="utf-8"),
+    )
+    assert "Names and email addresses are kept in records" in docs
+    assert "HIPAA" in docs and "BAA" in docs
+    runbook = re.sub(
+        r"\s+",
+        " ",
+        Path("docs/self-delete-account-billing-runbook.md").read_text(encoding="utf-8"),
+    )
+    assert "never cancels a practice Stripe subscription" in runbook
 
 
 def test_self_delete_route_allows_deletion_pending_retry(

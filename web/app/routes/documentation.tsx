@@ -348,9 +348,12 @@ export default function Documentation() {
               <A href="mailto:info@cosmaneura.com?subject=Account%20deletion%20request">
                 info@cosmaneura.com
               </A>{" "}
-              from the address associated with your Cosmas account. We will
-              process the request consistent with HIPAA, state record- retention
-              rules, and your BAA.
+              from the address associated with your Cosmas account, or use
+              in-app account deletion when it is available. Deleting your
+              account removes your sign-in and personal profile from Cosmas.
+              Names and email addresses are kept in records where required for
+              HIPAA, state clinical-record retention, billing/audit evidence,
+              and your practice's BAA obligations.
             </LegalCallout>
           </LegalSection>
 
