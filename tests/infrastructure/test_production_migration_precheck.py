@@ -263,13 +263,24 @@ def test_refuses_unverified_tls_before_data_queries(database, tls):
 @pytest.mark.parametrize(
     "heads", [[], ["49126bf99c72", "ddd6261fa36f"], ["synthetic-private-text"], [None]]
 )
-def test_refuses_ambiguous_or_non_revision_heads(database, heads):
+def test_refuses_ambiguous_or_non_revision_heads(
+    database, heads, monkeypatch, url, capsys
+):
     database.db.execute("DELETE FROM public.alembic_version")
     database.db.executemany(
         "INSERT INTO public.alembic_version VALUES (?)", [(h,) for h in heads]
     )
     with pytest.raises(precheck.house.InventoryFailure):
         precheck.collect(database, CONTRACT)
+    assert precheck.ABORT_COUNTS not in database.queries
+    install_connection(monkeypatch, url, database)
+    assert precheck.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "Production migration precheck refused; stop before promote. "
+        "Reason: snapshot_refused.\n"
+    )
     assert precheck.ABORT_COUNTS not in database.queries
 
 
@@ -279,9 +290,10 @@ def test_refuses_ambiguous_or_non_revision_heads(database, heads):
 )
 def test_repo_ancestry_includes_equal_and_reports_unknown_as_stop(database, head):
     database.db.execute("UPDATE public.alembic_version SET version_num = ?", (head,))
-    assert precheck.collect(database, CONTRACT)["is_ancestor_of_repository_head"] == (
-        head != "aaaaaaaaaaaa"
-    )
+    report = precheck.collect(database, CONTRACT)
+    assert report["is_ancestor_of_repository_head"] == (head != "aaaaaaaaaaaa")
+    if head == "aaaaaaaaaaaa":
+        assert report["refusal_reasons"] == ["migration_head_unknown"]
 
 
 @pytest.mark.parametrize("row", [None, (), (True,), (-1,), ("0",), (0.0,), (0, 0)])
@@ -300,6 +312,62 @@ def install_connection(monkeypatch, url, database):
 
     monkeypatch.setattr(precheck.psycopg, "connect", connect)
     return calls
+
+
+def test_cli_refuses_two_repository_heads(monkeypatch, url, tmp_path, capsys):
+    versions = tmp_path / "migrations" / "versions"
+    versions.mkdir(parents=True)
+    for revision, parent in (
+        ("111111111111", None),
+        ("222222222222", "111111111111"),
+        ("333333333333", "111111111111"),
+    ):
+        (versions / f"{revision}.py").write_text(
+            f"revision = {revision!r}\ndown_revision = {parent!r}\n"
+        )
+    repository_migration_contract = precheck.house.repository_migration_contract
+    with pytest.raises(precheck.house.InventoryFailure) as error:
+        repository_migration_contract(tmp_path)
+    assert str(error.value) == "repository migration head is ambiguous"
+    monkeypatch.setattr(
+        precheck.house,
+        "repository_migration_contract",
+        lambda: repository_migration_contract(tmp_path),
+    )
+    calls = install_connection(monkeypatch, url, None)
+    assert precheck.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "Production migration precheck refused; stop before promote. "
+        "Reason: snapshot_refused.\n"
+    )
+    assert calls == []
+
+
+def test_cli_refuses_missing_alembic_version_table(monkeypatch, url, capsys):
+    database = FixtureDatabase()
+    execute = database.execute
+
+    def missing_heads(statement, params=()):
+        if statement == precheck.HEADS:
+            raise psycopg.errors.UndefinedTable("synthetic-private-row")
+        return execute(statement, params)
+
+    monkeypatch.setattr(database, "execute", missing_heads)
+    install_connection(monkeypatch, url, database)
+    assert precheck.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "Production migration precheck refused; stop before promote. "
+        "Reason: snapshot_refused.\n"
+    )
+    assert database.queries == [
+        precheck.TRANSACTION,
+        precheck.BOUNDARY,
+        precheck.house.TLS_STATUS_QUERY,
+    ]
 
 
 @pytest.mark.parametrize("mode", ["prefer", "require", "allow", "disable", "verify-ca"])
@@ -375,9 +443,9 @@ def test_unknown_ancestor_returns_stop(monkeypatch, url, capsys):
     database.db.execute("UPDATE public.alembic_version SET version_num='aaaaaaaaaaaa'")
     install_connection(monkeypatch, url, database)
     assert precheck.main() == 1
-    assert (
-        json.loads(capsys.readouterr().out)["is_ancestor_of_repository_head"] is False
-    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["is_ancestor_of_repository_head"] is False
+    assert report["refusal_reasons"] == ["migration_head_unknown"]
 
 
 def test_cli_failure_never_emits_driver_details_or_partial_output(
