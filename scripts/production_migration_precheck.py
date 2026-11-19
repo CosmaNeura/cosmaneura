@@ -110,6 +110,9 @@ def connection_parameters(database_url: str) -> dict[str, Any]:
     # Do not pass through URL options, service files, or client TLS credentials; sslcertmode=disable stops libpq's default client-cert fallback.
     if any(key.startswith("PG") for key in os.environ):
         raise house.InventoryFailure()
+    # sslcertmode=disable needs libpq 16+; refuse an older client library.
+    if psycopg.pq.version() < 160000:
+        raise house.InventoryFailure()
     return {
         "host": house.EXPECTED_DATABASE_HOST,
         "port": 5432,

@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import psycopg
 import pytest
+from psycopg.conninfo import make_conninfo
 
 from scripts import production_migration_precheck as precheck
 
@@ -547,3 +549,15 @@ def test_connection_parameters_disable_client_certificates(url):
     assert "sslcert" not in params and "sslkey" not in params
     assert params["sslmode"] == "verify-full"
     assert params["gssencmode"] == "disable"
+
+
+def test_conninfo_builds_with_client_cert_disabled_on_libpq_16_or_later(url):
+    conninfo = make_conninfo(**precheck.connection_parameters(url))
+    assert "sslcertmode=disable" in conninfo
+    assert psycopg.pq.version() >= 160000
+
+
+def test_connection_parameters_refuse_libpq_older_than_16(url, monkeypatch):
+    monkeypatch.setattr(psycopg.pq, "version", lambda: 150000)
+    with pytest.raises(precheck.house.InventoryFailure):
+        precheck.connection_parameters(url)
