@@ -71,7 +71,7 @@ function seatSummary(
     active_clinicians: 1,
     billed_seats: 1,
     seat_sync_pending: false,
-    unit_amount: 8900,
+    unit_amount: 9000,
     currency: "usd",
     interval: "month",
   }

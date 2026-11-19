@@ -1693,3 +1693,9 @@ def test_join_code_lookup_does_not_disclose_seat_summary(
     looked_up = resp.json()["practice"]
     assert looked_up is not None
     assert looked_up["seat_summary"] is None
+
+
+def test_baa_current_version_is_2_3():
+    from app.models.baa import BAA_CURRENT_VERSION
+
+    assert BAA_CURRENT_VERSION == "2.3"

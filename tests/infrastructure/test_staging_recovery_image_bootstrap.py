@@ -724,7 +724,7 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     # runtime preservation and job cleanup guards remain; hosted selectors
     # require canonical candidate reverification. This pin does not remove or
     # loosen any gate.
-    assert hashlib.sha256(deploy).hexdigest() == "14b66126f83a5960013f55750c3a1a4d744204c9994c2631967935ce11eddee3"
+    assert hashlib.sha256(deploy).hexdigest() == "e6ff656b0c9e2dc8e1fb0cb59a786f02857894bdcbdd80a6c152e095161b947b"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
     assert "ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)" in deploy.decode()
     assert (

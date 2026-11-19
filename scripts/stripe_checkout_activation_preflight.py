@@ -11,7 +11,7 @@ practice identifiers are never printed.
 Dry run:
 
     STRIPE_SECRET_KEY=... STRIPE_ACCOUNT_ID=... STRIPE_PRICE_ID=... \
-      STRIPE_LEGACY_PRICE_IDS=price_old_1,price_old_2 \
+      STRIPE_MCD_PRICE_ID=... STRIPE_LEGACY_PRICE_IDS=... \
       python scripts/stripe_checkout_activation_preflight.py \
       --operator-ref CHANGE-123 \
       --drain-started-at 2026-08-24T12:00:00Z \
@@ -256,18 +256,22 @@ def _verify_account_and_prices(
     *,
     account_id: str,
     price_id: str,
+    mcd_price_id: str,
     legacy_price_ids: tuple[str, ...],
     live_mode: bool,
 ) -> None:
     account = request(secret_key, "GET", "/account", None, None)
     if account.get("id") != account_id:
         raise PreflightError("Stripe key resolved to the wrong account")
-    for candidate in (price_id, *legacy_price_ids):
+    for candidate in (price_id, mcd_price_id, *legacy_price_ids):
         price = request(secret_key, "GET", f"/prices/{candidate}", None, None)
         if (
             price.get("id") != candidate
             or price.get("livemode") is not live_mode
-            or (candidate == price_id and price.get("active") is not True)
+            or (
+                candidate in {price_id, mcd_price_id}
+                and price.get("active") is not True
+            )
         ):
             raise PreflightError(
                 "Stripe price inventory does not match the requested environment"
@@ -304,6 +308,7 @@ def _evidence(
     operator_ref: str,
     account_id: str,
     price_id: str,
+    mcd_price_id: str,
     legacy_price_ids: tuple[str, ...],
     live_mode: bool,
     drain_started_at: datetime,
@@ -315,7 +320,7 @@ def _evidence(
     old_code_stopped_confirmed: bool,
     price_inventory_confirmed: bool,
 ) -> dict[str, Any]:
-    price_ids = (price_id, *legacy_price_ids)
+    price_ids = (price_id, mcd_price_id, *legacy_price_ids)
     drain_complete_at = drain_started_at + MINIMUM_DRAIN
     drain_satisfied = checked_at >= drain_complete_at
     plan_sha256 = _plan_digest(
@@ -332,6 +337,8 @@ def _evidence(
         "applied": applied,
         "checkout_policy": CURRENT_POLICY_VERSION,
         "checkout_price_ids": price_ids,
+        "public_price_id": price_id,
+        "mcd_price_id": mcd_price_id,
         "checked_at": checked_at.isoformat(),
         "drain_complete_at": drain_complete_at.isoformat(),
         "drain_started_at": drain_started_at.isoformat(),
@@ -364,6 +371,7 @@ def run_preflight(
     secret_key: str,
     account_id: str,
     price_id: str,
+    mcd_price_id: str,
     legacy_price_ids: tuple[str, ...],
     live_mode: bool,
     operator_ref: str,
@@ -381,7 +389,7 @@ def run_preflight(
         and price_inventory_confirmed
     ):
         raise PreflightError("all activation safety confirmations are required")
-    price_ids = (price_id, *legacy_price_ids)
+    price_ids = (price_id, mcd_price_id, *legacy_price_ids)
     if len(price_ids) != len(set(price_ids)) or not all(
         candidate.startswith("price_") for candidate in price_ids
     ):
@@ -391,6 +399,7 @@ def run_preflight(
         secret_key,
         account_id=account_id,
         price_id=price_id,
+        mcd_price_id=mcd_price_id,
         legacy_price_ids=legacy_price_ids,
         live_mode=live_mode,
     )
@@ -404,6 +413,7 @@ def run_preflight(
         operator_ref=operator_ref,
         account_id=account_id,
         price_id=price_id,
+        mcd_price_id=mcd_price_id,
         legacy_price_ids=legacy_price_ids,
         live_mode=live_mode,
         drain_started_at=drain_started_at,
@@ -435,6 +445,7 @@ def run_preflight(
         operator_ref=operator_ref,
         account_id=account_id,
         price_id=price_id,
+        mcd_price_id=mcd_price_id,
         legacy_price_ids=legacy_price_ids,
         live_mode=live_mode,
         drain_started_at=drain_started_at,
@@ -468,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     secret_key = os.environ.get("STRIPE_SECRET_KEY", "")
     account_id = os.environ.get("STRIPE_ACCOUNT_ID", "")
     price_id = os.environ.get("STRIPE_PRICE_ID", "")
+    mcd_price_id = os.environ.get("STRIPE_MCD_PRICE_ID", "")
     legacy_price_ids = tuple(
         sorted(
             {
@@ -479,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
     )
-    if not secret_key or not account_id or not price_id:
+    if not secret_key or not account_id or not price_id or not mcd_price_id:
         print(
             "Stripe activation preflight configuration is incomplete", file=sys.stderr
         )
@@ -504,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
             secret_key=secret_key,
             account_id=account_id,
             price_id=price_id,
+            mcd_price_id=mcd_price_id,
             legacy_price_ids=legacy_price_ids,
             live_mode=args.live_mode,
             operator_ref=args.operator_ref.strip(),
