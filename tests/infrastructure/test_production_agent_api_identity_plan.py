@@ -495,6 +495,307 @@ def test_verification_is_bound_to_the_reviewed_plan() -> None:
     _rejects(document)
 
 
+def _verification_from_document(document: dict[str, Any]) -> dict[str, Any]:
+    plan = m.evaluate(document, now=NOW)
+    document["mode"] = "verify"
+    document["expected_plan_sha256"] = plan["plan_sha256"]
+    return document
+
+
+def test_verification_refuses_when_provider_assignment_is_still_absent() -> None:
+    """after equals before aside from a newer observed_at must not verify."""
+
+    document = _verification_from_document(_document())
+    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=False)
+
+    _rejects(document)
+
+
+@pytest.mark.parametrize(
+    "observed_at",
+    [
+        NOW - timedelta(minutes=30) - timedelta(microseconds=1),
+        NOW + timedelta(minutes=1) + timedelta(microseconds=1),
+    ],
+)
+def test_stale_or_future_observed_at_is_refused(observed_at: datetime) -> None:
+    _rejects(_document(observed_at=observed_at))
+
+
+def test_observed_at_at_exact_thirty_minute_boundary_is_allowed() -> None:
+    report = m.evaluate(
+        _document(observed_at=NOW - timedelta(minutes=30)),
+        now=NOW,
+    )
+
+    assert report["status"] == "ready"
+    assert report["assignment_action"] == "create_required"
+
+
+def test_verification_refuses_when_after_is_not_newer_than_before() -> None:
+    document = _verification()
+    document["after"]["observed_at"] = document["before"]["observed_at"]
+
+    _rejects(document)
+
+
+def test_already_complete_verification_allows_unchanged_after() -> None:
+    document = _verification_from_document(_document(with_target=True))
+    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=True)
+
+    report = m.evaluate(document, now=NOW)
+
+    assert report["assignment_action"] == "verified"
+    assert report["status"] == "ready"
+
+
+def test_already_complete_verification_refuses_recreated_assignment_id() -> None:
+    document = _verification_from_document(_document(with_target=True))
+    recreated = _assignment(
+        _uuid(99),
+        PROVIDER_PRINCIPAL_ID,
+        RESOURCE_SERVICE_PRINCIPAL_ID,
+        AGENT_ROLE_ID,
+    )
+    after = _snapshot(observed_at=AFTER_AT, with_target=False)
+    after["agent_api_resource_assignments"]["items"].append(deepcopy(recreated))
+    after["provider_outgoing_assignments"]["items"].append(deepcopy(recreated))
+    document["after"] = after
+
+    _rejects(document)
+
+
+def test_non_production_environment_is_refused_without_duplicate_keys() -> None:
+    document = _document()
+    document["environment"] = "staging"
+
+    _rejects(document)
+
+
+def test_one_view_only_public_grant_is_refused() -> None:
+    document = _document()
+    document["before"]["agent_api_resource_assignments"]["items"].append(
+        deepcopy(PUBLIC_TARGET_ASSIGNMENT)
+    )
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="public assignment views do not match"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_verification_refuses_unrelated_immutable_field_change_in_after() -> None:
+    document = _verification()
+    unrelated = next(
+        role
+        for role in document["after"]["application"]["app_roles"]
+        if role["id"] == UNRELATED_ROLE_ID
+    )
+    unrelated["description"] = "Mutated unrelated role description"
+
+    _rejects(document)
+
+
+def test_invalid_schema_version_is_refused() -> None:
+    document = _document()
+    document["schema_version"] = 2
+
+    with pytest.raises(m.IdentityPlanRefused, match="schema_version is invalid"):
+        m.evaluate(document, now=NOW)
+
+
+def test_boolean_schema_version_is_refused() -> None:
+    """True == 1 numerically, so only the type arm refuses this input."""
+
+    document = _document()
+    document["schema_version"] = True
+
+    with pytest.raises(m.IdentityPlanRefused, match="schema_version is invalid"):
+        m.evaluate(document, now=NOW)
+
+
+def test_invalid_mode_is_refused() -> None:
+    document = _document()
+    document["mode"] = "deploy"
+
+    with pytest.raises(m.IdentityPlanRefused, match="mode is invalid"):
+        m.evaluate(document, now=NOW)
+
+
+def test_all_zero_candidate_source_sha_is_refused() -> None:
+    document = _document()
+    document["candidate_source_sha"] = "0" * 40
+
+    with pytest.raises(m.IdentityPlanRefused, match="candidate_source_sha is invalid"):
+        m.evaluate(document, now=NOW)
+
+
+def test_non_hex_candidate_source_sha_is_refused() -> None:
+    document = _document()
+    document["candidate_source_sha"] = "g" * 40
+
+    with pytest.raises(m.IdentityPlanRefused, match="candidate_source_sha is invalid"):
+        m.evaluate(document, now=NOW)
+
+
+def test_plan_input_cannot_carry_verification_state() -> None:
+    document = _document()
+    document["expected_plan_sha256"] = f"sha256_{'a' * 64}"
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="plan input cannot contain verification state"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_plan_input_cannot_carry_after_snapshot() -> None:
+    document = _document()
+    document["after"] = _snapshot(observed_at=AFTER_AT, with_target=False)
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="plan input cannot contain verification state"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_provider_and_public_identities_must_be_isolated() -> None:
+    document = _document()
+    document["bindings"]["public_identity"]["client_id"] = PROVIDER_CLIENT_ID
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="provider and public identities are not isolated"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_provider_public_name_collision_is_refused_by_isolation_only() -> None:
+    """Distinct client/principal IDs keep unique-9 intact; only isolation refuses."""
+
+    document = _document()
+    provider = document["bindings"]["provider_identity"]
+    public = document["bindings"]["public_identity"]
+    public["name"] = provider["name"]
+    public["resource_id"] = provider["resource_id"]
+    assert public["client_id"] != provider["client_id"]
+    assert public["principal_id"] != provider["principal_id"]
+
+    with pytest.raises(m.IdentityPlanRefused) as caught:
+        m.evaluate(document, now=NOW)
+
+    assert str(caught.value) == "provider and public identities are not isolated"
+
+
+def test_production_identity_bindings_must_be_unique() -> None:
+    document = _document()
+    document["bindings"]["agent_api_audience_client_id"] = PROVIDER_CLIENT_ID
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="production identity bindings are ambiguous"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_resource_assignments_refuse_foreign_resource_id() -> None:
+    document = _document()
+    document["before"]["agent_api_resource_assignments"]["items"][0]["resource_id"] = (
+        _uuid(77)
+    )
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="contains an assignment for another resource"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_provider_outgoing_assignments_refuse_foreign_principal_id() -> None:
+    document = _document()
+    document["before"]["provider_outgoing_assignments"]["items"][0]["principal_id"] = (
+        _uuid(78)
+    )
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="contains an assignment for another principal"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_scribe_role_definition_mismatch_is_refused() -> None:
+    document = _document()
+    scribe = next(
+        role
+        for role in document["before"]["application"]["app_roles"]
+        if role["id"] == SCRIBE_ROLE_ID
+    )
+    scribe["description"] = "Tampered scribe definition"
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="Scribe.Transcript.Write definition mismatch"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_scribe_role_disabled_is_refused() -> None:
+    """Keep app and resource definitions equal so only the is_enabled arm refuses."""
+
+    document = _document()
+    for snapshot_name in ("application", "resource_service_principal"):
+        scribe = next(
+            role
+            for role in document["before"][snapshot_name]["app_roles"]
+            if role["id"] == SCRIBE_ROLE_ID
+        )
+        scribe["is_enabled"] = False
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="Scribe.Transcript.Write definition mismatch"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_scribe_role_allowed_member_types_mismatch_is_refused() -> None:
+    """Keep app and resource equal so only the allowed_member_types arm refuses."""
+
+    document = _document()
+    for snapshot_name in ("application", "resource_service_principal"):
+        scribe = next(
+            role
+            for role in document["before"][snapshot_name]["app_roles"]
+            if role["id"] == SCRIBE_ROLE_ID
+        )
+        scribe["allowed_member_types"] = ["Application", "User"]
+
+    with pytest.raises(
+        m.IdentityPlanRefused, match="Scribe.Transcript.Write definition mismatch"
+    ):
+        m.evaluate(document, now=NOW)
+
+
+def test_observed_at_at_exact_one_minute_future_boundary_is_allowed() -> None:
+    report = m.evaluate(
+        _document(observed_at=NOW + timedelta(minutes=1)),
+        now=NOW,
+    )
+
+    assert report["status"] == "ready"
+    assert report["assignment_action"] == "create_required"
+
+
+def test_verification_refuses_resource_service_principal_change_in_after() -> None:
+    document = _verification()
+    unrelated = next(
+        role
+        for role in document["after"]["resource_service_principal"]["app_roles"]
+        if role["id"] == UNRELATED_ROLE_ID
+    )
+    unrelated["description"] = "Mutated resource SP unrelated role"
+
+    with pytest.raises(
+        m.IdentityPlanRefused,
+        match="identity or role state changed outside the assignment",
+    ):
+        m.evaluate(document, now=NOW)
+
+
 def test_cli_emits_no_private_identifiers(tmp_path: Path, capsys: Any) -> None:
     document = _document(observed_at=datetime.now(UTC))
     path = tmp_path / "private-plan.json"
