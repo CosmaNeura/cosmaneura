@@ -1,4 +1,4 @@
-"""Admit a staging-verified master candidate."""
+# fmt: off
 from __future__ import annotations  # noqa: I001
 import hashlib
 import io
@@ -197,6 +197,7 @@ def verify_release_and_publication(
     )
     smoke = release.get("smoke")
     require(isinstance(smoke, dict), "release smoke missing.")
+    assert isinstance(smoke, dict)
     health = smoke.get("healthcheck")
     require(
         isinstance(health, dict) and health.get("result") == "passed",
@@ -212,6 +213,7 @@ def verify_release_and_publication(
     )
     github = release.get("github")
     require(isinstance(github, dict), "release github provenance missing.")
+    assert isinstance(github, dict)
     require(
         github.get("run_id") == run_id and github.get("run_attempt") == attempt,
         "release github run id/attempt mismatch.",
@@ -252,6 +254,7 @@ def verify_staging_run(
     require(bool(SHA.fullmatch(str(run.get("head_sha", "")))), "Invalid staging head.")
     attempt = run.get("run_attempt")
     require(isinstance(attempt, int) and attempt >= 1, "Invalid staging attempt.")
+    assert isinstance(attempt, int)
     require(isinstance(run.get("id"), int) and run["id"] > 0, "Invalid staging run id.")
     expected_release = (
         f"canonical-staging-release-{candidate_sha}-{run['id']}-{attempt}"

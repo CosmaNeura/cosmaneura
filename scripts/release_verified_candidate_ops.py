@@ -1,3 +1,4 @@
+# fmt: off
 """Publish + runtime helpers for Release verified candidate."""
 from __future__ import annotations  # noqa: I001
 import argparse
@@ -166,6 +167,8 @@ def verify_ready(expected_image: str, baseline_path: Path, evidence_path: Path) 
         print(json.dumps(evidence, indent=2, sort_keys=True))
         rollback(baseline_path)
         refuse(message)
+    status: int | None = None
+    body = b""
     try:
         with urllib.request.urlopen(HEALTH, timeout=30) as response:
             status = getattr(response, "status", None) or response.getcode()
