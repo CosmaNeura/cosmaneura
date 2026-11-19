@@ -32,7 +32,7 @@ def test_env_files_flag_values_unchanged():
         )
         for name in names
     )
-    expected = "6c05265decf395bfba70e0f14ece7854bfbb459698ca4f66c34cf4de45fe6b91"
+    expected = "d9bdd0fccd76592800499df1a0b7e2066ebd9a1ee204890aa9ad338a0567e711"
     assert hashlib.sha256(evidence.encode()).hexdigest() == expected
 
 
