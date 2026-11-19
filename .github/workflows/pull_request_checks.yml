@@ -239,7 +239,7 @@ jobs:
           CORE_SCRIBE_SYNTHETIC_PLAIN_IMAGE: core-proof:pr
           CORE_SCRIBE_SYNTHETIC_BUNDLED_IMAGE: core-proof:bundled
           PYTHON_ENV: test
-        run: uv run --frozen pytest --noconftest tests/infrastructure/test_scribe_runtime_image.py::test_real_docker_synthetic_image_without_runtime_refuses tests/infrastructure/test_scribe_runtime_image.py::test_real_docker_synthetic_image_with_runtime_passes
+        run: uv run --frozen pytest --noconftest -p no:pretty_traceback tests/infrastructure/test_scribe_runtime_image.py::test_real_docker_synthetic_image_without_runtime_refuses tests/infrastructure/test_scribe_runtime_image.py::test_real_docker_synthetic_image_with_runtime_passes
 
   app:
     name: Backend
