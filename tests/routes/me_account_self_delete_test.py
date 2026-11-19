@@ -237,19 +237,34 @@ def test_self_delete_privacy_disclosure_names_retained_identifiers():
     )
     assert "HIPAA" in SELF_DELETE_PRIVACY_DISCLOSURE
     assert "BAA" in SELF_DELETE_PRIVACY_DISCLOSURE
-    docs = re.sub(
-        r"\s+",
-        " ",
-        Path("web/public/documentation.html").read_text(encoding="utf-8"),
-    )
-    assert "Names and email addresses are kept in records" in docs
-    assert "HIPAA" in docs and "BAA" in docs
+    # Public documentation wording ships with the latch-flip change, not this PR.
     runbook = re.sub(
         r"\s+",
         " ",
         Path("docs/self-delete-account-billing-runbook.md").read_text(encoding="utf-8"),
     )
     assert "never cancels a practice Stripe subscription" in runbook
+
+
+def test_clerk_only_self_delete_rejects_stale_clerk_factor_verification(
+    monkeypatch, global_session, enable_account_self_delete
+):
+    del global_session, enable_account_self_delete
+    clerk_only = f"user_missing_clerk_only_{secrets.token_hex(5)}"
+    clerk_calls: list[str] = []
+    monkeypatch.setattr(
+        "app.services.doctor_self_delete._delete_clerk_identity",
+        lambda c: clerk_calls.append(c) or True,
+    )
+    monkeypatch.setattr(
+        me_account_route,
+        "delete_clerk_only_identity",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("clerk delete must not run")),
+    )
+    response = _delete(_client_for(clerk_id=clerk_only, fva=[11, -1]))
+    assert response.status_code == 403
+    assert "Recent authentication required" in response.json()["detail"]
+    assert clerk_calls == []
 
 
 def test_self_delete_route_allows_deletion_pending_retry(

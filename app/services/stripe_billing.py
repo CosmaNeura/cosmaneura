@@ -1324,6 +1324,8 @@ def _apply_authoritative_subscription(
                 and mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
             ):
                 # The sole owner self-deleted; flag, never cancel or bind silently.
+                # Refuse unconditionally even when other active members remain —
+                # seat count alone must not bind a post-delete Checkout.
                 from app.models.practice_access_audit import (
                     PracticeAccessAction as Action,
                 )
@@ -1331,20 +1333,35 @@ def _apply_authoritative_subscription(
                     PracticeAccessAudit,
                 )
 
-                session.add(
-                    PracticeAccessAudit(
-                        practice_id=row.id,
-                        action=Action.stripe_checkout_follow_up_required.value,
-                        operator_ref="system:stripe-billing",
-                        reason="Stripe subscription arrived after owner self-delete",
-                        effective_at=datetime.now(timezone.utc),
-                        document_reference=f"stripe-subscription:{subscription['id']}",
+                document_reference = f"stripe-subscription:{subscription['id']}"
+                existing_follow_up = session.exec(
+                    select(PracticeAccessAudit).where(
+                        PracticeAccessAudit.practice_id == row.id,
+                        PracticeAccessAudit.action
+                        == Action.stripe_checkout_follow_up_required.value,
+                        PracticeAccessAudit.document_reference == document_reference,
                     )
-                )
+                ).first()
+                if existing_follow_up is None:
+                    session.add(
+                        PracticeAccessAudit(
+                            practice_id=row.id,
+                            action=Action.stripe_checkout_follow_up_required.value,
+                            operator_ref="system:stripe-billing",
+                            reason=(
+                                "Stripe subscription arrived after owner self-delete"
+                            ),
+                            effective_at=datetime.now(timezone.utc),
+                            document_reference=document_reference,
+                        )
+                    )
                 log.error(
                     "Stripe subscription arrived after owner self-delete",
                     practice_ref=provider_log_ref(f"practice:{practice.id}"),
                     subscription_ref=provider_log_ref(subscription["id"]),
+                )
+                contract_error = StripeStateInvalid(
+                    "Stripe subscription arrived after owner self-delete"
                 )
             if contract_error is not None:
                 row.subscription_status = "invalid"
