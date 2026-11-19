@@ -3541,6 +3541,46 @@ def test_bound_invalid_subscription_contract_revokes_stale_active_access(
     assert not practice.entitled(at=NOW)
 
 
+def test_contract_error_bind_clears_previously_stored_bound_amount(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """A refused bind (contract_error branch) must null a previously stored amount."""
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.stripe_bound_unit_amount = 9000
+    practice.save()
+    assert stripe_billing.seat_summary_unit_amount(practice) == 9000
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLedgerInvalid("ledger is invalid")
+        ),
+    )
+
+    assert stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_contract_clears_bound_amount",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_bound_unit_amount is None
+    assert stripe_billing.seat_summary_unit_amount(practice) is None
+
+
 def test_unbound_invalid_subscription_contract_never_binds(remote: FakeStripe):
     practice = _practice()
     subscription = _subscription(practice, price_id="price_other")

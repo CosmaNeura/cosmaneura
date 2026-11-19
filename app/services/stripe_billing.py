@@ -171,6 +171,8 @@ KNOWN_SUBSCRIPTION_STATUSES = {
     "paused",
 }
 TERMINAL_SUBSCRIPTION_STATUSES = {"canceled", "incomplete_expired"}
+# Core-only projections: keep the binding, never keep or show a bound amount.
+REFUSED_BOUND_AMOUNT_STATUSES = frozenset({"invalid", "pending_verification"})
 
 
 class StripeNotConfigured(Exception):
@@ -465,16 +467,32 @@ def _bound_price_unit_amount(price_id: object) -> int:
     return LEGACY_PRICE_UNIT_AMOUNT
 
 
+def _status_keeps_bound_unit_amount(status: object) -> bool:
+    """Whether a subscription status may store or expose a bound unit amount.
+
+    Used for both the bind write guard (raw Stripe status) and seat-summary
+    display (mirrored status) so the two cannot disagree.
+    """
+
+    return (
+        status not in TERMINAL_SUBSCRIPTION_STATUSES
+        and status not in REFUSED_BOUND_AMOUNT_STATUSES
+    )
+
+
 def seat_summary_unit_amount(practice: Practice) -> int | None:
     """Per-seat amount to display, from persisted state only (no Stripe call).
 
     Without a live subscription this is the tier Checkout would use. With one,
     it is the amount Core last verified for the bound price; unknown is hidden,
-    never guessed.
+    never guessed. Refused Core projections (invalid / pending_verification)
+    never surface a stale bound amount.
     """
 
     if not has_nonterminal_subscription(practice):
         return price_unit_amount_for_practice(practice)
+    if not _status_keeps_bound_unit_amount(practice.subscription_status):
+        return None
     return practice.stripe_bound_unit_amount
 
 
@@ -1382,6 +1400,7 @@ def _apply_authoritative_subscription(
                 )
             if contract_error is not None:
                 row.subscription_status = "invalid"
+                row.stripe_bound_unit_amount = None
                 row.stripe_state_version += 1
                 if isinstance(
                     contract_error,
@@ -1427,7 +1446,7 @@ def _apply_authoritative_subscription(
                 str, remote_entitlement_contract
             )
             row.subscription_status = mirrored_status
-            if subscription.get("status") not in TERMINAL_SUBSCRIPTION_STATUSES:
+            if _status_keeps_bound_unit_amount(subscription.get("status")):
                 # _retrieve_subscription verified this amount against Stripe.
                 bound_price = _subscription_item(
                     subscription, enforce_quantity_bounds=False
