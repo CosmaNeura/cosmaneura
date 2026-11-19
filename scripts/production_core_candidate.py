@@ -36,9 +36,7 @@ from superadmin_capability_config_preflight import (
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "CosmaNeura/cosmaneura"
 WORKFLOW = ".github/workflows/build_and_publish_local.yml"
-RELEASE_VERIFIED_CANDIDATE_WORKFLOW = (
-    ".github/workflows/release_verified_candidate.yml"
-)
+RELEASE_VERIFIED_CANDIDATE_WORKFLOW = ".github/workflows/release_verified_candidate.yml"
 WORKFLOW_REF = f"{REPOSITORY}/{WORKFLOW}@refs/heads/master"
 # context()/deploy.sh may run from Build & Publish prepare/promote or from the
 # reusable staging-verified candidate release. Artifact admit/publish stay on

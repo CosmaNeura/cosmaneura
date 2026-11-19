@@ -78,8 +78,10 @@ def output(args: list[str]) -> str:
     return subprocess.check_output(args, text=True).strip()
 
 
-def api(path: str) -> dict | list:
-    return json.loads(output(["gh", "api", path]))
+def api(path: str) -> dict:
+    payload = json.loads(output(["gh", "api", path]))
+    require(isinstance(payload, dict), "GitHub API response must be an object.")
+    return payload
 
 
 def verify_founder_and_source(candidate_sha: str) -> None:
