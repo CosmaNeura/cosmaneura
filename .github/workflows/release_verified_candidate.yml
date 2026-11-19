@@ -1,38 +1,33 @@
 name: Release verified candidate
-
-# Reusable production promotion for a staging-verified master SHA.
-# Retires the one-time 27 Oct production_release_verified.yml pin (cannot
-# release current master). Build & Publish remains a second production path.
 on:
   workflow_dispatch:
     inputs:
       github_hosted_fallback_authorized:
         type: boolean
-        description: "Operator attestation: authorize the hosted build and deployment"
+        description: "Operator attestation: hosted build/deploy"
         required: true
         default: false
       candidate_sha:
         type: string
-        description: "Exact master SHA that already passed Deploy Staging Candidate"
+        description: "Master SHA that passed staging"
         required: true
       staging_run_id:
         type: string
-        description: "Successful Deploy Staging Candidate run for the candidate SHA"
+        description: "Successful staging run id"
         required: true
       staging_image_digest:
         type: string
-        description: "Immutable staging image digest observed for that run (sha256:<64 hex>)"
+        description: "Staging image digest"
         required: true
       terraform_apply_run_id:
         type: string
-        description: "Successful applicable production Terraform Apply run"
+        description: "Successful Terraform Apply run id"
         required: true
       provider_signed_recall_callback_verified:
         type: boolean
-        description: "Operator attestation: founder confirms the real signed synthetic Recall callback passed before release"
+        description: "Operator attestation: signed Recall callback"
         required: true
         default: false
-
 concurrency:
   group: Build & Publish-${{ github.ref }}
   cancel-in-progress: false
@@ -66,19 +61,15 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Invalid candidate SHA." >&2
-            exit 1
+            echo "Invalid candidate SHA." >&2; exit 1
           fi
           if [[ "$CANDIDATE_SHA" != "$GITHUB_SHA" ]]; then
-            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2
-            exit 1
+            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2; exit 1
           fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-
       - name: Verify staging-verified candidate before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,7 +77,6 @@ jobs:
           STAGING_RUN_ID: ${{ inputs.staging_run_id }}
           STAGING_IMAGE_DIGEST: ${{ inputs.staging_image_digest }}
         run: python3 scripts/verify_release_verified_candidate.py
-
       - name: Require operator attestation for Recall callback
         env:
           PROVIDER_CALLBACK_VERIFIED: ${{ inputs.provider_signed_recall_callback_verified }}
@@ -95,201 +85,15 @@ jobs:
             echo "Operator attestation required: provider-signed synthetic Recall callback." >&2
             exit 1
           fi
-
       - name: Verify successful applicable Terraform Apply
         env:
           GH_TOKEN: ${{ github.token }}
           TERRAFORM_APPLY_RUN_ID: ${{ inputs.terraform_apply_run_id }}
           TARGET_SHA: ${{ github.sha }}
-        run: |
-          if [[ ! "$TERRAFORM_APPLY_RUN_ID" =~ ^[0-9]+$ ]]; then
-            echo "No successful Terraform Apply is available for this production deploy." >&2
-            exit 1
-          fi
-          mapfile -t apply_run < <(
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TERRAFORM_APPLY_RUN_ID" \
-              --jq '[.name, .path, .conclusion, .event, .head_branch, .head_sha] | .[]'
-          )
-          if [[ "${apply_run[0]:-}" != "Terraform Apply" || \
-                "${apply_run[1]:-}" != ".github/workflows/infra_apply_local.yml" || \
-                "${apply_run[2]:-}" != "success" || \
-                "${apply_run[4]:-}" != "master" ]]; then
-            echo "The supplied run is not a successful Terraform Apply on master." >&2
-            exit 1
-          fi
-          if [[ "${apply_run[3]:-}" != "workflow_dispatch" ]]; then
-            echo "The supplied Terraform Apply run has an invalid trigger." >&2
-            exit 1
-          fi
-          apply_sha="${apply_run[5]:-}"
-          if [[ -z "$apply_sha" ]] || \
-             ! git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"; then
-            echo "The supplied Terraform Apply commit is not an ancestor of this deploy." >&2
-            exit 1
-          fi
-          if ! git diff --quiet "$apply_sha" "$TARGET_SHA" -- \
-            infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
-            Justfile just Procfile .github/actions \
-            .github/workflows/infra_apply_local.yml \
-            .github/workflows/infra_production_plan_local.yml \
-            .github/workflows/build_and_publish.yml \
-            .github/workflows/build_and_publish_local.yml \
-            .github/workflows/release_verified_candidate.yml \
-            .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
-            .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
-            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
-            scripts/production_core_candidate.py scripts/production_core_runtime_binding.py \
-            scripts/verify_release_verified_candidate.py \
-            scripts/release_verified_candidate_publish.py \
-            scripts/release_verified_candidate_runtime.py \
-            scripts/session_prep_production_frontend_admission.py \
-            scripts/superadmin_capability_config_preflight.py; then
-            echo "Production infrastructure changed after the supplied Terraform Apply." >&2
-            exit 1
-          fi
-
-  build-and-scan:
-    name: Build and scan production image
-    needs: gate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/master' &&
-        github.actor == 'JohnClem' &&
-        github.triggering_actor == 'JohnClem' &&
-        inputs.github_hosted_fallback_authorized
-      }}
-    # No environment and no id-token. Registry/Azure login happens only in
-    # publish-and-deploy after Trivy. Frontend resolve needs the production
-    # OP token from job secrets available to this hosted job.
-    permissions:
-      contents: read
-    env:
-      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
-    steps:
-      - name: Reject unreviewed durable webhook activation
-        env:
-          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
-        run: |
-          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
-                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
-            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
-            exit 1
-          fi
-
-      - name: Require candidate SHA equals GITHUB_SHA before checkout
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Invalid candidate SHA." >&2
-            exit 1
-          fi
-          if [[ "$CANDIDATE_SHA" != "$GITHUB_SHA" ]]; then
-            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2
-            exit 1
-          fi
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: ./.github/actions/common-setup
-        timeout-minutes: 10
-        with:
-          apt-packages: zsh
-
-      - uses: ./.github/actions/install-nixpacks
-
-      - name: Resolve production frontend build configuration
-        env:
-          FRONTEND_ENV_SOURCE: .env.production.frontend
-          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          set -euo pipefail
-          umask 077
-          just direnv_export "$FRONTEND_ENV_SOURCE" |
-            jq -ce '{
-              NODE_ENV,
-              OPENAPI_JSON_PATH,
-              VITE_CLERK_PUBLIC_KEY,
-              VITE_INTAKE_CHAT_DOMAIN,
-              VITE_POSTHOG_HOST,
-              VITE_POSTHOG_KEY,
-              VITE_PYTHON_URL,
-              VITE_SENTRY_DSN,
-              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false",
-              VITE_SOVEREIGN_PROVIDER_URL
-            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
-            > "$JAVASCRIPT_BUILD_ENV_JSON"
-          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
-          cp -- "$JAVASCRIPT_BUILD_ENV_JSON" "$RUNNER_TEMP/production-frontend-build.artifact.json"
-
-      - name: Build production images from resolved public configuration
-        run: just build
-        env:
-          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
-          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
-          PYTHON_ENV: production
-
-      - name: Scan the built production image with Trivy before publish
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-          # aquasec/trivy:0.58.1 multi-arch index digest observed 2026-11-19
-          TRIVY_IMAGE: aquasec/trivy@sha256:ab70a02200597efa04748f210f793936eb647cbcdb0ea69cc30b226d6f5a22c7
-        run: |
-          set -euo pipefail
-          image="cosmaneura:${CANDIDATE_SHA}"
-          docker image inspect "$image" >/dev/null
-          docker pull "$TRIVY_IMAGE"
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            "$TRIVY_IMAGE" \
-            image --exit-code 1 \
-            --severity CRITICAL,HIGH --ignore-unfixed \
-            "$image"
-
-      - name: Export scanned image archive for publish admission
-        id: scanned_archive
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/.release-artifacts"
-          archive="$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.tar"
-          docker image save --output "$archive" "cosmaneura:${CANDIDATE_SHA}"
-          hash=$(sha256sum "$archive" | awk '{print $1}')
-          echo "path=$archive" >> "$GITHUB_OUTPUT"
-          echo "sha256=$hash" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$hash" > "$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.sha256"
-          cp -- "$RUNNER_TEMP/production-frontend-build.artifact.json" \
-            "$GITHUB_WORKSPACE/.release-artifacts/production-frontend-build.artifact.json"
-
-      - name: Remove resolved production frontend configuration
-        if: always()
-        env:
-          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
-        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON" "$RUNNER_TEMP/production-frontend-build.artifact.json"
-
-      - name: Upload scanned image archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: scanned-production-image-${{ inputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .release-artifacts/scanned-production-image.tar
-            .release-artifacts/scanned-production-image.sha256
-            .release-artifacts/production-frontend-build.artifact.json
-          if-no-files-found: error
-          retention-days: 3
-
+        run: python3 scripts/release_verified_candidate_gate.py
   publish-and-deploy:
-    name: Publish and deploy pinned digest
-    needs: build-and-scan
+    name: Build, scan, publish and deploy
+    needs: gate
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
@@ -317,40 +121,79 @@ jobs:
         run: |
           if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
                 "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
-            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false."
             exit 1
           fi
-
       - name: Require candidate SHA equals GITHUB_SHA before checkout
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Invalid candidate SHA." >&2
-            exit 1
+            echo "Invalid candidate SHA." >&2; exit 1
           fi
           if [[ "$CANDIDATE_SHA" != "$GITHUB_SHA" ]]; then
-            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2
-            exit 1
+            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2; exit 1
           fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
           apt-packages: zsh
-
-      - name: Download scanned image archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: scanned-production-image-${{ inputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .release-artifacts/scanned-admission
-
+      - uses: ./.github/actions/install-nixpacks
+      - name: Resolve production frontend build configuration
+        env:
+          FRONTEND_ENV_SOURCE: .env.production.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$GITHUB_WORKSPACE/.release-artifacts"
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV, OPENAPI_JSON_PATH, VITE_CLERK_PUBLIC_KEY, VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST, VITE_POSTHOG_KEY, VITE_PYTHON_URL, VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false", VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+          cp -- "$JAVASCRIPT_BUILD_ENV_JSON" \
+            "$GITHUB_WORKSPACE/.release-artifacts/production-frontend-build.artifact.json"
+      - name: Build production images from resolved public configuration
+        run: just build
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          PYTHON_ENV: production
+      - name: Scan the built production image with Trivy before publish
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          TRIVY_IMAGE: aquasec/trivy@sha256:ab70a02200597efa04748f210f793936eb647cbcdb0ea69cc30b226d6f5a22c7
+        run: |
+          set -euo pipefail
+          image="cosmaneura:${CANDIDATE_SHA}"
+          docker image inspect "$image" >/dev/null
+          docker pull "$TRIVY_IMAGE"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" \
+            image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed "$image"
+      - name: Export scanned image archive for publish admission
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.tar"
+          docker image save --output "$archive" "cosmaneura:${CANDIDATE_SHA}"
+          sha256sum "$archive" | awk '{print $1}' > \
+            "$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.sha256"
+      - name: Remove resolved production frontend configuration
+        if: always()
+        env:
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
       - name: Reverify current master and admit production context before publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -359,31 +202,23 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$TARGET_SHA" != "$CANDIDATE_SHA" ]]; then
-            echo "Release SHA drifted from the staging-verified candidate." >&2
-            exit 1
+            echo "Release SHA drifted from the staging-verified candidate." >&2; exit 1
           fi
-          current_master_sha=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
-            --jq '.object.sha')
+          current_master_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha')
           if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
-            echo "Master advanced during the build; refusing to publish stale images." >&2
-            exit 1
+            echo "Master advanced during the build; refusing to publish stale images." >&2; exit 1
           fi
-          # Context must run before registry push so refusal cannot happen after publish.
           python3 scripts/production_core_candidate.py context
-
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Publish scanned image with equivalent Core admission checks
         id: production_digest
         env:
@@ -391,35 +226,23 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          archive="$GITHUB_WORKSPACE/.release-artifacts/scanned-admission/scanned-production-image.tar"
-          config="$GITHUB_WORKSPACE/.release-artifacts/scanned-admission/production-frontend-build.artifact.json"
-          hash=$(tr -d '[:space:]' < \
-            "$GITHUB_WORKSPACE/.release-artifacts/scanned-admission/scanned-production-image.sha256")
-          export SCANNED_IMAGE_ARCHIVE_SHA256="$hash"
+          archive="$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.tar"
+          config="$GITHUB_WORKSPACE/.release-artifacts/production-frontend-build.artifact.json"
+          export SCANNED_IMAGE_ARCHIVE_SHA256=$(tr -d '[:space:]' < \
+            "$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.sha256")
           out="$GITHUB_WORKSPACE/.release-artifacts/production-image-ref.txt"
-          python3 scripts/release_verified_candidate_publish.py \
-            --configuration "$config" \
-            --source-sha "$CANDIDATE_SHA" \
-            --archive "$archive" \
-            --output "$out"
+          python3 scripts/release_verified_candidate_ops.py publish \
+            --configuration "$config" --source-sha "$CANDIDATE_SHA" --archive "$archive" --output "$out"
           image=$(tr -d '[:space:]' < "$out")
           if [[ ! "$image" =~ ^cosmaneuraprodregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Published production image did not resolve to an immutable digest."
-            exit 1
+            echo "::error::Published production image did not resolve to an immutable digest."; exit 1
           fi
-          digest="${image##*@}"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "Pinned production digest ${digest}" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Record current production digests and revisions before deploy
-        env:
-          BASELINE: ${{ github.workspace }}/.release-artifacts/production-runtime-baseline.json
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.release-artifacts"
-          python3 scripts/release_verified_candidate_runtime.py record-baseline \
-            --baseline "$BASELINE"
-
+          python3 scripts/release_verified_candidate_ops.py record-baseline \
+            --baseline "$GITHUB_WORKSPACE/.release-artifacts/production-runtime-baseline.json"
       - name: Deploy the pinned production digest to Azure
         id: deploy
         env:
@@ -435,31 +258,25 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! "$CORE_PRODUCTION_IMAGE_REF" =~ ^cosmaneuraprodregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Refusing deploy without an admitted production Core digest."
-            exit 1
+            echo "::error::Refusing deploy without an admitted production Core digest."; exit 1
           fi
           cd infra && bash deploy.sh "$CANDIDATE_SHA" "$CORE_PRODUCTION_IMAGE_REF"
-
       - name: Verify healthcheck and ready-revision digests or roll back
         if: always() && steps.deploy.outcome != 'skipped'
         env:
           CORE_PRODUCTION_IMAGE_REF: ${{ steps.production_digest.outputs.image }}
-          BASELINE: ${{ github.workspace }}/.release-artifacts/production-runtime-baseline.json
-          EVIDENCE: ${{ github.workspace }}/.release-artifacts/production-runtime-evidence.json
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
         run: |
           set -euo pipefail
+          baseline="$GITHUB_WORKSPACE/.release-artifacts/production-runtime-baseline.json"
+          evidence="$GITHUB_WORKSPACE/.release-artifacts/production-runtime-evidence.json"
           if [[ "$DEPLOY_OUTCOME" != "success" ]]; then
-            echo "Deploy failed; rolling back to recorded digests." >&2
-            python3 scripts/release_verified_candidate_runtime.py rollback --baseline "$BASELINE"
-            echo "Migration policy: image rollback restores prior digests/revisions only; Alembic migrations are forward-only." >&2
+            python3 scripts/release_verified_candidate_ops.py rollback --baseline "$baseline"
+            echo "Migration policy: image rollback only; Alembic forward-only." >&2
             exit 1
           fi
-          python3 scripts/release_verified_candidate_runtime.py verify-ready \
-            --baseline "$BASELINE" \
-            --expected-image "$CORE_PRODUCTION_IMAGE_REF" \
-            --evidence "$EVIDENCE"
-
+          python3 scripts/release_verified_candidate_ops.py verify-ready \
+            --baseline "$baseline" --expected-image "$CORE_PRODUCTION_IMAGE_REF" --evidence "$evidence"
       - name: Upload production release evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
