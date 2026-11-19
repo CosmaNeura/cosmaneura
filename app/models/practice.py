@@ -251,6 +251,12 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     negotiated_baa_reference: str | None = None
     "Document reference for the negotiated instrument (internal-admin set)."
 
+    owner_reassignment_needed_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Set when self-delete leaves the practice without an owner"
+
     def negotiated_baa_in_force(self, *, at: datetime | None = None) -> bool:
         """Whether the negotiated instrument itself is effective now."""
 
@@ -316,13 +322,13 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         of several ways it gets set (ARCHITECTURE.md §8, ADR 0016). Fail closed."""
 
         now = at or datetime.now(timezone.utc)
+        if self.billing_exemption_active(at=now):
+            return True
         status = self.subscription_status
         if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
             return False
         if status in {"pending_verification", "invalid"}:
             return False
-        if self.billing_exemption_active(at=now):
-            return True
         if (
             self.acquisition_source
             == PracticeAcquisitionSource.public_self_service.value

@@ -83,6 +83,15 @@ class Doctor(
     )
     "set to now() when the doctor completes the onboarding wizard; null means onboarding not yet done"
 
+    account_deletion_status: str | None = Field(
+        default=None,
+        max_length=32,
+        sa_column_kwargs={
+            "comment": "Self-delete progress: null, deletion_pending, or deleted",
+        },
+    )
+    "Apple 5.1.1(v) self-delete progress; null means no self-delete in flight."
+
     def generate_api_key(self):
         api_key = TypeID(API_KEY_PREFIX)
 

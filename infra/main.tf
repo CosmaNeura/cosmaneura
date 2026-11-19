@@ -640,8 +640,9 @@ resource "azurerm_container_app" "app" {
         for_each = setunion(var.python_public_vars, var.python_billing_public_vars)
 
         content {
-          name  = env.key
-          value = data.external.secrets.result[env.key]
+          name = env.key
+          # These fields exist only in the enabled integration's op:// block.
+          value = contains(["STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"], env.key) ? lookup(data.external.secrets.result, env.key, "") : data.external.secrets.result[env.key]
         }
       }
 
@@ -1130,8 +1131,9 @@ resource "azurerm_container_app" "worker" {
         for_each = setunion(var.python_public_vars, var.python_billing_public_vars)
 
         content {
-          name  = env.key
-          value = data.external.secrets.result[env.key]
+          name = env.key
+          # These fields exist only in the enabled integration's op:// block.
+          value = contains(["STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"], env.key) ? lookup(data.external.secrets.result, env.key, "") : data.external.secrets.result[env.key]
         }
       }
 
