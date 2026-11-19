@@ -257,6 +257,12 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     )
     "Set when self-delete leaves the practice without an owner"
 
+    late_checkout_refused_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Set when late Checkout was refused; durable trial-preserve marker"
+
     def negotiated_baa_in_force(self, *, at: datetime | None = None) -> bool:
         """Whether the negotiated instrument itself is effective now."""
 
@@ -327,15 +333,18 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         status = self.subscription_status
         if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
             return False
-        if status == "pending_verification":
-            return False
-        if status == "invalid":
-            # Bound invalid: access revoked. Unbound invalid (refused late
-            # Checkout after owner self-delete) must not strip a still-open
-            # local trial for remaining clinicians; fall through as unbound.
-            if self.has_authoritative_stripe_subscription_binding():
+        if status in {"pending_verification", "invalid"}:
+            # Only a durable late-Checkout refusal marker may preserve an
+            # unbound local trial. Other invalid paths (seat limit, contract)
+            # stay revoked even when unbound.
+            if (
+                status == "invalid"
+                and self.late_checkout_refused_at is not None
+                and not self.has_authoritative_stripe_subscription_binding()
+            ):
+                status = None
+            else:
                 return False
-            status = None
         if (
             self.acquisition_source
             == PracticeAcquisitionSource.public_self_service.value

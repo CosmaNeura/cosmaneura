@@ -22,6 +22,7 @@ Look for append-only `PracticeAccessAudit` rows on the practice:
 Also check practice fields (PHI-free):
 
 - `owner_reassignment_needed_at` is set
+- `late_checkout_refused_at` when a late Checkout was refused (durable trial marker)
 - `stripe_quantity_sync_required` / `stripe_quantity_sync_target` when seat sync was queued
 - `stripe_subscription_id`, `subscription_status`, `stripe_checkout_session_id`
 
@@ -54,20 +55,23 @@ Agents never run this against production or any real patient database.
 
 1. Confirm the practice is ownerless (`owner_reassignment_needed_at` set) and
    that the audit rows match the ticket.
-2. Decide ownership transfer vs practice wind-down. Self-delete does not
-   terminate the covered entity. Successful `transfer-practice-owner` clears
-   `owner_reassignment_needed_at`.
-3. For a live subscription that should stop: cancel in the Stripe Dashboard
-   (or approved CLI). Prefer the subscription id from the audit row's
+2. For a late Checkout that attempted to bind after delete: Core marks the
+   subscription contract `invalid`, sets `late_checkout_refused_at`, does
+   **not** silently attach an ownerless entitlement, writes
+   `stripe_refund_needed` / `stripe_checkout_follow_up_required`, and pages via
+   `LateCheckoutRefundNeeded`. Prefer the subscription id from the audit row's
    `document_reference` (`stripe-subscription:<id>`) — refused late Checkout
-   does **not** bind `practice.stripe_subscription_id`. Prefer test-mode keys
-   in staging/CI. Production Stripe mutation needs John's yes.
-4. For a late Checkout that attempted to bind after delete: Core marks the
-   subscription contract `invalid`, does **not** silently attach an ownerless
-   entitlement, writes `stripe_refund_needed`, and pages via
-   `LateCheckoutRefundNeeded`. Refund owner `OPEN-JOHN` cancels or refunds the
-   Stripe subscription/customer as appropriate, then clear checkout session
-   fields only through the normal billing recovery paths.
+   does **not** bind `practice.stripe_subscription_id`.
+3. **Cancel or refund in Stripe before transferring ownership.** Refund owner
+   `OPEN-JOHN` cancels or refunds the Stripe subscription/customer as
+   appropriate (test-mode keys in staging/CI; production Stripe mutation needs
+   John's yes). Clear checkout session fields only through the normal billing
+   recovery paths. Refusal audits stay sticky: a later event for the same
+   subscription will not bind even after `owner_reassignment_needed_at` clears.
+4. Decide ownership transfer vs practice wind-down only after Stripe cancel /
+   refund is settled. Self-delete does not terminate the covered entity.
+   Successful `transfer-practice-owner` clears `owner_reassignment_needed_at`
+   but does **not** clear refuse audits or `late_checkout_refused_at`.
 5. Record the Stripe decision on the same change ticket (`operator_ref`).
 
 ## What self-delete does not do

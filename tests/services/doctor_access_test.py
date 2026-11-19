@@ -553,6 +553,7 @@ def test_invalid_practice_keeps_trial_and_pilot_access_for_remaining_clinicians(
     trial_doctor = _doctor("trial-remain")
     practice, _ = _practice(trial_doctor)
     practice.subscription_status = "invalid"
+    practice.late_checkout_refused_at = now
     practice.trial_ends_at = now + timedelta(days=7)
     practice.negotiated_baa_on_file = True
     practice.negotiated_baa_effective_date = now - timedelta(minutes=1)

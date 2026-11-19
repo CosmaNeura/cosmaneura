@@ -47,14 +47,8 @@ def _before(practice):
     status = practice.subscription_status
     if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
         return False
-    if status == "pending_verification":
+    if status in {"pending_verification", "invalid"}:
         return False
-    if status == "invalid":
-        # Bound invalid revokes. Unbound invalid (refused late Checkout) must
-        # still honor an open local trial for remaining clinicians.
-        if practice.has_authoritative_stripe_subscription_binding():
-            return False
-        status = None
     if practice.billing_exemption_active(at=NOW):
         return True
     if (
@@ -74,12 +68,13 @@ def _before(practice):
 def test_reorder_never_reduces_entitlement():
     clocks = [None, NOW - timedelta(seconds=1), NOW, NOW + timedelta(seconds=1)]
     sources = [source.value for source in PracticeAcquisitionSource] + ["unknown"]
-    for status, source, trial, exempt, expiry, bound in product(
+    for status, source, trial, exempt, expiry, bound, refused in product(
         [None, *KNOWN_SUBSCRIPTION_STATUSES, "unknown"],
         sources,
         clocks,
         [False, True],
         clocks,
+        [False, True],
         [False, True],
     ):
         practice = _practice(
@@ -91,10 +86,33 @@ def test_reorder_never_reduces_entitlement():
             stripe_customer_id="cus_synthetic" if bound else None,
             stripe_subscription_id="sub_synthetic" if bound else None,
             stripe_state_version=1 if bound else 0,
+            late_checkout_refused_at=NOW if refused else None,
         )
         before = _before(practice)
         after = practice.entitled(at=NOW)
-        assert not before or after, (status, source, trial, exempt, expiry, bound)
+        assert not before or after, (
+            status,
+            source,
+            trial,
+            exempt,
+            expiry,
+            bound,
+            refused,
+        )
         if before != after:
+            # Narrow allowed difference: durable late-Checkout refuse marker
+            # preserves an unbound future local trial (master _before still
+            # returns False for all invalid).
+            if (
+                status == "invalid"
+                and refused
+                and not bound
+                and trial is not None
+                and trial > NOW
+                and source != "public_self_service"
+                and not practice.billing_exemption_active(at=NOW)
+            ):
+                assert after is True
+                continue
             assert practice.billing_exemption_active(at=NOW)
             assert status in {"invalid", "pending_verification", "unknown"}

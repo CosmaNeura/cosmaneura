@@ -2274,7 +2274,7 @@ def test_bound_subscription_status_outranks_future_local_trial(
 
 
 @pytest.mark.parametrize(
-    "subscription_status", ["pending_verification", "future_state"]
+    "subscription_status", ["invalid", "pending_verification", "future_state"]
 )
 def test_unbound_explicit_nonentitling_status_outranks_future_legacy_trial(
     subscription_status: str,
@@ -2286,14 +2286,27 @@ def test_unbound_explicit_nonentitling_status_outranks_future_legacy_trial(
     assert not practice.entitled(at=NOW)
 
 
-def test_unbound_invalid_preserves_future_legacy_trial():
-    """Refused late Checkout marks invalid without binding; keep local trial."""
+def test_unbound_invalid_preserves_future_legacy_trial_with_refuse_marker():
+    """Late-Checkout refuse marker + unbound invalid keeps local trial."""
+
+    practice = _practice()
+    practice.subscription_status = "invalid"
+    practice.late_checkout_refused_at = NOW
+    practice.trial_ends_at = NOW + timedelta(days=14)
+
+    assert practice.entitled(at=NOW)
+
+
+def test_unbound_invalid_from_seat_limit_path_does_not_preserve_trial():
+    """Seat-limit / contract invalid without refuse marker stays revoked."""
 
     practice = _practice()
     practice.subscription_status = "invalid"
     practice.trial_ends_at = NOW + timedelta(days=14)
+    assert practice.late_checkout_refused_at is None
+    assert not practice.has_authoritative_stripe_subscription_binding()
 
-    assert practice.entitled(at=NOW)
+    assert not practice.entitled(at=NOW)
 
 
 @pytest.mark.parametrize("subscription_status", ["trialing", "active"])
@@ -4958,6 +4971,7 @@ def test_checkout_completing_after_owner_self_delete_flags_and_never_binds(
     practice.refresh()
     assert practice.subscription_status == "invalid"
     assert practice.stripe_subscription_id is None
+    assert practice.late_checkout_refused_at is not None
     flag = PracticeAccessAudit.get(
         practice_id=practice.id, action="stripe_checkout_follow_up_required"
     )
@@ -5100,6 +5114,165 @@ def test_stripe_checkout_follow_up_unique_constraint_refuses_concurrent_duplicat
             )
         ).all()
     assert len(rows) == 1
+
+
+def test_stripe_refund_needed_unique_constraint_refuses_concurrent_duplicates():
+    """Refund-needed unique index fences concurrent duplicate inserts."""
+
+    practice = _practice()
+    document_reference = "stripe-subscription:sub_refund_race"
+    first = PracticeAccessAudit(
+        practice_id=practice.id,
+        action="stripe_refund_needed",
+        operator_ref="system:stripe-billing",
+        reason="Late Checkout charged after owner self-delete; refund needed",
+        effective_at=NOW,
+        document_reference=document_reference,
+    ).save()
+    assert first.id is not None
+
+    with get_session() as session:
+        session.add(
+            PracticeAccessAudit(
+                practice_id=practice.id,
+                action="stripe_refund_needed",
+                operator_ref="system:stripe-billing",
+                reason="Late Checkout charged after owner self-delete; refund needed",
+                effective_at=NOW,
+                document_reference=document_reference,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+    with get_session() as session:
+        rows = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_refund_needed",
+                PracticeAccessAudit.document_reference == document_reference,
+            )
+        ).all()
+    assert len(rows) == 1
+
+
+def test_late_checkout_refusal_stays_sticky_after_owner_transfer(
+    remote: FakeStripe,
+):
+    """Refuse audits keep the same subscription unbound after transfer."""
+
+    from app.services.practice_owner_transfer import transfer_practice_owner
+
+    suffix = secrets.token_hex(4)
+    # Clerk subjects: Doctor requires user_ prefix; transfer requires
+    # user_[A-Za-z0-9]+ (no extra underscores after the prefix).
+    old_owner = Doctor(
+        clerk_id=f"user_stickyOld{suffix}",
+        email=f"sticky-old-{suffix}@synthetic.invalid",
+        biography="",
+        onboarding_completed_at=NOW,
+    ).save()
+    new_owner = Doctor(
+        clerk_id=f"user_stickyNew{suffix}",
+        email=f"sticky-new-{suffix}@synthetic.invalid",
+        biography="",
+        onboarding_completed_at=NOW,
+    ).save()
+    practice = Practice(
+        legal_name="Sticky Refuse Transfer Practice",
+        join_code=f"S{suffix.upper()[:7]}",
+        email_domain="synthetic.invalid",
+        origin_channel="direct",
+    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=old_owner.id,
+            role=PracticeRole.owner.value,
+            attested_at=NOW,
+            attestation_name="Old Owner",
+        )
+    )
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=new_owner.id,
+            role=PracticeRole.workforce.value,
+            attested_at=NOW,
+            attestation_name="New Owner",
+        )
+    )
+
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_sticky",
+        subscription_id="sub_after_delete_sticky",
+        event_id="evt_after_delete_sticky",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.apply_stripe_event(event)
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    assert practice.late_checkout_refused_at is not None
+    assert practice.owner_reassignment_needed_at is not None
+
+    assert old_owner.clerk_id and new_owner.clerk_id and new_owner.email
+    emails = {
+        old_owner.clerk_id: old_owner.email,
+        new_owner.clerk_id: new_owner.email,
+    }
+    transfer_ref = f"synthetic-sticky-{suffix}"
+    plan = transfer_practice_owner(
+        practice_id=practice.id,
+        expected_owner_subject=old_owner.clerk_id,
+        new_owner_subject=new_owner.clerk_id,
+        new_owner_email_confirmation=new_owner.email,
+        transfer_ref=transfer_ref,
+        operator_ref="synthetic-operator",
+        reason="owner_correction",
+        verify_primary_email=emails.get,
+        now=NOW,
+    )
+    transfer_practice_owner(
+        practice_id=practice.id,
+        expected_owner_subject=old_owner.clerk_id,
+        new_owner_subject=new_owner.clerk_id,
+        new_owner_email_confirmation=new_owner.email,
+        transfer_ref=transfer_ref,
+        operator_ref="synthetic-operator",
+        reason="owner_correction",
+        verify_primary_email=emails.get,
+        now=NOW,
+        apply=True,
+        confirm_plan_sha256=plan.plan_sha256,
+    )
+    practice.refresh()
+    assert practice.owner_reassignment_needed_at is None
+    assert practice.late_checkout_refused_at is not None
+
+    # Later Checkout completion for the same refused subscription must not bind
+    # even though owner_reassignment_needed_at was cleared by transfer.
+    practice.stripe_checkout_session_id = "cs_after_delete_sticky_later"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    later = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id="evt_after_delete_sticky_later",
+        created=int(NOW.timestamp()) + 60,
+    )
+    later["data"]["object"] = {
+        "id": "cs_after_delete_sticky_later",
+        "client_reference_id": str(practice.id),
+        "subscription": subscription["id"],
+    }
+    stripe_billing.apply_stripe_event(later)
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    assert practice.late_checkout_refused_at is not None
 
 
 def test_late_checkout_follow_up_insert_survives_unique_race(

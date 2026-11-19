@@ -1,4 +1,4 @@
-"""Up/down coverage for the late-Checkout follow-up unique index."""
+"""Up/down coverage for late-Checkout refuse marker + unique indexes."""
 
 import importlib.util
 from pathlib import Path
@@ -16,6 +16,8 @@ MIGRATION_PATH = (
 )
 FOLLOW_UP_REVISION = "5708b4399768"
 PARENT_REVISION = "c764298c7590"
+FOLLOW_UP_INDEX = "uq_practice_access_audit_stripe_checkout_follow_up"
+REFUND_INDEX = "uq_practice_access_audit_stripe_refund_needed"
 
 
 def _indexes(table: str) -> set[str]:
@@ -25,6 +27,21 @@ def _indexes(table: str) -> set[str]:
                 text(
                     "SELECT indexname FROM pg_indexes "
                     "WHERE schemaname = 'public' AND tablename = :table"
+                ),
+                {"table": table},
+            )
+            .scalars()
+            .all()
+        )
+
+
+def _cols(table: str) -> set[str]:
+    with get_engine().connect() as c:
+        return set(
+            c.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = :table"
                 ),
                 {"table": table},
             )
@@ -53,22 +70,22 @@ def test_follow_up_unique_index_survives_roundtrip():
 
     config = Config("alembic.ini")
     assert _version() == FOLLOW_UP_REVISION
-    assert "uq_practice_access_audit_stripe_checkout_follow_up" in _indexes(
-        "practice_access_audit"
-    )
+    assert FOLLOW_UP_INDEX in _indexes("practice_access_audit")
+    assert REFUND_INDEX in _indexes("practice_access_audit")
+    assert "late_checkout_refused_at" in _cols("practice")
     try:
         close_all_sessions()
         get_engine().dispose()
         command.downgrade(config, PARENT_REVISION)
         assert _version() == PARENT_REVISION
-        assert "uq_practice_access_audit_stripe_checkout_follow_up" not in _indexes(
-            "practice_access_audit"
-        )
+        assert FOLLOW_UP_INDEX not in _indexes("practice_access_audit")
+        assert REFUND_INDEX not in _indexes("practice_access_audit")
+        assert "late_checkout_refused_at" not in _cols("practice")
     finally:
         close_all_sessions()
         get_engine().dispose()
         command.upgrade(config, "head")
     assert _version() == FOLLOW_UP_REVISION
-    assert "uq_practice_access_audit_stripe_checkout_follow_up" in _indexes(
-        "practice_access_audit"
-    )
+    assert FOLLOW_UP_INDEX in _indexes("practice_access_audit")
+    assert REFUND_INDEX in _indexes("practice_access_audit")
+    assert "late_checkout_refused_at" in _cols("practice")

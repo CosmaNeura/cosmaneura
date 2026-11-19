@@ -71,6 +71,15 @@ class PracticeAccessAudit(
                 "AND document_reference IS NOT NULL"
             ),
         ),
+        sa.Index(
+            "uq_practice_access_audit_stripe_refund_needed",
+            "practice_id",
+            "document_reference",
+            unique=True,
+            postgresql_where=sa.text(
+                "action = 'stripe_refund_needed' AND document_reference IS NOT NULL"
+            ),
+        ),
     )
 
     practice_id: TypeIDType = Practice.foreign_key()
