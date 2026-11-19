@@ -82,8 +82,10 @@ def mint_clerk_test_jwt(
     subject: str,
     session_id: str = MOCK_CLERK_SESSION_ID,
     issuer: str = MOCK_CLERK_ISSUER,
+    fva: list[int] | None = None,
     expired: bool = False,
     lifetime_seconds: int = 60,
+    claim_overrides: dict[str, t.Any] | None = None,
 ) -> tuple[str, dict[str, t.Any]]:
     """Mint a synthetic Clerk-shaped session JWT signed by the ephemeral test key.
 
@@ -103,13 +105,16 @@ def mint_clerk_test_jwt(
 
     claims: dict[str, t.Any] = {
         "exp": exp,
-        "fva": [-1, -1],
+        # Default keeps historical callers; self-delete tests pass a fresh fva.
+        "fva": fva if fva is not None else [-1, -1],
         "iat": iat,
         "iss": issuer,
         "nbf": nbf,
         "sid": session_id,
         "sub": subject,
     }
+    if claim_overrides:
+        claims.update(claim_overrides)
     token = jwt.encode(
         claims,
         _TEST_CLERK_JWT_PRIVATE_KEY,
@@ -325,8 +330,16 @@ class MockAuthenticateRequest:
     "mock out the clerk interactions, note that `authenticated_client` must be used here"
 
     # Optionally override the clerk user.
-    def __init__(self, user: ClerkUser | None = None):
+    def __init__(
+        self,
+        user: ClerkUser | None = None,
+        *,
+        fva: list[int] | None = None,
+        payload_overrides: dict | None = None,
+    ):
         self._user = user
+        self._fva = fva
+        self._payload_overrides = payload_overrides or {}
 
     async def __call__(self, request: Request) -> RequestState:
         if not self._user:
@@ -335,7 +348,11 @@ class MockAuthenticateRequest:
             user = self._user
 
         assert user.id
-        token, payload = mint_clerk_test_jwt(subject=user.id)
+        token, payload = mint_clerk_test_jwt(
+            subject=user.id,
+            fva=self._fva,
+            claim_overrides=self._payload_overrides or None,
+        )
         fake_auth_state = RequestState(
             status=AuthStatus.SIGNED_IN,
             reason=None,
