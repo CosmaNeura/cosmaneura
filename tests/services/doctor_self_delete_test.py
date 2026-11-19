@@ -340,7 +340,8 @@ def test_sole_owner_open_checkout_deletes_and_flags_operator(pending):
         practice_id=practice.id,
         action=PracticeAccessAction.stripe_checkout_follow_up_required.value,
     )
-    assert flag is not None and flag.document_reference.startswith("stripe-checkout:")
+    assert flag is not None
+    assert (flag.document_reference or "").startswith("stripe-checkout:")
 
 
 def test_self_delete_locks_practice_before_doctor():
@@ -355,5 +356,5 @@ def test_self_delete_locks_practice_before_doctor():
         _delete(doctor)
     finally:
         event.remove(Engine, "before_cursor_execute", record)
-    locks = [s.split(" FROM ")[1].split()[0] for s in sql if "FOR UPDATE" in s]
+    locks = [s.split("FROM ", 1)[1].split()[0] for s in sql if "FOR UPDATE" in s]
     assert locks[:2] == ["practice", "doctor"]

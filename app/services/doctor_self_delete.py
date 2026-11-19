@@ -323,7 +323,7 @@ def delete_own_account(
     try:
         # Join, invitation, roster and closure paths lock Practice before Doctor.
         locked = session.exec(
-            select(PracticeMember.practice_id).where(
+            select(col(PracticeMember.practice_id)).where(
                 PracticeMember.doctor_id == doctor_id
             )
         ).one_or_none()
