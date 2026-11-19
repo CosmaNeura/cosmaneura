@@ -10,6 +10,12 @@ STRIPE_BILLING_ENABLED = config("STRIPE_BILLING_ENABLED", default=False, cast=bo
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="", cast=str)
 STRIPE_ACCOUNT_ID = config("STRIPE_ACCOUNT_ID", default="", cast=str)
 STRIPE_PRICE_ID = config("STRIPE_PRICE_ID", default="", cast=str)
+STRIPE_MCD_PRICE_ID = config("STRIPE_MCD_PRICE_ID", default="", cast=str)
+STRIPE_LEGACY_PRICE_IDS = tuple(
+    value.strip()
+    for value in config("STRIPE_LEGACY_PRICE_IDS", default="", cast=str).split(",")
+    if value.strip()
+)
 # Stripe's account-default portal can let customers change quantity or plan,
 # bypassing Core's seat rules; sessions must name this reviewed configuration.
 STRIPE_PORTAL_CONFIGURATION_ID = config(
@@ -93,6 +99,8 @@ def stripe_billing_configured() -> bool:
 
     return bool(
         STRIPE_BILLING_ENABLED
+        and STRIPE_MCD_PRICE_ID.startswith("price_")
+        and STRIPE_MCD_PRICE_ID != STRIPE_PRICE_ID
         and stripe_webhook_configured()
         and stripe_portal_configured()
     )

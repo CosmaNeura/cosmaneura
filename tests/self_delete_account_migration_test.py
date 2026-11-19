@@ -15,7 +15,7 @@ MIGRATION_PATH = (
     / "migrations/versions/2026_11_02_c764298c7590_add_self_delete_account_fields.py"
 )
 SELF_DELETE_REVISION = "c764298c7590"
-PARENT_REVISION = "69bad2e072e2"
+PARENT_REVISION = "b38d5a410e49"
 
 
 def _cols(table: str) -> set[str]:

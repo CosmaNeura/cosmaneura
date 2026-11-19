@@ -98,7 +98,11 @@ CHECKOUT_REQUEST_REPLAY_WINDOW = timedelta(hours=23, minutes=55)
 # automatic replay cutoff and Stripe's 24-hour boundary.
 CHECKOUT_RECOVERY_TRANSPORT_SAFETY = timedelta(minutes=5)
 EXPECTED_PRICE_CURRENCY = "usd"
-EXPECTED_PRICE_UNIT_AMOUNT = 8_900
+PUBLIC_PRICE_UNIT_AMOUNT = 9_000
+MCD_PRICE_UNIT_AMOUNT = 6_000
+LEGACY_PRICE_UNIT_AMOUNT = 8_900
+# Compatibility for existing consumers; tier-aware displays use the function below.
+EXPECTED_PRICE_UNIT_AMOUNT = PUBLIC_PRICE_UNIT_AMOUNT
 EXPECTED_PRICE_INTERVAL = "month"
 CHECKOUT_PAYMENT_METHOD_COLLECTION = "always"
 # Changing Checkout request parameters while reusing a Stripe idempotency key
@@ -232,6 +236,14 @@ class StripeCheckoutRetirementPending(Exception):
 
 class StripeCheckoutReconciliationRequired(Exception):
     """A frozen Checkout request is no longer safe to replay automatically."""
+
+
+def _invoice_checkout_is_managed(session: Session, practice: Practice) -> bool:
+    from app.services.invoice_billing import invoice_billing_open
+
+    from app.models.practice_invoice_billing import PracticeInvoiceBilling
+
+    return invoice_billing_open(session.get(PracticeInvoiceBilling, practice.id))
 
 
 def _public_checkout_is_managed(
@@ -425,10 +437,39 @@ def _validate_runtime_account() -> None:
         raise StripeStateInvalid("Stripe secret key resolved to the wrong account")
 
 
+def price_id_for_practice(practice: Practice) -> str:
+    """Founder-verified origin selects the current price; never a legacy price."""
+
+    return (
+        stripe_config.STRIPE_MCD_PRICE_ID
+        if practice.origin_channel == "mcd"
+        else stripe_config.STRIPE_PRICE_ID
+    )
+
+
+def price_unit_amount_for_practice(practice: Practice) -> int:
+    return (
+        MCD_PRICE_UNIT_AMOUNT
+        if practice.origin_channel == "mcd"
+        else PUBLIC_PRICE_UNIT_AMOUNT
+    )
+
+
 def _validate_runtime_price(*, require_active: bool) -> None:
-    price = _request("GET", f"/prices/{stripe_config.STRIPE_PRICE_ID}")
+    public = stripe_config.STRIPE_PRICE_ID
+    mcd = stripe_config.STRIPE_MCD_PRICE_ID
+    if not public.startswith("price_") or not mcd.startswith("price_") or public == mcd:
+        raise StripeStateInvalid("two distinct current Stripe prices are required")
+    _validate_price(public, PUBLIC_PRICE_UNIT_AMOUNT, require_active=require_active)
+    _validate_price(mcd, MCD_PRICE_UNIT_AMOUNT, require_active=require_active)
+
+
+def _validate_price(
+    price_id: str, expected_amount: int, *, require_active: bool
+) -> None:
+    price = _request("GET", f"/prices/{price_id}")
     recurring = price.get("recurring")
-    if price.get("id") != stripe_config.STRIPE_PRICE_ID:
+    if price.get("id") != price_id:
         raise StripeStateInvalid("Stripe returned the wrong configured price")
     _validate_livemode(price.get("livemode"), source="price")
     if require_active and price.get("active") is not True:
@@ -437,7 +478,7 @@ def _validate_runtime_price(*, require_active: bool) -> None:
         raise StripeStateInvalid("configured Stripe price is not recurring")
     if (
         price.get("currency") != EXPECTED_PRICE_CURRENCY
-        or price.get("unit_amount") != EXPECTED_PRICE_UNIT_AMOUNT
+        or price.get("unit_amount") != expected_amount
         or not isinstance(recurring, dict)
         or recurring.get("interval") != EXPECTED_PRICE_INTERVAL
         or recurring.get("interval_count") != 1
@@ -446,7 +487,7 @@ def _validate_runtime_price(*, require_active: bool) -> None:
         or price.get("transform_quantity") is not None
     ):
         raise StripeStateInvalid(
-            "configured Stripe price does not match $89/clinician/month"
+            f"configured Stripe price does not match ${expected_amount / 100:g}/clinician/month"
         )
 
 
@@ -511,7 +552,11 @@ def _subscription_item(
     item = cast(dict[str, Any], items[0])
     price = item.get("price")
     price_id = price.get("id") if isinstance(price, dict) else price
-    if price_id != stripe_config.STRIPE_PRICE_ID:
+    if price_id not in {
+        stripe_config.STRIPE_PRICE_ID,
+        stripe_config.STRIPE_MCD_PRICE_ID,
+        *stripe_config.STRIPE_LEGACY_PRICE_IDS,
+    }:
         raise StripeStateInvalid("subscription does not use the configured price")
     quantity = item.get("quantity")
     if (
@@ -676,9 +721,23 @@ def _retrieve_subscription(
             raise StripeStateInvalid(
                 "Stripe returned a different subscription than requested"
             )
-        return validated
+        price = _subscription_item(validated)["price"]
     except StripeStateInvalid as exc:
         raise StripeSubscriptionContractInvalid(subscription, exc) from exc
+    price_id = price.get("id") if isinstance(price, dict) else price
+    expected_amount = (
+        PUBLIC_PRICE_UNIT_AMOUNT
+        if price_id == stripe_config.STRIPE_PRICE_ID
+        else MCD_PRICE_UNIT_AMOUNT
+        if price_id == stripe_config.STRIPE_MCD_PRICE_ID
+        else LEGACY_PRICE_UNIT_AMOUNT
+    )
+    try:  # An accepted price ID with a drifted price object alerts; never revokes.
+        _validate_price(cast(str, price_id), expected_amount, require_active=False)
+    except StripeStateInvalid:
+        log.error("Stripe bound price check failed; access unchanged")
+        raise
+    return validated
 
 
 def _contract_snapshot_matches_binding(
@@ -958,6 +1017,18 @@ def _apply_authoritative_subscription(
             row = session.exec(
                 select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
+            if subscription.get("status") not in TERMINAL_SUBSCRIPTION_STATUSES:
+                item = _subscription_item(subscription)
+                price = item["price"]
+                bound_price = price.get("id") if isinstance(price, dict) else price
+                if bound_price in {
+                    stripe_config.STRIPE_PRICE_ID,
+                    stripe_config.STRIPE_MCD_PRICE_ID,
+                } and bound_price != price_id_for_practice(row):
+                    log.error(
+                        "Stripe price tier mismatch; access unchanged",
+                        practice_id=str(row.id),
+                    )
             if event_id is not None:
                 existing_receipt = session.exec(
                     select(StripeEventReceipt).where(
@@ -988,6 +1059,14 @@ def _apply_authoritative_subscription(
                 continue
 
             same_subscription = row.stripe_subscription_id == subscription["id"]
+            if not same_subscription:
+                item = _subscription_item(subscription)
+                price = item["price"]
+                incoming_price = price.get("id") if isinstance(price, dict) else price
+                if incoming_price != price_id_for_practice(row):
+                    raise StripeStateInvalid(
+                        "new subscription must use the practice's current tier"
+                    )
             metadata_matches = (subscription.get("metadata") or {}).get(
                 "practice_id"
             ) == str(row.id)
@@ -1677,7 +1756,7 @@ def _validate_frozen_checkout_request(
 ) -> None:
     """Validate the exact provider-bound commercial request on every replay."""
 
-    if frozen_data.get("line_items[0][price]") != stripe_config.STRIPE_PRICE_ID:
+    if frozen_data.get("line_items[0][price]") != price_id_for_practice(practice):
         raise StripeCheckoutReconciliationRequired
     raw_quantity = frozen_data.get("line_items[0][quantity]")
     if raw_quantity is None:
@@ -1700,7 +1779,7 @@ def _validate_frozen_checkout_request(
 
     expected: dict[str, str] = {
         "mode": "subscription",
-        "line_items[0][price]": stripe_config.STRIPE_PRICE_ID,
+        "line_items[0][price]": price_id_for_practice(practice),
         "line_items[0][quantity]": raw_quantity,
         "client_reference_id": str(practice.id),
         "success_url": frozen_data.get("success_url", ""),
@@ -1851,7 +1930,9 @@ def _checkout_request_snapshot(
         row = session.exec(
             select(Practice).where(Practice.id == practice.id).with_for_update()
         ).one()
-        if _public_checkout_is_managed(row, at=normalized_now):
+        if _public_checkout_is_managed(
+            row, at=normalized_now
+        ) or _invoice_checkout_is_managed(session, row):
             raise StripeManagedBilling
 
         has_stored_binding = _has_core_subscription_projection(row)
@@ -2685,6 +2766,9 @@ def create_checkout_session(
     current = now or datetime.now(timezone.utc)
     if _public_checkout_is_managed(practice, at=current):
         raise StripeManagedBilling
+    with get_session() as session:
+        if _invoice_checkout_is_managed(session, practice):
+            raise StripeManagedBilling
     has_stored_binding = _has_core_subscription_projection(practice)
     if has_stored_binding and not _has_complete_core_subscription_binding(practice):
         raise StripeCoreBindingInvalid(
@@ -2731,7 +2815,7 @@ def create_checkout_session(
     entitlement_contract = CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
     data: dict[str, str] = {
         "mode": "subscription",
-        "line_items[0][price]": stripe_config.STRIPE_PRICE_ID,
+        "line_items[0][price]": price_id_for_practice(practice),
         "line_items[0][quantity]": str(seat_quantity),
         "client_reference_id": str(practice.id),
         "success_url": success_url,
@@ -3692,8 +3776,7 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
                     assert invoice_details is not None
                     _, invoice_customer_id = invoice_details
                     should_revoke_pending = bool(
-                        event_type == "invoice.payment_failed"
-                        or practice.stripe_customer_id != invoice_customer_id
+                        practice.stripe_customer_id != invoice_customer_id
                     )
                     if should_revoke_pending and (
                         practice.stripe_last_event_created_at is None
@@ -3851,6 +3934,14 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
     if envelope is None:
         return False
     event_type, event_id, event_created_at, obj, subscription_id = envelope
+
+    from app.services.invoice_billing import apply_invoice_event
+
+    invoice_result = apply_invoice_event(
+        subscription_id, event_type, event_created_at, obj
+    )
+    if invoice_result is not None:
+        return invoice_result
 
     # An immutable local subscription binding outranks mutable Stripe metadata.
     # Initial invoice recovery routes only through a Stripe customer id already

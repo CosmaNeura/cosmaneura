@@ -962,6 +962,36 @@ def set_billing_exempt(
         )
 
 
+@app.command("bill-by-invoice")
+def bill_by_invoice_command(
+    practice_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    reason: str = typer.Option(...),
+    days_until_due: int = typer.Option(30),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
+) -> None:
+    """Email an invoice to an already entitled practice; never change access."""
+    from app.services.invoice_billing import bill_by_invoice
+
+    with global_session():
+        practice = _practice_by_selector(practice_id=practice_id, join_code=None)
+        try:
+            row = bill_by_invoice(
+                practice,
+                operator_ref=operator_ref,
+                reason=reason,
+                days_until_due=days_until_due,
+                dry_run=dry_run,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(
+            "Dry run: no changes"
+            if row is None
+            else f"Invoice billing created: {row.account_reference}"
+        )
+
+
 @app.command("reconcile-stripe-checkout")
 def reconcile_stripe_checkout(
     join_code: str | None = typer.Option(

@@ -315,6 +315,7 @@ export function PracticeJoinPanel({
       practice.baa_accepted &&
       practice.access_authorized &&
       !practice.access_revoked &&
+      !practice.billing_exempt_active &&
       !practice.entitled ? (
         <div className="bg-muted/50 mt-3 rounded-md border p-3" role="alert">
           <p className="text-sm font-semibold">Practice access is paused</p>

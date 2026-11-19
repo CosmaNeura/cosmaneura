@@ -322,13 +322,13 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         of several ways it gets set (ARCHITECTURE.md §8, ADR 0016). Fail closed."""
 
         now = at or datetime.now(timezone.utc)
+        if self.billing_exemption_active(at=now):
+            return True
         status = self.subscription_status
         if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
             return False
         if status in {"pending_verification", "invalid"}:
             return False
-        if self.billing_exemption_active(at=now):
-            return True
         if (
             self.acquisition_source
             == PracticeAcquisitionSource.public_self_service.value
