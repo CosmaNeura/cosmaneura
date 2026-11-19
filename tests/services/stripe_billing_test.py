@@ -58,7 +58,7 @@ class FakeStripe:
             "livemode": False,
             "type": "recurring",
             "currency": "usd",
-            "unit_amount": 8900,
+            "unit_amount": 9000,
             "billing_scheme": "per_unit",
             "transform_quantity": None,
             "recurring": {
@@ -106,7 +106,13 @@ class FakeStripe:
         if path == "/account":
             return {"id": self.account_id}
         if path.startswith("/prices/"):
-            return deepcopy(self.price)
+            price = deepcopy(self.price)
+            if path.endswith("price_test_mcd"):
+                price.update(id="price_test_mcd", unit_amount=6000)
+            elif path.endswith("price_test_legacy"):
+                amount = getattr(self, "legacy_amount", 8900)
+                price.update(id="price_test_legacy", unit_amount=amount)
+            return price
         if path == "/checkout/sessions" and method == "GET":
             return {"data": list(deepcopy(self.sessions).values()), "has_more": False}
         if path == "/checkout/sessions":
@@ -183,6 +189,10 @@ def configured_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_ACCOUNT_ID", "acct_test_cosmaneura")
     monkeypatch.setattr(stripe_config, "STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setattr(stripe_config, "STRIPE_MCD_PRICE_ID", "price_test_mcd")
+    monkeypatch.setattr(
+        stripe_config, "STRIPE_LEGACY_PRICE_IDS", ("price_test_legacy",)
+    )
     monkeypatch.setattr(
         stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", PORTAL_CONFIGURATION_ID
     )
@@ -1287,11 +1297,14 @@ def test_new_checkout_freezes_exact_trial_and_contract_until_card_collection(
     assert practice.stripe_checkout_session_id == "cs_test_idempotent"
 
 
+@pytest.mark.parametrize("origin", ["direct", "catholic", "mcd"])
 def test_lost_checkout_response_replays_identical_frozen_request(
+    origin: str,
     remote: FakeStripe,
     monkeypatch: pytest.MonkeyPatch,
 ):
     practice = _practice()
+    practice.origin_channel = origin
     practice.acquisition_source = PracticeAcquisitionSource.public_self_service.value
     practice.save()
     first_post = True
@@ -1332,6 +1345,10 @@ def test_lost_checkout_response_replays_identical_frozen_request(
     )
     posts = [call for call in remote.calls if call[1] == "/checkout/sessions"]
     assert len(posts) == 2
+    assert posts[0][2] is not None
+    assert posts[0][2]["line_items[0][price]"] == stripe_billing.price_id_for_practice(
+        practice
+    )
     assert posts[0][2:] == posts[1][2:]
     assert json.dumps(posts[0][2], sort_keys=True, separators=(",", ":")) == (
         frozen_request
@@ -2101,7 +2118,7 @@ def test_invoice_payment_failed_preserves_bound_fail_closed_lifecycle(
     assert inbox_id is not None
     assert duplicate is False
     practice.refresh()
-    assert practice.subscription_status == "pending_verification"
+    assert practice.subscription_status == "active"
     assert stripe_billing.process_stripe_event_inbox(inbox_id)
     practice.refresh()
     assert practice.stripe_customer_id == subscription["customer"]
@@ -4844,3 +4861,167 @@ def test_a_superseded_subscription_event_without_receipt_metadata_is_refused(
         )
 
     assert "receipt metadata is incomplete" in str(raised.value)
+
+
+def test_payment_failed_event_alone_does_not_write_pending_verification(remote):
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    _bind_verified_public_subscription(practice, subscription)
+    before = practice.stripe_state_version
+    inbox_id, _ = stripe_billing.enqueue_stripe_event(
+        _invoice_event(
+            "invoice.payment_failed",
+            subscription,
+            event_id="evt_f1_failure",
+            created=int(NOW.timestamp()),
+        )
+    )
+    assert inbox_id
+    practice.refresh()
+    assert practice.subscription_status == "active"
+    assert practice.stripe_state_version == before
+    assert remote.calls == []
+
+
+def test_invoice_customer_mismatch_still_writes_pending_verification(remote):
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    _bind_verified_public_subscription(practice, subscription)
+    event = _invoice_event(
+        "invoice.payment_failed",
+        subscription,
+        event_id="evt_f1_mismatch",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"]["customer"] = "cus_synthetic_mismatch"
+    stripe_billing.enqueue_stripe_event(event)
+    practice.refresh()
+    assert practice.subscription_status == "pending_verification"
+
+
+@pytest.mark.parametrize(
+    "origin,expected",
+    [
+        ("mcd", "price_test_mcd"),
+        ("direct", "price_test_x"),
+        ("catholic", "price_test_x"),
+    ],
+)
+def test_checkout_price_follows_origin_channel(origin, expected, remote):
+    practice = _practice()
+    practice.origin_channel = origin
+    practice.save()
+    assert stripe_billing.price_id_for_practice(practice) == expected
+    stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings?billing=success",
+        cancel_url="https://app.example/settings?billing=cancelled",
+        now=NOW,
+    )
+    request = next(
+        call[2]
+        for call in remote.calls
+        if call[0] == "POST" and call[1] == "/checkout/sessions"
+    )
+    assert request["line_items[0][price]"] == expected
+
+
+def test_runtime_price_check_expects_9000_public_and_6000_mcd(remote):
+    stripe_billing._validate_runtime_configuration(require_active_price=True)
+    assert [
+        path for method, path, *_ in remote.calls if path.startswith("/prices/")
+    ] == ["/prices/price_test_x", "/prices/price_test_mcd"]
+    remote.price["unit_amount"] = 8900
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="90/clinician/month"):
+        stripe_billing._validate_runtime_configuration()
+
+
+@pytest.mark.parametrize(
+    "price_id", ["price_test_x", "price_test_mcd", "price_test_legacy"]
+)
+def test_bound_subscription_on_legacy_price_stays_valid(price_id, remote):
+    practice = _practice()
+    subscription = _subscription(practice, price_id=price_id)
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.refresh_subscription_state(practice)
+    practice.refresh()
+    assert practice.subscription_status == "active"
+    assert practice.entitled(at=NOW)
+
+
+@pytest.mark.parametrize("price_id", ["price_test_x", "price_test_legacy"])
+def test_off_price_binding_alerts_without_revoking(price_id, remote):
+    from structlog.testing import capture_logs
+
+    practice = _practice()
+    subscription = _subscription(practice, price_id=price_id)
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    if price_id == "price_test_x":
+        remote.price["unit_amount"] = 8900  # production before the $90 repoint
+    remote.legacy_amount = 9000
+    with capture_logs() as logs, pytest.raises(stripe_billing.StripeStateInvalid) as e:
+        stripe_billing.refresh_subscription_state(practice)
+    assert not isinstance(e.value, stripe_billing.StripeSubscriptionContractInvalid)
+    assert price_id == "price_test_x" or any(
+        log["event"] == "Stripe bound price check failed; access unchanged"
+        for log in logs
+    )
+    practice.refresh()
+    assert practice.subscription_status == "active" and practice.entitled(at=NOW)
+
+
+def test_price_tier_mismatch_alerts_without_revoking(remote):
+    from structlog.testing import capture_logs
+
+    practice = _practice()
+    practice.origin_channel = "mcd"
+    practice.save()
+    subscription = _subscription(practice, price_id="price_test_x")
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    with capture_logs() as logs:
+        stripe_billing.refresh_subscription_state(practice)
+    assert any(
+        log["event"] == "Stripe price tier mismatch; access unchanged" for log in logs
+    )
+    practice.refresh()
+    assert practice.subscription_status == "active" and practice.entitled(at=NOW)
+
+
+@pytest.mark.parametrize(
+    "bad", "missing equal livemode currency amount interval usage scheme".split()
+)
+def test_second_current_price_must_be_ready(bad, remote, monkeypatch):
+    if bad in {"missing", "equal"}:
+        monkeypatch.setattr(
+            stripe_config,
+            "STRIPE_MCD_PRICE_ID",
+            "" if bad == "missing" else stripe_config.STRIPE_PRICE_ID,
+        )
+        assert not stripe_config.stripe_billing_configured()
+    else:
+        original = remote.__call__
+
+        def request(method, path, data=None, **kwargs):
+            value = original(method, path, data, **kwargs)
+            if path.endswith("price_test_mcd"):
+                if bad == "livemode":
+                    value["livemode"] = True
+                elif bad == "currency":
+                    value["currency"] = "eur"
+                elif bad == "amount":
+                    value["unit_amount"] = 9000
+                elif bad in {"interval", "usage"}:
+                    value["recurring"][
+                        "interval" if bad == "interval" else "usage_type"
+                    ] = "bad"
+                elif bad == "scheme":
+                    value["billing_scheme"] = "tiered"
+            return value
+
+        monkeypatch.setattr(stripe_billing, "_request", request)
+    with pytest.raises(stripe_billing.StripeStateInvalid):
+        stripe_billing._validate_runtime_configuration(require_active_price=True)

@@ -88,6 +88,8 @@ def test_backend_envs_keep_acquisition_closed_and_resolve_vault_coordinates() ->
             "STRIPE_WEBHOOK_SECRET",
             "STRIPE_ACCOUNT_ID",
             "STRIPE_PRICE_ID",
+            "STRIPE_MCD_PRICE_ID",
+            "STRIPE_LEGACY_PRICE_IDS",
             "STRIPE_API_VERSION",
         ):
             assert f"export {name}=" in source
@@ -138,6 +140,8 @@ printf 'secrets=%s,%s,%s,%s,%s\\n' "$STRIPE_SECRET_KEY" "$STRIPE_WEBHOOK_SECRET"
         "webhook-secret",
         "account-id",
         "price-id",
+        "mcd-price-id",
+        "legacy-price-ids",
         "portal-configuration-id",
     ):
         assert (
