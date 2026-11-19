@@ -539,3 +539,11 @@ def test_operator_doc_uses_azure_no_echo_recipe_and_dynamic_head():
     assert "trap 'unset DATABASE_URL' EXIT" in doc
     assert CONTRACT.head not in doc
     assert "pending_migrations" in doc and "guard_tables_missing" in doc
+
+
+def test_connection_parameters_disable_client_certificates(url):
+    params = precheck.connection_parameters(url)
+    assert params["sslcertmode"] == "disable"
+    assert "sslcert" not in params and "sslkey" not in params
+    assert params["sslmode"] == "verify-full"
+    assert params["gssencmode"] == "disable"

@@ -107,7 +107,7 @@ def connection_parameters(database_url: str) -> dict[str, Any]:
     if not ca.is_absolute() or not ca.is_file() or not os.access(ca, os.R_OK):
         raise house.InventoryFailure()
     # Reject ambient libpq routing/authentication overrides before connecting.
-    # Do not pass through URL options, service files, or client TLS credentials.
+    # Do not pass through URL options, service files, or client TLS credentials; sslcertmode=disable stops libpq's default client-cert fallback.
     if any(key.startswith("PG") for key in os.environ):
         raise house.InventoryFailure()
     return {
@@ -118,8 +118,7 @@ def connection_parameters(database_url: str) -> dict[str, Any]:
         "password": urllib.parse.unquote(parsed.password),
         "sslmode": "verify-full",
         "sslrootcert": str(ca),
-        "sslcert": "",
-        "sslkey": "",
+        "sslcertmode": "disable",
         "gssencmode": "disable",
         "connect_timeout": house.CONNECT_TIMEOUT_SECONDS,
         "application_name": "production_migration_precheck",
