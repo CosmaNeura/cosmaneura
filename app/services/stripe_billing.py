@@ -3497,8 +3497,22 @@ def reconcile_pending_quantity_syncs() -> tuple[int, int]:
             Practice.where(Practice.stripe_subscription_id != None).all()  # noqa: E711
         ),
     )
-    succeeded = sum(sync_subscription_quantity(practice) for practice in pending)
-    return succeeded, len(pending) - succeeded
+    succeeded = 0
+    failed = 0
+    for practice in pending:
+        try:
+            if sync_subscription_quantity(practice):
+                succeeded += 1
+            else:
+                failed += 1
+        except StripeStateInvalid:
+            # Zero-seat / seat-policy refusals must not abort later practices.
+            failed += 1
+            log.warning(
+                "stripe quantity sync refused during reconcile",
+                practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            )
+    return succeeded, failed
 
 
 def verify_webhook_signature(

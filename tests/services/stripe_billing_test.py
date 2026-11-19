@@ -3715,6 +3715,43 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
 
 
+def test_quantity_reconcile_continues_after_zero_seat_refusal(remote: FakeStripe):
+    empty = _practice()
+    empty_sub = _subscription(
+        empty, subscription_id="sub_zero_seats", customer_id="cus_zero_seats"
+    )
+    remote.subscriptions[empty_sub["id"]] = empty_sub
+    _bind_verified_public_subscription(empty, empty_sub)
+    with get_session() as session:
+        lock_practice_seats(session, empty.id)
+        for member in session.exec(
+            select(PracticeMember).where(PracticeMember.practice_id == empty.id)
+        ).all():
+            member.seat_state = ClinicianSeatState.inactive.value
+            session.add(member)
+        session.commit()
+    empty.stripe_quantity_sync_required = True
+    empty.stripe_quantity_sync_target = 0
+    empty.save()
+    healthy = _practice()
+    healthy_sub = _subscription(
+        healthy,
+        subscription_id="sub_healthy_seats",
+        customer_id="cus_healthy_seats",
+        quantity=2,
+    )
+    remote.subscriptions[healthy_sub["id"]] = healthy_sub
+    _bind_verified_public_subscription(healthy, healthy_sub)
+    stripe_billing.mark_quantity_sync_required(healthy)
+    succeeded, failed = stripe_billing.reconcile_pending_quantity_syncs()
+    assert succeeded >= 1 and failed >= 1
+    healthy.refresh()
+    assert not healthy.stripe_quantity_sync_required
+    assert _remote_item(remote, healthy)["quantity"] == 1
+    empty.refresh()
+    assert empty.subscription_status == "active"
+
+
 def _bind_checkout_trial(practice: Practice, trial_length: timedelta) -> dict:
     subscription = _subscription(practice, status="trialing")
     subscription["metadata"]["trial_clock"] = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
