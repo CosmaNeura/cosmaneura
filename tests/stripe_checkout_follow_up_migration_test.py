@@ -15,7 +15,7 @@ MIGRATION_PATH = (
     "2026_11_19_5708b4399768_unique_stripe_checkout_follow_up_audit.py"
 )
 FOLLOW_UP_REVISION = "5708b4399768"
-PARENT_REVISION = "c764298c7590"
+PARENT_REVISION = "5f3c9a1e7b24"
 FOLLOW_UP_INDEX = "uq_practice_access_audit_stripe_checkout_follow_up"
 REFUND_INDEX = "uq_practice_access_audit_stripe_refund_needed"
 
