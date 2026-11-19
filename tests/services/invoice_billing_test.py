@@ -255,7 +255,8 @@ def test_reservation_persists_before_first_post_and_refuses_retry(
     monkeypatch.setattr(stripe, "_request", outage)
     with pytest.raises(RuntimeError):
         _issue(practice)
-    row = PracticeInvoiceBilling.get(practice_id=practice.id)
+    with get_session() as session:
+        row = session.get(PracticeInvoiceBilling, practice.id)
     assert row is not None and row.stripe_customer_id is None
     assert outage.call_count == 1 and invoice.invoice_billing_open(row)
     with pytest.raises(invoice.InvoiceBillingError, match="unresolved"):
