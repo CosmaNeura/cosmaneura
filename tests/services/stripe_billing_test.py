@@ -4900,6 +4900,130 @@ def test_a_superseded_subscription_event_without_receipt_metadata_is_refused(
     assert "receipt metadata is incomplete" in str(raised.value)
 
 
+def _late_checkout_after_owner_self_delete_event(
+    practice: Practice,
+    *,
+    session_id: str,
+    subscription_id: str,
+    event_id: str,
+) -> tuple[dict, dict]:
+    practice.stripe_checkout_session_id = session_id
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.owner_reassignment_needed_at = NOW
+    practice.save()
+    subscription = _subscription(practice, subscription_id=subscription_id)
+    event = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id=event_id,
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"] = {
+        "id": session_id,
+        "client_reference_id": str(practice.id),
+        "subscription": subscription_id,
+    }
+    return event, subscription
+
+
+def test_checkout_completing_after_owner_self_delete_flags_and_never_binds(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete",
+        subscription_id="sub_after_delete",
+        event_id="evt_after_delete",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    flag = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_checkout_follow_up_required"
+    )
+    assert flag and flag.document_reference == "stripe-subscription:sub_after_delete"
+
+
+def test_late_checkout_after_owner_self_delete_refuses_with_active_non_owner_member(
+    remote: FakeStripe,
+):
+    """Seat count alone must not bind Checkout after owner self-delete."""
+
+    practice = _practice()
+    _add_attested_clinician(practice)
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_member",
+        subscription_id="sub_after_delete_member",
+        event_id="evt_after_delete_member",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    flag = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_checkout_follow_up_required"
+    )
+    assert (
+        flag
+        and flag.document_reference == "stripe-subscription:sub_after_delete_member"
+    )
+
+
+def test_late_checkout_follow_up_audit_is_idempotent_for_same_subscription(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    first, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_idem",
+        subscription_id="sub_after_delete_idem",
+        event_id="evt_after_delete_idem_1",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.apply_stripe_event(first)
+
+    # Distinct event id, same subscription — must not insert a second follow-up.
+    second = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id="evt_after_delete_idem_2",
+        created=int(NOW.timestamp()) + 1,
+    )
+    second["data"]["object"] = {
+        "id": "cs_after_delete_idem",
+        "client_reference_id": str(practice.id),
+        "subscription": subscription["id"],
+    }
+    stripe_billing.apply_stripe_event(second)
+
+    with get_session() as session:
+        rows = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_checkout_follow_up_required",
+                PracticeAccessAudit.document_reference
+                == "stripe-subscription:sub_after_delete_idem",
+            )
+        ).all()
+    assert len(rows) == 1
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+
+
 def test_payment_failed_event_alone_does_not_write_pending_verification(remote):
     practice = _practice()
     subscription = _current_checkout_subscription(practice)

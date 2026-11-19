@@ -55,6 +55,20 @@ SELF_DELETE_RETENTION_YEARS = _account_closure.ACCOUNT_CLOSURE_RETENTION_YEARS
 SELF_DELETE_RESOURCE_TYPE = "doctor_self_delete"
 SELF_DELETE_OPERATOR_PREFIX = "self:doctor:"
 SELF_DELETE_REASON = "Authenticated self-delete requested by the account holder"
+# Clerk default Delete-account reverification window (minutes). Uses the
+# session token's built-in ``fva`` claim — no Clerk Dashboard change.
+SELF_DELETE_MAX_FIRST_FACTOR_AGE_MINUTES = 10
+SELF_DELETE_REAUTH_REQUIRED_DETAIL = (
+    "Recent authentication required before permanent account deletion. "
+    "Sign in again or reverify, then retry."
+)
+# Canonical user-facing retention disclosure for delete confirmation UIs.
+SELF_DELETE_PRIVACY_DISCLOSURE = (
+    "Deleting your account removes your sign-in and personal profile from "
+    "Cosmas. Names and email addresses are kept in records where required "
+    "for HIPAA, state clinical-record retention, billing/audit evidence, "
+    "and your practice's BAA obligations."
+)
 
 
 class DoctorSelfDeleteError(ValueError):
@@ -114,6 +128,34 @@ def _require_confirm(confirm: str) -> None:
         raise DoctorSelfDeleteError(
             "confirm must be the exact phrase DELETE",
             status_code=422,
+        )
+
+
+def require_fresh_clerk_authentication(payload: Any) -> None:
+    """Refuse irreversible delete unless Clerk ``fva`` shows a recent first factor.
+
+    Clerk session tokens include ``fva`` (factor verification age) by default:
+    ``[first_factor_minutes, second_factor_minutes]``. ``-1`` means that factor
+    was never verified. Matches Clerk's built-in Delete-account window (10m)
+    without changing Clerk configuration.
+    """
+
+    if not isinstance(payload, dict):
+        raise DoctorSelfDeleteError(
+            SELF_DELETE_REAUTH_REQUIRED_DETAIL,
+            status_code=403,
+        )
+    fva = payload.get("fva")
+    if (
+        not isinstance(fva, (list, tuple))
+        or len(fva) < 1
+        or type(fva[0]) is not int
+        or fva[0] < 0
+        or fva[0] > SELF_DELETE_MAX_FIRST_FACTOR_AGE_MINUTES
+    ):
+        raise DoctorSelfDeleteError(
+            SELF_DELETE_REAUTH_REQUIRED_DETAIL,
+            status_code=403,
         )
 
 
