@@ -4188,7 +4188,14 @@
             "title": "Seat Sync Pending"
           },
           "unit_amount": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Unit Amount"
           },
           "currency": {

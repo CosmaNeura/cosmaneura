@@ -5099,17 +5099,22 @@ def test_runtime_price_check_expects_9000_public_and_6000_mcd(remote):
 
 
 @pytest.mark.parametrize(
-    "price_id", ["price_test_x", "price_test_mcd", "price_test_legacy"]
+    ("price_id", "amount"),
+    [("price_test_x", 9000), ("price_test_mcd", 6000), ("price_test_legacy", 8900)],
 )
-def test_bound_subscription_on_legacy_price_stays_valid(price_id, remote):
+def test_bound_subscription_on_legacy_price_stays_valid(price_id, amount, remote):
     practice = _practice()
     subscription = _subscription(practice, price_id=price_id)
     _bind_verified_public_subscription(practice, subscription)
+    assert stripe_billing.seat_summary_unit_amount(practice) is None
     remote.subscriptions[subscription["id"]] = subscription
     stripe_billing.refresh_subscription_state(practice)
     practice.refresh()
     assert practice.subscription_status == "active"
     assert practice.entitled(at=NOW)
+    # The displayed amount is the verified bound price, not the origin tier.
+    assert practice.stripe_bound_unit_amount == amount
+    assert stripe_billing.seat_summary_unit_amount(practice) == amount
 
 
 @pytest.mark.parametrize("price_id", ["price_test_x", "price_test_legacy"])
@@ -5132,6 +5137,8 @@ def test_off_price_binding_alerts_without_revoking(price_id, remote):
     )
     practice.refresh()
     assert practice.subscription_status == "active" and practice.entitled(at=NOW)
+    assert practice.stripe_bound_unit_amount is None
+    assert stripe_billing.seat_summary_unit_amount(practice) is None
 
 
 def test_price_tier_mismatch_alerts_without_revoking(remote):
@@ -5186,3 +5193,57 @@ def test_second_current_price_must_be_ready(bad, remote, monkeypatch):
         monkeypatch.setattr(stripe_billing, "_request", request)
     with pytest.raises(stripe_billing.StripeStateInvalid):
         stripe_billing._validate_runtime_configuration(require_active_price=True)
+
+
+@pytest.mark.parametrize(
+    ("origin", "price_id", "binds"),
+    [
+        ("direct", "price_test_x", True),
+        ("mcd", "price_test_mcd", True),
+        ("direct", "price_test_mcd", False),
+        ("mcd", "price_test_x", False),
+        ("direct", "price_test_legacy", False),  # Checkout frozen at $89
+    ],
+)
+def test_new_binding_must_use_the_practices_current_tier(
+    origin, price_id, binds, remote
+):
+    practice = _practice()
+    practice.origin_channel = origin
+    practice.stripe_checkout_session_id = "cs_tier"
+    practice.stripe_checkout_session_url = "https://checkout.stripe.com/c/pay/tier"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    subscription = _subscription(
+        practice, subscription_id="sub_tier", price_id=price_id
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    event = {
+        "id": "evt_tier",
+        "type": "checkout.session.completed",
+        "created": int(NOW.timestamp()),
+        "api_version": "2025-09-30.clover",
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": "cs_tier",
+                "client_reference_id": str(practice.id),
+                "subscription": subscription["id"],
+            }
+        },
+    }
+    if binds:
+        assert stripe_billing.apply_stripe_event(event)
+        practice.refresh()
+        assert practice.stripe_subscription_id == "sub_tier"
+        return
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="current tier"):
+        stripe_billing.apply_stripe_event(event)
+    practice.refresh()
+    assert practice.stripe_subscription_id is None
+    assert practice.stripe_checkout_session_id == "cs_tier"
+    assert practice.subscription_status is None

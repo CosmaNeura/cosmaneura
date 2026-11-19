@@ -230,6 +230,8 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    stripe_bound_unit_amount: int | None = None
+    "Per-seat minor-unit amount Core last verified for the bound Stripe price."
     stripe_paid_seat_high_water: int | None = None
     "Highest seat count Stripe held in the recorded billing period."
     # A seat removal gives no credit, so re-adding up to this count within the
