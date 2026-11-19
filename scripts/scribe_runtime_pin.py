@@ -9,3 +9,5 @@ SCRIBE_RUNTIME_IMAGE_DIGEST = (
 UV_BUILDER_IMAGE = "ghcr.io/astral-sh/uv@sha256:8f1995ceab97517a621cbdd9c795bba9e8119cf6c472e2b9983bc7a70ac5e3e0"
 DOCKERFILE_FRONTEND = "docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e"
 RUNTIME_DIGEST_LABEL = "com.cosmaneura.scribe-runtime-image-digest"
+
+BUILDKIT_IMAGE = "moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb"

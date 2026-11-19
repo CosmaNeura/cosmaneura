@@ -195,8 +195,17 @@ _build_requirements:
 
 # build the docker container using nixpacks
 build: _build_requirements _production_build_assertions build_javascript
+	just _build_python_image
+
+# Shared by the release build and secretless PR real-image proof.
+_build_python_image: _build_python_substrate
+	just _build_scribe_runtime
+
+_build_python_substrate: _build_requirements _production_build_assertions
 	@just _banner_echo "Building Python Image..."
 	@just _python_nixpacks_env_args | xargs -0 {{NIXPACKS_CREDENTIAL_BARRIER}} {{PYTHON_NIXPACKS_BUILD_CMD}}
+
+_build_scribe_runtime:
 	@{{NIXPACKS_CREDENTIAL_BARRIER}} python3 -m scripts.build_scribe_runtime --core-image "{{PYTHON_IMAGE_TAG}}" --output-image "{{PYTHON_IMAGE_TAG}}"
 
 # Refusal-only check invoked by candidate preparation, before publication.

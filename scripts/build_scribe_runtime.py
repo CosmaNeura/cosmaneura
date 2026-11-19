@@ -15,9 +15,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
-from scripts.scribe_runtime_check import command, verify_runtime
+from scripts.scribe_runtime_check import PIN, command, runtime_required, verify_runtime
 from scripts.scribe_runtime_lineage import MODULE_PATH, RUNTIME_SHA256
 from scripts.scribe_runtime_oci import (
     digest,
@@ -26,6 +29,7 @@ from scripts.scribe_runtime_oci import (
     package,
 )
 from scripts.scribe_runtime_pin import (
+    BUILDKIT_IMAGE,
     DOCKERFILE_FRONTEND,
     RUNTIME_DIGEST_LABEL,
     SCRIBE_RUNTIME_IMAGE_DIGEST,
@@ -33,6 +37,33 @@ from scripts.scribe_runtime_pin import (
     SCRIBE_SOURCE_REVISION,
     UV_BUILDER_IMAGE,
 )
+
+
+@contextmanager
+def runtime_builder(builder: str | None) -> Iterator[str]:
+    """Own a fresh pinned OCI-capable builder unless the caller supplies one."""
+    if builder is not None:
+        yield builder
+        return
+    name = "core-scribe-" + uuid.uuid4().hex
+    try:
+        command(
+            [
+                "docker",
+                "buildx",
+                "create",
+                "--name",
+                name,
+                "--driver",
+                "docker-container",
+                "--driver-opt",
+                "image=" + BUILDKIT_IMAGE,
+                "--bootstrap",
+            ]
+        )
+        yield name
+    finally:
+        command(["docker", "buildx", "rm", name])
 
 
 def source_context(repository: Path, output: Path) -> None:
@@ -242,8 +273,13 @@ def derive_runtime_digest(
     core_image: str, manifest_out: Path, builder: str | None = None
 ) -> str:
     """Derive on the real builder path without building or tagging a Core layer."""
-    with tempfile.TemporaryDirectory(prefix="core-scribe-derive-") as temporary:
-        runtime, actual, *_ = prepare_runtime(core_image, Path(temporary), builder)
+    with (
+        runtime_builder(builder) as selected_builder,
+        tempfile.TemporaryDirectory(prefix="core-scribe-derive-") as temporary,
+    ):
+        runtime, actual, *_ = prepare_runtime(
+            core_image, Path(temporary), selected_builder
+        )
         entries = []
         for path in [runtime, *sorted(runtime.rglob("*"))]:
             info = path.lstat()
@@ -273,10 +309,13 @@ def build(
     builder: str | None = None,
     output_oci: Path | None = None,
 ) -> str:
-    with tempfile.TemporaryDirectory(prefix="core-scribe-build-") as temporary:
+    with (
+        runtime_builder(builder) as selected_builder,
+        tempfile.TemporaryDirectory(prefix="core-scribe-build-") as temporary,
+    ):
         root = Path(temporary)
         runtime, actual, core_ref, core_context, core_revision, base = prepare_runtime(
-            core_image, root, builder
+            core_image, root, selected_builder
         )
         export = (
             ["--output", "type=oci,dest=" + str(output_oci)]
@@ -321,6 +360,8 @@ def main() -> int:
     if args.derive_runtime_digest != (args.manifest_out is not None):
         parser.error("--derive-runtime-digest requires --manifest-out, exclusively")
     try:
+        if not runtime_required(PIN.read_text()):
+            return 0
         if args.derive_runtime_digest:
             print(
                 derive_runtime_digest(args.core_image, args.manifest_out, args.builder)

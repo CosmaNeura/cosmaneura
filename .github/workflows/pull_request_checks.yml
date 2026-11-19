@@ -169,6 +169,9 @@ jobs:
     if: needs.ci-mode.outputs.full != 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      PYTHON_ENV: staging
+      CONTAINER_REGISTRY_HOST: cosmaneurastagingregistry.azurecr.io
     permissions:
       contents: read
     steps:
@@ -176,23 +179,25 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        with:
+          apt-packages: zsh
       - uses: ./.github/actions/install-nixpacks
       - name: Build real amd64 Core substrate
-        # Runner's default Docker builder; no --env from 1Password-backed files
-        # No registry login and no repository secrets are used.
-        run: nixpacks build . --platform=linux/amd64 --name core-proof:pr --label org.opencontainers.image.revision="$(git rev-parse HEAD)"
+        # Same environment arguments and labels as just build, without frontend
+        # credentials. Save the plain substrate for independent refusal tests.
+        run: |
+          set -euo pipefail
+          just _build_python_substrate
+          docker tag "cosmaneura:$(git rev-parse HEAD)" core-proof:pr
       - name: Derive twice from cold builder caches
         id: derive
         run: |
           set -euo pipefail
           docker builder prune -af
-          docker buildx create --name scribe-proof-a --driver docker-container --driver-opt image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb --bootstrap
-          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --builder scribe-proof-a --derive-runtime-digest --manifest-out runtime-a.txt)
-          docker buildx rm scribe-proof-a
+          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-a.txt)
           docker builder prune -af
-          docker buildx create --name scribe-proof-b --driver docker-container --driver-opt image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb --bootstrap
-          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --builder scribe-proof-b --derive-runtime-digest --manifest-out runtime-b.txt)
-          docker buildx rm scribe-proof-b
+          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-b.txt)
           pin=$(python3 -c 'from scripts.scribe_runtime_pin import SCRIBE_RUNTIME_IMAGE_DIGEST; print(SCRIBE_RUNTIME_IMAGE_DIGEST)')
           printf 'Cold derivation A: `%s`\n\nCold derivation B: `%s`\n\nReviewed pin: `%s`\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_STEP_SUMMARY"
           printf 'digest_a=%s\ndigest_b=%s\npin=%s\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_OUTPUT"
@@ -222,18 +227,14 @@ jobs:
       - name: Build and verify the real bundled path
         run: |
           set -euo pipefail
-          docker buildx create --name scribe-proof-bundle --driver docker-container --driver-opt image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb --bootstrap
-          python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --builder scribe-proof-bundle --output-image core-proof:bundled
-          python3 -m scripts.scribe_runtime_check --image core-proof:bundled
+          just _build_python_image
+          just _scribe_runtime_prepare_check
+          docker tag "cosmaneura:$(git rev-parse HEAD)" core-proof:bundled
           set +e
           python3 -m scripts.scribe_runtime_check --image core-proof:pr
           plain_status=$?
           set -e
           [[ "$plain_status" == 1 ]] || { echo "::error::Plain Core must exit 1; got $plain_status."; exit 1; }
-          docker buildx rm scribe-proof-bundle
-      - uses: ./.github/actions/common-setup
-        with:
-          apt-packages: zsh
       - name: Run existing opt-in real image tests
         env:
           CORE_SCRIBE_SYNTHETIC_PLAIN_IMAGE: core-proof:pr

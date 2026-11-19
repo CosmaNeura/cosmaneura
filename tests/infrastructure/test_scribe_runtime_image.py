@@ -272,7 +272,9 @@ def test_core_source_revision_must_be_immutable_before_source_fetch(
         ),
     )
     with pytest.raises(ValueError, match="core_revision_rejected"):
-        builder.build("synthetic-core-image", "synthetic-output-image")
+        builder.build(
+            "synthetic-core-image", "synthetic-output-image", "caller-builder"
+        )
     assert len(calls) == 1
     assert calls[0][:3] == ["docker", "image", "save"]
 
@@ -596,3 +598,83 @@ def test_runtime_scripts_bound_to_every_applicability_and_configuration_list(wor
             "scripts/scribe_runtime_pin.py",
         ]:
             assert path in paths.split(), (workflow, path)
+
+
+@pytest.mark.parametrize("failure", [None, "create", "build"])
+def test_owned_builder_is_pinned_selected_and_removed(monkeypatch, failure):
+    calls = []
+
+    def command(arguments):
+        calls.append(arguments)
+        if failure == "create" and arguments[:3] == ["docker", "buildx", "create"]:
+            raise ValueError("synthetic_create_failure")
+        return ""
+
+    monkeypatch.setattr(builder, "command", command)
+    try:
+        with builder.runtime_builder(None) as name:
+            assert calls[0] == [
+                "docker",
+                "buildx",
+                "create",
+                "--name",
+                name,
+                "--driver",
+                "docker-container",
+                "--driver-opt",
+                "image=" + builder.BUILDKIT_IMAGE,
+                "--bootstrap",
+            ]
+            assert "@sha256:" in builder.BUILDKIT_IMAGE
+            if failure == "build":
+                raise ValueError("synthetic_build_failure")
+    except ValueError as exc:
+        assert str(exc) == "synthetic_" + failure + "_failure"
+    else:
+        assert failure is None
+    assert calls[-1] == ["docker", "buildx", "rm", calls[0][4]]
+
+
+def test_caller_owned_builder_is_not_created_or_removed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(builder, "command", lambda arguments: calls.append(arguments))
+    with builder.runtime_builder("caller-builder") as name:
+        assert name == "caller-builder"
+    assert calls == []
+
+
+def test_disabled_api_skips_build_without_docker(tmp_path, monkeypatch):
+    pin = tmp_path / "settings.tf"
+    pin.write_text("production_live_scribe_core_bundle = {\napi_enabled = false\n}\n")
+    monkeypatch.setattr(builder, "PIN", pin)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_scribe_runtime",
+            "--core-image",
+            "synthetic-core",
+            "--output-image",
+            "synthetic-core",
+        ],
+    )
+    calls = []
+    monkeypatch.setattr(builder, "build", lambda *args: calls.append(args))
+    assert builder.main() == 0
+    assert calls == []
+
+
+def test_ci_and_release_share_python_build_entry_point():
+    root = Path(__file__).resolve().parents[2]
+    recipes = (root / "just/build.just").read_text()
+    workflow = (root / ".github/workflows/pull_request_checks.yml").read_text()
+    job = workflow.split("  scribe-runtime-real-build:", 1)[1].split("\n  app:", 1)[0]
+    release = recipes.split("\nbuild:", 1)[1].split("\n# Shared", 1)[0]
+    assert "just _build_python_image" in release
+    assert "just _build_python_image" in job
+    assert "just _scribe_runtime_prepare_check" in job
+    assert "nixpacks build" not in job
+    assert "--builder" not in job
+    assert (
+        "_build_python_image: _build_python_substrate\n\tjust _build_scribe_runtime"
+        in recipes
+    )

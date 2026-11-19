@@ -205,9 +205,10 @@ def test_unknown_controller_import_refuses_even_at_initial_dispatch(repo) -> Non
         repo["verify"](reverify=False)
 
 
-def test_changed_build_requires_new_audit_even_at_initial_dispatch(repo) -> None:
+@pytest.mark.parametrize("path", ["just/build.just", "scripts/scribe_runtime_pin.py"])
+def test_changed_build_requires_new_audit_even_at_initial_dispatch(repo, path) -> None:
     repo["git"]("checkout", "--detach", "-q", repo["master"])
-    repo["write"]("just/build.just", "synthetic changed image builder\n")
+    repo["write"](path, "synthetic changed image builder\n")
     repo["git"]("add", ".")
     repo["git"]("commit", "-qm", "Synthetic unaudited build change")
     repo["master"] = repo["controller"] = repo["git"]("rev-parse", "HEAD")
