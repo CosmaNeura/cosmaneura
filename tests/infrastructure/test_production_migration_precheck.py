@@ -9,6 +9,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from psycopg.conninfo import make_conninfo
 
 from scripts import production_migration_precheck as precheck
@@ -16,6 +18,51 @@ from scripts import production_migration_precheck as precheck
 ROOT = Path(__file__).resolve().parents[2]
 ZERO = "00000000-0000-0000-0000-000000000000"
 CONTRACT = precheck.house.repository_migration_contract(ROOT)
+
+
+@pytest.fixture(scope="module")
+def repository_scripts(tmp_path_factory):
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option(
+        "script_location", str(ROOT / config.get_main_option("script_location"))
+    )
+    source = ScriptDirectory.from_config(config)
+    fixture = tmp_path_factory.mktemp("migration-metadata")
+    versions = fixture / "versions"
+    versions.mkdir()
+    # Copy only graph metadata: historical migration imports load app models.
+    # Alembic orders the real repository graph without executing migration code.
+    for path in Path(source.versions).glob("*.py"):
+        metadata = {}
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in {
+                    "revision",
+                    "down_revision",
+                    "branch_labels",
+                    "depends_on",
+                }:
+                    metadata[target.id] = ast.literal_eval(node.value)
+        if "revision" in metadata:
+            (versions / path.name).write_text(
+                "\n".join(f"{key} = {value!r}" for key, value in metadata.items())
+            )
+    config.set_main_option("script_location", str(fixture))
+    return ScriptDirectory.from_config(config)
+
+
+def expected_pending(repository_scripts, head):
+    return [
+        revision.revision
+        for revision in reversed(list(repository_scripts.walk_revisions(base=head)))
+        if revision.revision != head
+    ]
 
 
 class FixtureDatabase:
@@ -104,7 +151,7 @@ def url(tmp_path, monkeypatch):
     )
 
 
-def test_clear_fixture_reports_only_fixed_fields(database):
+def test_clear_fixture_reports_only_fixed_fields(database, repository_scripts):
     database.db.executemany(
         "INSERT INTO public.scribe_capture_provider_link VALUES (?, ?, ?)",
         [("synthetic-practice-a", "synthetic-tenant-a", None)] * 2,
@@ -117,9 +164,9 @@ def test_clear_fixture_reports_only_fixed_fields(database):
     assert report == {
         "scope": "core",
         "migration_head": "49126bf99c72",
-        "repository_head": "69bad2e072e2",
+        "repository_head": repository_scripts.get_current_head(),
         "is_ancestor_of_repository_head": True,
-        "pending_migrations": ["ddd6261fa36f", "e78845cecca6", "69bad2e072e2"],
+        "pending_migrations": expected_pending(repository_scripts, "49126bf99c72"),
         "e78845cecca6_would_abort": False,
         "abort_counts": {"practice_conflicts": 0, "reused_uuids": 0, "zero_uuids": 0},
         "provider_practice_authority_null_practice_id_count": 1,
@@ -402,18 +449,28 @@ def test_missing_url_never_connects(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize(
-    ("head", "pending"),
+    "head",
     [
-        ("49126bf99c72", ["ddd6261fa36f", "e78845cecca6", "69bad2e072e2"]),
-        ("ddd6261fa36f", ["e78845cecca6", "69bad2e072e2"]),
-        ("e78845cecca6", ["69bad2e072e2"]),
-        (CONTRACT.head, []),
-        ("aaaaaaaaaaaa", []),
+        "49126bf99c72",
+        "ddd6261fa36f",
+        "e78845cecca6",
+        "head-1",
+        "head",
+        "aaaaaaaaaaaa",
     ],
 )
 def test_cli_lists_pending_migrations_and_behind_is_stop(
-    monkeypatch, url, capsys, head, pending
+    monkeypatch, url, capsys, head, repository_scripts
 ):
+    if head != "aaaaaaaaaaaa":
+        if head == "head-1":
+            head = repository_scripts.get_revision("head").down_revision
+        head = repository_scripts.get_revision(head).revision
+        pending = expected_pending(repository_scripts, head)
+        if head != repository_scripts.get_current_head():
+            assert pending
+    else:
+        pending = []
     database = FixtureDatabase()
     database.db.execute("UPDATE public.alembic_version SET version_num=?", (head,))
     install_connection(monkeypatch, url, database)
