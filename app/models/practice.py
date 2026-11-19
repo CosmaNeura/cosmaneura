@@ -261,7 +261,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Set when late Checkout was refused; durable trial-preserve marker"
+    "Set when late Checkout was refused after owner self-delete; preserves unbound local trial without relying on owner_reassignment_needed_at"
 
     def negotiated_baa_in_force(self, *, at: datetime | None = None) -> bool:
         """Whether the negotiated instrument itself is effective now."""
