@@ -184,6 +184,8 @@ jobs:
           apt-packages: zsh
       - uses: ./.github/actions/install-nixpacks
       - name: Build real amd64 Core substrate
+        env:
+          PYTHON_ENV: staging
         # Same environment arguments and labels as just build, without frontend
         # credentials. Save the plain substrate for independent refusal tests.
         run: |
@@ -225,6 +227,8 @@ jobs:
             exit 1
           fi
       - name: Build and verify the real bundled path
+        env:
+          PYTHON_ENV: staging
         run: |
           set -euo pipefail
           just _build_python_image
