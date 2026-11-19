@@ -1642,6 +1642,17 @@ def test_seat_summary_shows_bound_amount_never_tier_guess(
     assert summary is not None
     assert summary["unit_amount"] == stripe_billing.PUBLIC_PRICE_UNIT_AMOUNT
 
+    # Refused Core projections must not leak a previously stored bound amount
+    # (or invent the tier price). billed_seats already hides the UI cost.
+    for refused_status in ("invalid", "pending_verification"):
+        practice.subscription_status = refused_status
+        practice.stripe_bound_unit_amount = bound_amount if bound_amount else 9000
+        practice.save()
+        summary = _seat_summary(bare_authenticated_client)
+        assert summary is not None
+        assert summary["billed_seats"] is None
+        assert summary["unit_amount"] is None
+
 
 def test_invalid_seat_ledger_hides_summary_and_alerts_operators(
     bare_authenticated_client: TestClient,
