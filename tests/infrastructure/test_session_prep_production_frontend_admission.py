@@ -460,5 +460,8 @@ def test_manual_workflow_keeps_existing_gates_and_default_dark_projection() -> N
             )
         ]
     )
-    retired = (ROOT / ".github/workflows/production_release_verified.yml").read_text()
-    assert f'{FLAG}: "false"' in retired
+    # One-time production_release_verified.yml is retired; dark projection stays
+    # on the reusable Release verified candidate path.
+    assert not (ROOT / ".github/workflows/production_release_verified.yml").exists()
+    reusable = (ROOT / ".github/workflows/release_verified_candidate.yml").read_text()
+    assert f'{FLAG}: "false"' in reusable

@@ -1012,42 +1012,15 @@ def test_digest_guard_refuses_missing_tags_wrong_repository_before_loader():
         assert ("after_guard" in result.stdout) is (arguments == [SHA, image])
 
 
-def test_historical_source_reuse_caller_is_already_blocked_on_master():
-    verifier = (ROOT / "scripts/verify_one_time_release_reuse.py").read_text()
-    assert 'SOURCE_BASE_SHA = "4ff9318298e332f67b18117ccbabfd3764f569d7"' in verifier
-    changes = subprocess.run(
-        [
-            "git",
-            "--no-replace-objects",
-            "diff",
-            "--name-status",
-            "--no-renames",
-            "4ff9318298e332f67b18117ccbabfd3764f569d7",
-            "5033ea3aedb827e509f70b8f2c47a08c1a430c3b",
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=10,
-    ).stdout.splitlines()
-    allowed = {
-        "A\t" + path
-        for path in (
-            ".github/workflows/production_release_verified.yml",
-            "scripts/verify_one_time_release_reuse.py",
-            "tests/one_time_release_reuse_test.py",
-            "docs/flight-plans/2026-10-27-verified-production-release.md",
-        )
-    }
-    assert set(changes) != allowed
-    assert 'set(changes) == {"A\\t" + p for p in NEW_CONTROL_FILES}' in verifier
-    historical = (
-        ROOT / ".github/workflows/production_release_verified.yml"
-    ).read_text()
-    assert historical.index(
-        "scripts/verify_one_time_release_reuse.py"
-    ) < historical.index("uses: azure/login@")
+def test_one_time_production_release_verified_path_is_retired():
+    assert not (ROOT / ".github/workflows/production_release_verified.yml").exists()
+    assert not (ROOT / "scripts/verify_one_time_release_reuse.py").exists()
+    assert not (ROOT / "tests/one_time_release_reuse_test.py").exists()
+    # Wrong producer path mutations still refuse (including the retired workflow path).
+    data = evidence()
+    data["run"]["path"] = ".github/workflows/production_release_verified.yml"
+    with pytest.raises(candidate.CandidateRefused):
+        verify(data)
 
 
 def test_client_children_receive_only_their_normal_capabilities(monkeypatch):

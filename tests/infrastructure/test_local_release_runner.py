@@ -64,7 +64,6 @@ def test_every_tracked_workflow_requires_approved_compute() -> None:
                     continue
                 if path.name in {
                     "build_and_publish_local.yml",
-                    "production_release_verified.yml",
                     "release_verified_candidate.yml",
                 }:
                     assert labels == "ubuntu-24.04"

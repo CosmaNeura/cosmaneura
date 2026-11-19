@@ -159,7 +159,7 @@ def api(path: str) -> Any:
     return decode(raw, maximum=MAX_METADATA)
 
 
-def source_context() -> dict[str, Any]:
+def source_context(*, allow_release_verified_candidate: bool = False) -> dict[str, Any]:
     expected = {
         "GITHUB_ACTOR": "JohnClem",
         "GITHUB_TRIGGERING_ACTOR": "JohnClem",
@@ -168,7 +168,15 @@ def source_context() -> dict[str, Any]:
         "GITHUB_REPOSITORY": REPOSITORY,
     }
     require(all(os.environ.get(key) == value for key, value in expected.items()))
-    require(os.environ.get("GITHUB_WORKFLOW_REF") in ALLOWED_CONTEXT_WORKFLOW_REFS)
+    # publish/admit/check stay on Build & Publish WORKFLOW_REF only. The wider
+    # allowlist is context-mode only so deploy.sh can run from Release verified
+    # candidate without admitting that workflow as a Core producer.
+    allowed = (
+        ALLOWED_CONTEXT_WORKFLOW_REFS
+        if allow_release_verified_candidate
+        else frozenset({WORKFLOW_REF})
+    )
+    require(os.environ.get("GITHUB_WORKFLOW_REF") in allowed)
     sha = os.environ.get("GITHUB_SHA", "")
     require(SHA.fullmatch(sha))
     git = ["git", "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(ROOT)]
@@ -741,7 +749,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.mode == "context":
-            source_context()
+            source_context(allow_release_verified_candidate=True)
         elif args.mode == "publish":
             require(args.configuration is not None and args.output is not None)
             publish(args.configuration, args.output, args.frontend_admission)
