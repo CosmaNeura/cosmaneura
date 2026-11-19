@@ -140,6 +140,10 @@ def record_active_clinician_seat_quantity(
         raise ClinicianSeatPolicyError(
             "active clinician count is outside the seat limit"
         )
+    from app.services.invoice_billing import mark_invoice_quantity
+
+    if mark_invoice_quantity(session, locked_practice.id, count):
+        return count
     if locked_practice.stripe_subscription_id:
         locked_practice.stripe_quantity_sync_required = True
         locked_practice.stripe_quantity_sync_target = count

@@ -58,7 +58,7 @@ class FakeStripe:
             "livemode": False,
             "type": "recurring",
             "currency": "usd",
-            "unit_amount": 8900,
+            "unit_amount": 9000,
             "billing_scheme": "per_unit",
             "transform_quantity": None,
             "recurring": {
@@ -106,7 +106,13 @@ class FakeStripe:
         if path == "/account":
             return {"id": self.account_id}
         if path.startswith("/prices/"):
-            return deepcopy(self.price)
+            price = deepcopy(self.price)
+            if path.endswith("price_test_mcd"):
+                price.update(id="price_test_mcd", unit_amount=6000)
+            elif path.endswith("price_test_legacy"):
+                amount = getattr(self, "legacy_amount", 8900)
+                price.update(id="price_test_legacy", unit_amount=amount)
+            return price
         if path == "/checkout/sessions" and method == "GET":
             return {"data": list(deepcopy(self.sessions).values()), "has_more": False}
         if path == "/checkout/sessions":
@@ -183,6 +189,10 @@ def configured_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_ACCOUNT_ID", "acct_test_cosmaneura")
     monkeypatch.setattr(stripe_config, "STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setattr(stripe_config, "STRIPE_MCD_PRICE_ID", "price_test_mcd")
+    monkeypatch.setattr(
+        stripe_config, "STRIPE_LEGACY_PRICE_IDS", ("price_test_legacy",)
+    )
     monkeypatch.setattr(
         stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", PORTAL_CONFIGURATION_ID
     )
@@ -1287,11 +1297,14 @@ def test_new_checkout_freezes_exact_trial_and_contract_until_card_collection(
     assert practice.stripe_checkout_session_id == "cs_test_idempotent"
 
 
+@pytest.mark.parametrize("origin", ["direct", "catholic", "mcd"])
 def test_lost_checkout_response_replays_identical_frozen_request(
+    origin: str,
     remote: FakeStripe,
     monkeypatch: pytest.MonkeyPatch,
 ):
     practice = _practice()
+    practice.origin_channel = origin
     practice.acquisition_source = PracticeAcquisitionSource.public_self_service.value
     practice.save()
     first_post = True
@@ -1332,6 +1345,10 @@ def test_lost_checkout_response_replays_identical_frozen_request(
     )
     posts = [call for call in remote.calls if call[1] == "/checkout/sessions"]
     assert len(posts) == 2
+    assert posts[0][2] is not None
+    assert posts[0][2]["line_items[0][price]"] == stripe_billing.price_id_for_practice(
+        practice
+    )
     assert posts[0][2:] == posts[1][2:]
     assert json.dumps(posts[0][2], sort_keys=True, separators=(",", ":")) == (
         frozen_request
@@ -2101,7 +2118,7 @@ def test_invoice_payment_failed_preserves_bound_fail_closed_lifecycle(
     assert inbox_id is not None
     assert duplicate is False
     practice.refresh()
-    assert practice.subscription_status == "pending_verification"
+    assert practice.subscription_status == "active"
     assert stripe_billing.process_stripe_event_inbox(inbox_id)
     practice.refresh()
     assert practice.stripe_customer_id == subscription["customer"]
@@ -3698,6 +3715,43 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
 
 
+def test_quantity_reconcile_continues_after_zero_seat_refusal(remote: FakeStripe):
+    empty = _practice()
+    empty_sub = _subscription(
+        empty, subscription_id="sub_zero_seats", customer_id="cus_zero_seats"
+    )
+    remote.subscriptions[empty_sub["id"]] = empty_sub
+    _bind_verified_public_subscription(empty, empty_sub)
+    with get_session() as session:
+        lock_practice_seats(session, empty.id)
+        for member in session.exec(
+            select(PracticeMember).where(PracticeMember.practice_id == empty.id)
+        ).all():
+            member.seat_state = ClinicianSeatState.inactive.value
+            session.add(member)
+        session.commit()
+    empty.stripe_quantity_sync_required = True
+    empty.stripe_quantity_sync_target = 0
+    empty.save()
+    healthy = _practice()
+    healthy_sub = _subscription(
+        healthy,
+        subscription_id="sub_healthy_seats",
+        customer_id="cus_healthy_seats",
+        quantity=2,
+    )
+    remote.subscriptions[healthy_sub["id"]] = healthy_sub
+    _bind_verified_public_subscription(healthy, healthy_sub)
+    stripe_billing.mark_quantity_sync_required(healthy)
+    succeeded, failed = stripe_billing.reconcile_pending_quantity_syncs()
+    assert succeeded >= 1 and failed >= 1
+    healthy.refresh()
+    assert not healthy.stripe_quantity_sync_required
+    assert _remote_item(remote, healthy)["quantity"] == 1
+    empty.refresh()
+    assert empty.subscription_status == "active"
+
+
 def _bind_checkout_trial(practice: Practice, trial_length: timedelta) -> dict:
     subscription = _subscription(practice, status="trialing")
     subscription["metadata"]["trial_clock"] = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
@@ -4844,3 +4898,291 @@ def test_a_superseded_subscription_event_without_receipt_metadata_is_refused(
         )
 
     assert "receipt metadata is incomplete" in str(raised.value)
+
+
+def _late_checkout_after_owner_self_delete_event(
+    practice: Practice,
+    *,
+    session_id: str,
+    subscription_id: str,
+    event_id: str,
+) -> tuple[dict, dict]:
+    practice.stripe_checkout_session_id = session_id
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.owner_reassignment_needed_at = NOW
+    practice.save()
+    subscription = _subscription(practice, subscription_id=subscription_id)
+    event = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id=event_id,
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"] = {
+        "id": session_id,
+        "client_reference_id": str(practice.id),
+        "subscription": subscription_id,
+    }
+    return event, subscription
+
+
+def test_checkout_completing_after_owner_self_delete_flags_and_never_binds(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete",
+        subscription_id="sub_after_delete",
+        event_id="evt_after_delete",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    flag = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_checkout_follow_up_required"
+    )
+    assert flag and flag.document_reference == "stripe-subscription:sub_after_delete"
+
+
+def test_late_checkout_after_owner_self_delete_refuses_with_active_non_owner_member(
+    remote: FakeStripe,
+):
+    """Seat count alone must not bind Checkout after owner self-delete."""
+
+    practice = _practice()
+    _add_attested_clinician(practice)
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_member",
+        subscription_id="sub_after_delete_member",
+        event_id="evt_after_delete_member",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    flag = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_checkout_follow_up_required"
+    )
+    assert (
+        flag
+        and flag.document_reference == "stripe-subscription:sub_after_delete_member"
+    )
+
+
+def test_late_checkout_follow_up_audit_is_idempotent_for_same_subscription(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    first, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_idem",
+        subscription_id="sub_after_delete_idem",
+        event_id="evt_after_delete_idem_1",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.apply_stripe_event(first)
+
+    # Distinct event id, same subscription — must not insert a second follow-up.
+    second = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id="evt_after_delete_idem_2",
+        created=int(NOW.timestamp()) + 1,
+    )
+    second["data"]["object"] = {
+        "id": "cs_after_delete_idem",
+        "client_reference_id": str(practice.id),
+        "subscription": subscription["id"],
+    }
+    stripe_billing.apply_stripe_event(second)
+
+    with get_session() as session:
+        rows = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_checkout_follow_up_required",
+                PracticeAccessAudit.document_reference
+                == "stripe-subscription:sub_after_delete_idem",
+            )
+        ).all()
+    assert len(rows) == 1
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+
+
+def test_payment_failed_event_alone_does_not_write_pending_verification(remote):
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    _bind_verified_public_subscription(practice, subscription)
+    before = practice.stripe_state_version
+    inbox_id, _ = stripe_billing.enqueue_stripe_event(
+        _invoice_event(
+            "invoice.payment_failed",
+            subscription,
+            event_id="evt_f1_failure",
+            created=int(NOW.timestamp()),
+        )
+    )
+    assert inbox_id
+    practice.refresh()
+    assert practice.subscription_status == "active"
+    assert practice.stripe_state_version == before
+    assert remote.calls == []
+
+
+def test_invoice_customer_mismatch_still_writes_pending_verification(remote):
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    _bind_verified_public_subscription(practice, subscription)
+    event = _invoice_event(
+        "invoice.payment_failed",
+        subscription,
+        event_id="evt_f1_mismatch",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"]["customer"] = "cus_synthetic_mismatch"
+    stripe_billing.enqueue_stripe_event(event)
+    practice.refresh()
+    assert practice.subscription_status == "pending_verification"
+
+
+@pytest.mark.parametrize(
+    "origin,expected",
+    [
+        ("mcd", "price_test_mcd"),
+        ("direct", "price_test_x"),
+        ("catholic", "price_test_x"),
+    ],
+)
+def test_checkout_price_follows_origin_channel(origin, expected, remote):
+    practice = _practice()
+    practice.origin_channel = origin
+    practice.save()
+    assert stripe_billing.price_id_for_practice(practice) == expected
+    stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings?billing=success",
+        cancel_url="https://app.example/settings?billing=cancelled",
+        now=NOW,
+    )
+    request = next(
+        call[2]
+        for call in remote.calls
+        if call[0] == "POST" and call[1] == "/checkout/sessions"
+    )
+    assert request["line_items[0][price]"] == expected
+
+
+def test_runtime_price_check_expects_9000_public_and_6000_mcd(remote):
+    stripe_billing._validate_runtime_configuration(require_active_price=True)
+    assert [
+        path for method, path, *_ in remote.calls if path.startswith("/prices/")
+    ] == ["/prices/price_test_x", "/prices/price_test_mcd"]
+    remote.price["unit_amount"] = 8900
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="90/clinician/month"):
+        stripe_billing._validate_runtime_configuration()
+
+
+@pytest.mark.parametrize(
+    "price_id", ["price_test_x", "price_test_mcd", "price_test_legacy"]
+)
+def test_bound_subscription_on_legacy_price_stays_valid(price_id, remote):
+    practice = _practice()
+    subscription = _subscription(practice, price_id=price_id)
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.refresh_subscription_state(practice)
+    practice.refresh()
+    assert practice.subscription_status == "active"
+    assert practice.entitled(at=NOW)
+
+
+@pytest.mark.parametrize("price_id", ["price_test_x", "price_test_legacy"])
+def test_off_price_binding_alerts_without_revoking(price_id, remote):
+    from structlog.testing import capture_logs
+
+    practice = _practice()
+    subscription = _subscription(practice, price_id=price_id)
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    if price_id == "price_test_x":
+        remote.price["unit_amount"] = 8900  # production before the $90 repoint
+    remote.legacy_amount = 9000
+    with capture_logs() as logs, pytest.raises(stripe_billing.StripeStateInvalid) as e:
+        stripe_billing.refresh_subscription_state(practice)
+    assert not isinstance(e.value, stripe_billing.StripeSubscriptionContractInvalid)
+    assert price_id == "price_test_x" or any(
+        log["event"] == "Stripe bound price check failed; access unchanged"
+        for log in logs
+    )
+    practice.refresh()
+    assert practice.subscription_status == "active" and practice.entitled(at=NOW)
+
+
+def test_price_tier_mismatch_alerts_without_revoking(remote):
+    from structlog.testing import capture_logs
+
+    practice = _practice()
+    practice.origin_channel = "mcd"
+    practice.save()
+    subscription = _subscription(practice, price_id="price_test_x")
+    _bind_verified_public_subscription(practice, subscription)
+    remote.subscriptions[subscription["id"]] = subscription
+    with capture_logs() as logs:
+        stripe_billing.refresh_subscription_state(practice)
+    assert any(
+        log["event"] == "Stripe price tier mismatch; access unchanged" for log in logs
+    )
+    practice.refresh()
+    assert practice.subscription_status == "active" and practice.entitled(at=NOW)
+
+
+@pytest.mark.parametrize(
+    "bad", "missing equal livemode currency amount interval usage scheme".split()
+)
+def test_second_current_price_must_be_ready(bad, remote, monkeypatch):
+    if bad in {"missing", "equal"}:
+        monkeypatch.setattr(
+            stripe_config,
+            "STRIPE_MCD_PRICE_ID",
+            "" if bad == "missing" else stripe_config.STRIPE_PRICE_ID,
+        )
+        assert not stripe_config.stripe_billing_configured()
+    else:
+        original = remote.__call__
+
+        def request(method, path, data=None, **kwargs):
+            value = original(method, path, data, **kwargs)
+            if path.endswith("price_test_mcd"):
+                if bad == "livemode":
+                    value["livemode"] = True
+                elif bad == "currency":
+                    value["currency"] = "eur"
+                elif bad == "amount":
+                    value["unit_amount"] = 9000
+                elif bad in {"interval", "usage"}:
+                    value["recurring"][
+                        "interval" if bad == "interval" else "usage_type"
+                    ] = "bad"
+                elif bad == "scheme":
+                    value["billing_scheme"] = "tiered"
+            return value
+
+        monkeypatch.setattr(stripe_billing, "_request", request)
+    with pytest.raises(stripe_billing.StripeStateInvalid):
+        stripe_billing._validate_runtime_configuration(require_active_price=True)

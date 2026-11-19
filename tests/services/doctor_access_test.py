@@ -525,3 +525,22 @@ def test_pilot_grant_cannot_extend_owner_revoked_access_past_the_cutoff():
     after = resolve_doctor_access(doctor, at=cutoff + timedelta(seconds=1))
     assert after.allowed is False
     assert after.denial_reason == "practice_membership_inactive"
+
+
+def _pilot_allowed_with_status(status):
+    doctor = _doctor("f1-pilot")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+    practice, _member = _practice(doctor)
+    practice.subscription_status = status
+    practice.save()
+    _grant(doctor, practice=practice)
+    assert resolve_doctor_access(doctor).allowed is True
+
+
+def test_pilot_grant_holder_allowed_when_practice_status_pending_verification():
+    _pilot_allowed_with_status("pending_verification")
+
+
+def test_pilot_grant_holder_allowed_when_practice_status_invalid():
+    _pilot_allowed_with_status("invalid")

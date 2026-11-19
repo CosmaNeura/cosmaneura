@@ -14,6 +14,12 @@ variable "enable_public_phi_observability" {
   default     = false
 }
 
+variable "enable_session_prep_production_worker_heartbeat" {
+  description = "Enable the fixed PHI-free Session Prep worker heartbeat in production after monitor and failure/recovery routing acceptance."
+  type        = bool
+  default     = false
+}
+
 variable "public_phi_alert_email" {
   description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
   type        = string
@@ -124,7 +130,7 @@ variable "python_billing_public_vars" {
   type        = set(string)
   default = [
     "STRIPE_INTEGRATION_ENABLED", "STRIPE_BILLING_ENABLED", "STRIPE_ACCOUNT_ID",
-    "STRIPE_PRICE_ID", "STRIPE_API_VERSION", "STRIPE_LIVE_MODE",
+    "STRIPE_PRICE_ID", "STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS", "STRIPE_API_VERSION", "STRIPE_LIVE_MODE",
     "STRIPE_PORTAL_CONFIGURATION_ID",
   ]
 }

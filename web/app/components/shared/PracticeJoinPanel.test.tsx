@@ -325,7 +325,7 @@ function seatSummary(
     active_clinicians: 4,
     billed_seats: 4,
     seat_sync_pending: false,
-    unit_amount: 8900,
+    unit_amount: 9000,
     currency: "usd",
     interval: "month",
     ...overrides,
@@ -351,7 +351,7 @@ describe("PracticeJoinPanel seat summary", () => {
     render(<PracticeJoinPanel practice={subscribed()} showBillingActions />)
 
     expect(
-      screen.getByText("You are paying for 4 seats · $356/month"),
+      screen.getByText("You are paying for 4 seats · $360/month"),
     ).toBeInTheDocument()
     expect(screen.queryByText(/being updated/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/of 20/i)).not.toBeInTheDocument()
@@ -370,7 +370,7 @@ describe("PracticeJoinPanel seat summary", () => {
     )
 
     expect(
-      screen.getByText("Solo practice · 1 seat · $89/month"),
+      screen.getByText("Solo practice · 1 seat · $90/month"),
     ).toBeInTheDocument()
   })
 
@@ -384,7 +384,7 @@ describe("PracticeJoinPanel seat summary", () => {
 
     expect(
       screen.getByText(
-        "Your subscription covers 4 seats · $356/month after your trial",
+        "Your subscription covers 4 seats · $360/month after your trial",
       ),
     ).toBeInTheDocument()
   })
@@ -398,7 +398,7 @@ describe("PracticeJoinPanel seat summary", () => {
     )
 
     expect(
-      screen.getByText("You are paying for 3 seats · $267/month"),
+      screen.getByText("You are paying for 3 seats · $270/month"),
     ).toBeInTheDocument()
     expect(
       screen.getByText(
@@ -432,7 +432,7 @@ describe("PracticeJoinPanel seat summary", () => {
       )
 
       expect(
-        screen.getByText("Your subscription covers 4 seats · $356/month"),
+        screen.getByText("Your subscription covers 4 seats · $360/month"),
       ).toBeInTheDocument()
       expect(screen.queryByText(/you are paying/i)).not.toBeInTheDocument()
     },
@@ -461,7 +461,7 @@ describe("PracticeJoinPanel seat summary", () => {
     )
 
     expect(
-      screen.getByText("You are paying for 4 seats · $356/month"),
+      screen.getByText("You are paying for 4 seats · $360/month"),
     ).toBeInTheDocument()
   })
 

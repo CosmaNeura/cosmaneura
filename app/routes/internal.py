@@ -1548,7 +1548,7 @@ def _billing_seat_summary(practice: Practice) -> "BillingSeatSummary | None":
                 or (billed is not None and billed != active)
             )
         ),
-        unit_amount=stripe_billing.EXPECTED_PRICE_UNIT_AMOUNT,
+        unit_amount=stripe_billing.price_unit_amount_for_practice(practice),
         currency=stripe_billing.EXPECTED_PRICE_CURRENCY,
         interval=stripe_billing.EXPECTED_PRICE_INTERVAL,
     )

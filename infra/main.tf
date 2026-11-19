@@ -640,8 +640,9 @@ resource "azurerm_container_app" "app" {
         for_each = setunion(var.python_public_vars, var.python_billing_public_vars)
 
         content {
-          name  = env.key
-          value = data.external.secrets.result[env.key]
+          name = env.key
+          # These fields exist only in the enabled integration's op:// block.
+          value = contains(["STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"], env.key) ? lookup(data.external.secrets.result, env.key, "") : data.external.secrets.result[env.key]
         }
       }
 
@@ -1130,8 +1131,9 @@ resource "azurerm_container_app" "worker" {
         for_each = setunion(var.python_public_vars, var.python_billing_public_vars)
 
         content {
-          name  = env.key
-          value = data.external.secrets.result[env.key]
+          name = env.key
+          # These fields exist only in the enabled integration's op:// block.
+          value = contains(["STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"], env.key) ? lookup(data.external.secrets.result, env.key, "") : data.external.secrets.result[env.key]
         }
       }
 
@@ -1171,6 +1173,13 @@ resource "azurerm_container_app" "worker" {
           name  = env.key
           value = env.value
         }
+      }
+
+      # A worker-only, default-off switch for the fixed PHI-free production
+      # check-in. PYTHON_ENV=production remains a second mandatory runtime gate.
+      env {
+        name  = "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"
+        value = tostring(var.enable_session_prep_production_worker_heartbeat)
       }
 
       env {
@@ -1244,6 +1253,16 @@ resource "azurerm_container_app" "worker" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = length(local.session_prep_production_heartbeat_env_name_collisions) == 0
+      error_message = "The fixed Session Prep production heartbeat switch cannot also be supplied through generic worker environment-name sets"
+    }
+
+    precondition {
+      condition     = !var.enable_session_prep_production_worker_heartbeat || var.session_prep_production_rollout.enabled
+      error_message = "The Session Prep production worker heartbeat cannot be enabled while the global Session Prep rollout is disabled"
+    }
+
     precondition {
       condition     = length(local.scribe_native_worker_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic worker environment-name sets"
