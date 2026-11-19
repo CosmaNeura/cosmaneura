@@ -354,6 +354,9 @@ def transfer_practice_owner(
 
             old_member.role = "workforce"
             new_member.role = "owner"
+            # Ownership is restored; late-Checkout refusal must stop gating
+            # Checkout for this practice.
+            practice.owner_reassignment_needed_at = None
             audit = PracticeAccessAudit(
                 practice_id=practice.id,
                 action=ACTION,
@@ -363,6 +366,7 @@ def transfer_practice_owner(
                 evidence_sha256=digest,
                 effective_at=current,
             )
+            session.add(practice)
             session.add(audit)
             session.flush()
             applied_owners = session.exec(

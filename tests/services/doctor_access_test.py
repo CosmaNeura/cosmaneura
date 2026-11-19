@@ -544,3 +544,40 @@ def test_pilot_grant_holder_allowed_when_practice_status_pending_verification():
 
 def test_pilot_grant_holder_allowed_when_practice_status_invalid():
     _pilot_allowed_with_status("invalid")
+
+
+def test_invalid_practice_keeps_trial_and_pilot_access_for_remaining_clinicians():
+    """Unbound invalid (late Checkout refuse) must not lock out remaining seats."""
+
+    now = datetime.now(timezone.utc)
+    trial_doctor = _doctor("trial-remain")
+    practice, _ = _practice(trial_doctor)
+    practice.subscription_status = "invalid"
+    practice.trial_ends_at = now + timedelta(days=7)
+    practice.negotiated_baa_on_file = True
+    practice.negotiated_baa_effective_date = now - timedelta(minutes=1)
+    practice.negotiated_baa_reference = "Test BAA"
+    practice.save()
+
+    trial_decision = resolve_doctor_access(trial_doctor)
+    assert trial_decision.allowed is True
+    assert trial_decision.authorization_basis == "workforce_attestation"
+    assert trial_decision.entitlement_in_force is True
+
+    pilot_doctor = _doctor("pilot-remain")
+    pilot_doctor.onboarding_completed_at = now
+    pilot_doctor.save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=pilot_doctor.id,
+            role="workforce",
+            attested_at=now,
+            attestation_name="Pilot Clinician",
+        )
+    )
+    _grant(pilot_doctor, practice=practice)
+
+    pilot_decision = resolve_doctor_access(pilot_doctor)
+    assert pilot_decision.allowed is True
+    assert pilot_decision.authorization_basis == "pilot_grant"

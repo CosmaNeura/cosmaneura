@@ -2274,7 +2274,7 @@ def test_bound_subscription_status_outranks_future_local_trial(
 
 
 @pytest.mark.parametrize(
-    "subscription_status", ["invalid", "pending_verification", "future_state"]
+    "subscription_status", ["pending_verification", "future_state"]
 )
 def test_unbound_explicit_nonentitling_status_outranks_future_legacy_trial(
     subscription_status: str,
@@ -2284,6 +2284,16 @@ def test_unbound_explicit_nonentitling_status_outranks_future_legacy_trial(
     practice.trial_ends_at = NOW + timedelta(days=14)
 
     assert not practice.entitled(at=NOW)
+
+
+def test_unbound_invalid_preserves_future_legacy_trial():
+    """Refused late Checkout marks invalid without binding; keep local trial."""
+
+    practice = _practice()
+    practice.subscription_status = "invalid"
+    practice.trial_ends_at = NOW + timedelta(days=14)
+
+    assert practice.entitled(at=NOW)
 
 
 @pytest.mark.parametrize("subscription_status", ["trialing", "active"])
@@ -4932,6 +4942,7 @@ def _late_checkout_after_owner_self_delete_event(
 
 def test_checkout_completing_after_owner_self_delete_flags_and_never_binds(
     remote: FakeStripe,
+    captured_alerts,
 ):
     practice = _practice()
     event, subscription = _late_checkout_after_owner_self_delete_event(
@@ -4951,6 +4962,17 @@ def test_checkout_completing_after_owner_self_delete_flags_and_never_binds(
         practice_id=practice.id, action="stripe_checkout_follow_up_required"
     )
     assert flag and flag.document_reference == "stripe-subscription:sub_after_delete"
+    refund = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_refund_needed"
+    )
+    assert (
+        refund and refund.document_reference == "stripe-subscription:sub_after_delete"
+    )
+    from app.services import alerting
+
+    assert [call["type"] for call in captured_alerts] == [
+        alerting.LateCheckoutRefundNeeded
+    ]
 
 
 def test_late_checkout_after_owner_self_delete_refuses_with_active_non_owner_member(
@@ -4984,6 +5006,7 @@ def test_late_checkout_after_owner_self_delete_refuses_with_active_non_owner_mem
 
 def test_late_checkout_follow_up_audit_is_idempotent_for_same_subscription(
     remote: FakeStripe,
+    captured_alerts,
 ):
     practice = _practice()
     first, subscription = _late_checkout_after_owner_self_delete_event(
@@ -5010,7 +5033,7 @@ def test_late_checkout_follow_up_audit_is_idempotent_for_same_subscription(
     stripe_billing.apply_stripe_event(second)
 
     with get_session() as session:
-        rows = session.exec(
+        follow_ups = session.exec(
             select(PracticeAccessAudit).where(
                 PracticeAccessAudit.practice_id == practice.id,
                 PracticeAccessAudit.action == "stripe_checkout_follow_up_required",
@@ -5018,10 +5041,118 @@ def test_late_checkout_follow_up_audit_is_idempotent_for_same_subscription(
                 == "stripe-subscription:sub_after_delete_idem",
             )
         ).all()
-    assert len(rows) == 1
+        refunds = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_refund_needed",
+                PracticeAccessAudit.document_reference
+                == "stripe-subscription:sub_after_delete_idem",
+            )
+        ).all()
+    assert len(follow_ups) == 1
+    assert len(refunds) == 1
     practice.refresh()
     assert practice.subscription_status == "invalid"
     assert practice.stripe_subscription_id is None
+    from app.services import alerting
+
+    assert [call["type"] for call in captured_alerts] == [
+        alerting.LateCheckoutRefundNeeded
+    ]
+
+
+def test_stripe_checkout_follow_up_unique_constraint_refuses_concurrent_duplicates():
+    """Unique index is the durable race fence for follow-up dedupe."""
+
+    practice = _practice()
+    document_reference = "stripe-subscription:sub_follow_up_race"
+    first = PracticeAccessAudit(
+        practice_id=practice.id,
+        action="stripe_checkout_follow_up_required",
+        operator_ref="system:stripe-billing",
+        reason="Stripe subscription arrived after owner self-delete",
+        effective_at=NOW,
+        document_reference=document_reference,
+    ).save()
+    assert first.id is not None
+
+    with get_session() as session:
+        session.add(
+            PracticeAccessAudit(
+                practice_id=practice.id,
+                action="stripe_checkout_follow_up_required",
+                operator_ref="system:stripe-billing",
+                reason="Stripe subscription arrived after owner self-delete",
+                effective_at=NOW,
+                document_reference=document_reference,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+    with get_session() as session:
+        rows = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_checkout_follow_up_required",
+                PracticeAccessAudit.document_reference == document_reference,
+            )
+        ).all()
+    assert len(rows) == 1
+
+
+def test_late_checkout_follow_up_insert_survives_unique_race(
+    remote: FakeStripe,
+    captured_alerts,
+):
+    """Select-then-insert still commits invalid when the unique index wins."""
+
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_race",
+        subscription_id="sub_after_delete_race",
+        event_id="evt_after_delete_race",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    document_reference = f"stripe-subscription:{subscription['id']}"
+    PracticeAccessAudit(
+        practice_id=practice.id,
+        action="stripe_checkout_follow_up_required",
+        operator_ref="system:preseed",
+        reason="preseeded concurrent winner",
+        effective_at=NOW,
+        document_reference=document_reference,
+    ).save()
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
+    with get_session() as session:
+        follow_ups = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_checkout_follow_up_required",
+                PracticeAccessAudit.document_reference == document_reference,
+            )
+        ).all()
+        refunds = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_refund_needed",
+                PracticeAccessAudit.document_reference == document_reference,
+            )
+        ).all()
+    assert len(follow_ups) == 1
+    assert len(refunds) == 1
+    from app.services import alerting
+
+    assert [call["type"] for call in captured_alerts] == [
+        alerting.LateCheckoutRefundNeeded
+    ]
 
 
 def test_payment_failed_event_alone_does_not_write_pending_verification(remote):

@@ -327,8 +327,15 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         status = self.subscription_status
         if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
             return False
-        if status in {"pending_verification", "invalid"}:
+        if status == "pending_verification":
             return False
+        if status == "invalid":
+            # Bound invalid: access revoked. Unbound invalid (refused late
+            # Checkout after owner self-delete) must not strip a still-open
+            # local trial for remaining clinicians; fall through as unbound.
+            if self.has_authoritative_stripe_subscription_binding():
+                return False
+            status = None
         if (
             self.acquisition_source
             == PracticeAcquisitionSource.public_self_service.value

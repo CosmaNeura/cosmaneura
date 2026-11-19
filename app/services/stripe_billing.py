@@ -1326,6 +1326,8 @@ def _apply_authoritative_subscription(
                 # The sole owner self-deleted; flag, never cancel or bind silently.
                 # Refuse unconditionally even when other active members remain —
                 # seat count alone must not bind a post-delete Checkout.
+                from app.services import alerting
+
                 from app.models.practice_access_audit import (
                     PracticeAccessAction as Action,
                 )
@@ -1334,31 +1336,58 @@ def _apply_authoritative_subscription(
                 )
 
                 document_reference = f"stripe-subscription:{subscription['id']}"
-                existing_follow_up = session.exec(
-                    select(PracticeAccessAudit).where(
-                        PracticeAccessAudit.practice_id == row.id,
-                        PracticeAccessAudit.action
-                        == Action.stripe_checkout_follow_up_required.value,
-                        PracticeAccessAudit.document_reference == document_reference,
-                    )
-                ).first()
-                if existing_follow_up is None:
-                    session.add(
-                        PracticeAccessAudit(
-                            practice_id=row.id,
-                            action=Action.stripe_checkout_follow_up_required.value,
-                            operator_ref="system:stripe-billing",
-                            reason=(
-                                "Stripe subscription arrived after owner self-delete"
-                            ),
-                            effective_at=datetime.now(timezone.utc),
-                            document_reference=document_reference,
+                practice_ref = provider_log_ref(f"practice:{practice.id}")
+                subscription_ref = provider_log_ref(subscription["id"])
+                effective_at = datetime.now(timezone.utc)
+
+                def _record_late_checkout_audit(action: Action, reason: str) -> bool:
+                    """Insert once; unique index wins concurrent races."""
+
+                    existing = session.exec(
+                        select(PracticeAccessAudit).where(
+                            PracticeAccessAudit.practice_id == row.id,
+                            PracticeAccessAudit.action == action.value,
+                            PracticeAccessAudit.document_reference
+                            == document_reference,
                         )
+                    ).first()
+                    if existing is not None:
+                        return False
+                    try:
+                        with session.begin_nested():
+                            session.add(
+                                PracticeAccessAudit(
+                                    practice_id=row.id,
+                                    action=action.value,
+                                    operator_ref="system:stripe-billing",
+                                    reason=reason,
+                                    effective_at=effective_at,
+                                    document_reference=document_reference,
+                                )
+                            )
+                            session.flush()
+                    except IntegrityError:
+                        return False
+                    return True
+
+                _record_late_checkout_audit(
+                    Action.stripe_checkout_follow_up_required,
+                    "Stripe subscription arrived after owner self-delete",
+                )
+                wrote_refund = _record_late_checkout_audit(
+                    Action.stripe_refund_needed,
+                    ("Late Checkout charged after owner self-delete; refund needed"),
+                )
+                if wrote_refund:
+                    alerting.alert(
+                        alerting.LateCheckoutRefundNeeded,
+                        practice_ref=practice_ref,
+                        subscription_ref=subscription_ref,
                     )
                 log.error(
                     "Stripe subscription arrived after owner self-delete",
-                    practice_ref=provider_log_ref(f"practice:{practice.id}"),
-                    subscription_ref=provider_log_ref(subscription["id"]),
+                    practice_ref=practice_ref,
+                    subscription_ref=subscription_ref,
                 )
                 contract_error = StripeStateInvalid(
                     "Stripe subscription arrived after owner self-delete"

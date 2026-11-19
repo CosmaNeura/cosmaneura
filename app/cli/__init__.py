@@ -730,6 +730,38 @@ def close_provider_account_command(
     )
 
 
+@app.command("count-owner-reassignment-needed")
+def count_owner_reassignment_needed() -> None:
+    """Read-only count of practices with owner_reassignment_needed_at set.
+
+    John runs this before flipping the production self-delete latch. Agents
+    never point it at production or any real patient database.
+    """
+
+    from app.models.practice import Practice
+    from sqlmodel import col, func, select
+
+    with global_session():
+        from activemodel.session_manager import get_session
+
+        with get_session() as session:
+            count = session.exec(
+                select(func.count())
+                .select_from(Practice)
+                .where(col(Practice.owner_reassignment_needed_at).is_not(None))
+            ).one()
+    typer.echo(
+        json.dumps(
+            {
+                "owner_reassignment_needed_count": int(count),
+                "read_only": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
 @app.command("authority-ingestion-status")
 def authority_ingestion_status(
     older_than_minutes: int = typer.Option(15, min=1),

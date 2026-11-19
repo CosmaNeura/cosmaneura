@@ -52,7 +52,7 @@ def test_self_delete_migration_owner_reassignment_column_survives_roundtrip():
     from sqlalchemy.orm import close_all_sessions
 
     config = Config("alembic.ini")
-    assert _version() == SELF_DELETE_REVISION
+    # Later additive rungs may sit above this revision; restore to head after.
     assert "owner_reassignment_needed_at" in _cols("practice")
     assert "account_deletion_status" in _cols("doctor")
     try:
@@ -64,6 +64,6 @@ def test_self_delete_migration_owner_reassignment_column_survives_roundtrip():
     finally:
         close_all_sessions()
         get_engine().dispose()
-        command.upgrade(config, SELF_DELETE_REVISION)
-    assert _version() == SELF_DELETE_REVISION
+        command.upgrade(config, "head")
+    assert "owner_reassignment_needed_at" in _cols("practice")
     assert "account_deletion_status" in _cols("doctor")

@@ -58,6 +58,10 @@ class RecallApiUnreachable(DispatchAlert):
     "The synthetic monitor could not authenticate against the Recall API."
 
 
+class LateCheckoutRefundNeeded(DispatchAlert):
+    "Stripe charged a Checkout after sole-owner self-delete; refund owner must act."
+
+
 def alert(alert_type: type[DispatchAlert], **context: Any) -> str | None:
     """Log safe context and capture a type-identifiable Sentry event."""
     log.error(
