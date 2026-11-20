@@ -723,7 +723,7 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     # values. Founder-user, readiness/traffic, runtime preservation and job
     # cleanup guards remain; hosted selectors require canonical candidate
     # reverification. This pin does not remove or loosen any gate.
-    assert hashlib.sha256(deploy).hexdigest() == "057cfae3f760959e4784b386c11664d37df9f9c98bb2eafa2e52bac98498d5a8"
+    assert hashlib.sha256(deploy).hexdigest() == "369e507cb97a75f1a060110c3a1ef1ef9807098dedf799e877aa2aa2373dced5"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
     assert "ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)" in deploy.decode()
     assert (

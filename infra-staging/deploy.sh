@@ -335,12 +335,25 @@ CONFIGURATION_STATUS=0
 CONFIGURATION_STDERR_DIR=$(mktemp -d)
 chmod 700 "$CONFIGURATION_STDERR_DIR"
 CONFIGURATION_STDERR_FILE="$CONFIGURATION_STDERR_DIR/stderr"
+# Preserve any pre-existing EXIT trap (tests and later deployer handlers).
+CONFIGURATION_STDERR_PREV_TRAP=$(trap -p EXIT || true)
 trap '[[ -n "${CONFIGURATION_STDERR_DIR:-}" ]] && rm -rf -- "$CONFIGURATION_STDERR_DIR"' EXIT
 ENV_JSON=$(
 	cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend \
 		2>"$CONFIGURATION_STDERR_FILE"
 ) || CONFIGURATION_STATUS=$?
+# Drop resolver capabilities before any later child, including the classifier.
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET RECALL_API_KEY_INPUT
+_restore_configuration_stderr_trap() {
+	rm -rf -- "${CONFIGURATION_STDERR_DIR:-}"
+	unset CONFIGURATION_STDERR_DIR CONFIGURATION_STDERR_FILE
+	if [[ -n "${CONFIGURATION_STDERR_PREV_TRAP:-}" ]]; then
+		eval "$CONFIGURATION_STDERR_PREV_TRAP"
+	else
+		trap - EXIT
+	fi
+	unset CONFIGURATION_STDERR_PREV_TRAP
+}
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	CONFIGURATION_REASON=$(
 		"$PYTHON_BIN" -I -S -B \
@@ -348,14 +361,14 @@ if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 			--env-file "$REPOSITORY_ROOT/.env.staging.backend" \
 			--stderr-file "$CONFIGURATION_STDERR_FILE"
 	) || CONFIGURATION_REASON="reason=unclassified"
-	rm -rf -- "$CONFIGURATION_STDERR_DIR"
-	unset CONFIGURATION_STDERR_DIR CONFIGURATION_STDERR_FILE
+	_restore_configuration_stderr_trap
+	unset -f _restore_configuration_stderr_trap
 	echo "Failed to load staging deployment configuration: ${CONFIGURATION_REASON}"
 	unset CONFIGURATION_REASON
 	exit 1
 fi
-rm -rf -- "$CONFIGURATION_STDERR_DIR"
-unset CONFIGURATION_STDERR_DIR CONFIGURATION_STDERR_FILE
+_restore_configuration_stderr_trap
+unset -f _restore_configuration_stderr_trap
 if ! printf '%s' "$ENV_JSON" |
 	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/core_cab_runtime_config.py" --stdin; then
 	echo "Core CAB runtime configuration is not deployable."
