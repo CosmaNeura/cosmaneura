@@ -274,6 +274,18 @@ def test_apply_swaps_only_roles_and_records_one_bound_metadata_receipt(case):
     assert f.old.email not in audit.reason and f.new.email not in audit.reason
 
 
+def test_owner_reassignment_needed_at_clears_on_ownership_transfer(case):
+    f = case
+    change(f, f.practice, owner_reassignment_needed_at=NOW)
+    assert f.practice.owner_reassignment_needed_at == NOW
+    plan = call(f)
+    applied = call(f, apply=True, confirm_plan_sha256=plan.plan_sha256)
+    f.session.refresh(f.practice)
+    assert applied.already_applied is False
+    assert f.practice.owner_reassignment_needed_at is None
+    assert f.previous.role == "workforce" and f.target.role == "owner"
+
+
 def test_lost_reply_retry_reuses_the_original_receipt(case):
     f = case
     plan = call(f)

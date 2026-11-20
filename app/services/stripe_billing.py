@@ -1353,51 +1353,117 @@ def _apply_authoritative_subscription(
                     # invariant, without leaving a stale active entitlement.
                     contract_error = exc
 
+            # Sticky refuse: owner_reassignment_needed_at OR a prior refuse
+            # audit for this subscription (survives ownership transfer).
             if (
-                row.owner_reassignment_needed_at is not None
-                and not same_subscription
+                not same_subscription
                 and mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
             ):
-                # The sole owner self-deleted; flag, never cancel or bind silently.
-                # Refuse unconditionally even when other active members remain —
-                # seat count alone must not bind a post-delete Checkout.
                 from app.models.practice_access_audit import (
-                    PracticeAccessAction as Action,
-                )
-                from app.models.practice_access_audit import (
+                    PracticeAccessAction,
                     PracticeAccessAudit,
                 )
 
                 document_reference = f"stripe-subscription:{subscription['id']}"
-                existing_follow_up = session.exec(
-                    select(PracticeAccessAudit).where(
-                        PracticeAccessAudit.practice_id == row.id,
-                        PracticeAccessAudit.action
-                        == Action.stripe_checkout_follow_up_required.value,
-                        PracticeAccessAudit.document_reference == document_reference,
-                    )
-                ).first()
-                if existing_follow_up is None:
-                    session.add(
-                        PracticeAccessAudit(
-                            practice_id=row.id,
-                            action=Action.stripe_checkout_follow_up_required.value,
-                            operator_ref="system:stripe-billing",
-                            reason=(
-                                "Stripe subscription arrived after owner self-delete"
+                prior_late_checkout_refusal = None
+                if row.owner_reassignment_needed_at is None:
+                    prior_late_checkout_refusal = session.exec(
+                        select(PracticeAccessAudit).where(
+                            PracticeAccessAudit.practice_id == row.id,
+                            col(PracticeAccessAudit.action).in_(
+                                [
+                                    PracticeAccessAction.stripe_checkout_follow_up_required.value,
+                                    PracticeAccessAction.stripe_refund_needed.value,
+                                ]
                             ),
-                            effective_at=datetime.now(timezone.utc),
-                            document_reference=document_reference,
+                            PracticeAccessAudit.document_reference
+                            == document_reference,
                         )
+                    ).first()
+                if (
+                    row.owner_reassignment_needed_at is not None
+                    or prior_late_checkout_refusal is not None
+                ):
+                    # The sole owner self-deleted; flag, never cancel or bind
+                    # silently. Refuse even when other active members remain —
+                    # seat count alone must not bind a post-delete Checkout.
+                    from app.services import alerting
+
+                    practice_ref = provider_log_ref(f"practice:{practice.id}")
+                    subscription_ref = provider_log_ref(subscription["id"])
+                    effective_at = datetime.now(timezone.utc)
+
+                    def _record_late_checkout_audit(
+                        action: PracticeAccessAction, reason: str
+                    ) -> bool:
+                        """Insert once; unique index wins concurrent races."""
+
+                        existing = session.exec(
+                            select(PracticeAccessAudit).where(
+                                PracticeAccessAudit.practice_id == row.id,
+                                PracticeAccessAudit.action == action.value,
+                                PracticeAccessAudit.document_reference
+                                == document_reference,
+                            )
+                        ).first()
+                        if existing is not None:
+                            return False
+                        try:
+                            with session.begin_nested():
+                                session.add(
+                                    PracticeAccessAudit(
+                                        practice_id=row.id,
+                                        action=action.value,
+                                        operator_ref="system:stripe-billing",
+                                        reason=reason,
+                                        effective_at=effective_at,
+                                        document_reference=document_reference,
+                                    )
+                                )
+                                session.flush()
+                        except IntegrityError:
+                            # Unique index won; confirm the row exists before
+                            # treating the race as a successful dedupe.
+                            raced = session.exec(
+                                select(PracticeAccessAudit).where(
+                                    PracticeAccessAudit.practice_id == row.id,
+                                    PracticeAccessAudit.action == action.value,
+                                    PracticeAccessAudit.document_reference
+                                    == document_reference,
+                                )
+                            ).first()
+                            if raced is None:
+                                raise
+                            return False
+                        return True
+
+                    _record_late_checkout_audit(
+                        PracticeAccessAction.stripe_checkout_follow_up_required,
+                        "Stripe subscription arrived after owner self-delete",
                     )
-                log.error(
-                    "Stripe subscription arrived after owner self-delete",
-                    practice_ref=provider_log_ref(f"practice:{practice.id}"),
-                    subscription_ref=provider_log_ref(subscription["id"]),
-                )
-                contract_error = StripeStateInvalid(
-                    "Stripe subscription arrived after owner self-delete"
-                )
+                    wrote_refund = _record_late_checkout_audit(
+                        PracticeAccessAction.stripe_refund_needed,
+                        (
+                            "Late Checkout charged after owner self-delete; "
+                            "refund needed"
+                        ),
+                    )
+                    if wrote_refund:
+                        alerting.alert(
+                            alerting.LateCheckoutRefundNeeded,
+                            practice_ref=practice_ref,
+                            subscription_ref=subscription_ref,
+                        )
+                    if row.late_checkout_refused_at is None:
+                        row.late_checkout_refused_at = effective_at
+                    log.error(
+                        "Stripe subscription arrived after owner self-delete",
+                        practice_ref=practice_ref,
+                        subscription_ref=subscription_ref,
+                    )
+                    contract_error = StripeStateInvalid(
+                        "Stripe subscription arrived after owner self-delete"
+                    )
             if contract_error is not None:
                 row.subscription_status = "invalid"
                 row.stripe_bound_unit_amount = None

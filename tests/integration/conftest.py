@@ -25,6 +25,9 @@ _DATABASE_ONLY_FILES = {
     ).resolve(),
     (Path(__file__).resolve().parent / "authority_closure_lock_test.py").resolve(),
     (Path(__file__).resolve().parent / "stripe_billing_state_race_test.py").resolve(),
+    (
+        Path(__file__).resolve().parent / "stripe_checkout_follow_up_race_test.py"
+    ).resolve(),
     (Path(__file__).resolve().parent / "practice_seat_lock_race_test.py").resolve(),
     (Path(__file__).resolve().parent / "practice_invitation_race_test.py").resolve(),
     (Path(__file__).resolve().parent / "practice_member_access_race_test.py").resolve(),
