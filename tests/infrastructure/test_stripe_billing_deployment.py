@@ -1,5 +1,6 @@
 """Deployment ownership for Stripe's acquisition and maintenance capabilities."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -223,7 +224,7 @@ def test_staging_deploy_requires_acquisition_price_ids_only_when_billing_enabled
             ["/bin/bash", "-c", block],
             env={
                 "PATH": "/bin:/usr/bin",
-                "ENV_JSON": __import__("json").dumps(env_json),
+                "ENV_JSON": json.dumps(env_json),
                 "STRIPE_INTEGRATION_ENABLED": env_json["STRIPE_INTEGRATION_ENABLED"],
                 "STRIPE_BILLING_ENABLED": env_json["STRIPE_BILLING_ENABLED"],
             },
@@ -236,24 +237,50 @@ def test_staging_deploy_requires_acquisition_price_ids_only_when_billing_enabled
     off = run(base)
     assert off.returncode == 0, off.stdout + off.stderr
 
-    # Billing on: missing or empty still refuses.
-    for broken in (
-        {**base, "STRIPE_BILLING_ENABLED": "true"},
+    missing = run({**base, "STRIPE_BILLING_ENABLED": "true"})
+    assert missing.returncode != 0
+    assert "STRIPE_MCD_PRICE_ID is required when Stripe billing is enabled." in (
+        missing.stdout + missing.stderr
+    )
+
+    empty_mcd = run(
         {
             **base,
             "STRIPE_BILLING_ENABLED": "true",
             "STRIPE_MCD_PRICE_ID": "",
             "STRIPE_LEGACY_PRICE_IDS": "price_legacy_synthetic",
-        },
+        }
+    )
+    assert empty_mcd.returncode != 0
+    assert "STRIPE_MCD_PRICE_ID is required when Stripe billing is enabled." in (
+        empty_mcd.stdout + empty_mcd.stderr
+    )
+
+    empty_legacy = run(
         {
             **base,
             "STRIPE_BILLING_ENABLED": "true",
             "STRIPE_MCD_PRICE_ID": "price_mcd_synthetic",
             "STRIPE_LEGACY_PRICE_IDS": "",
-        },
-    ):
-        refused = run(broken)
-        assert refused.returncode != 0
+        }
+    )
+    assert empty_legacy.returncode != 0
+    assert "STRIPE_LEGACY_PRICE_IDS is required when Stripe billing is enabled." in (
+        empty_legacy.stdout + empty_legacy.stderr
+    )
+
+    bad_shape = run(
+        {
+            **base,
+            "STRIPE_BILLING_ENABLED": "true",
+            "STRIPE_MCD_PRICE_ID": "not_a_price_id",
+            "STRIPE_LEGACY_PRICE_IDS": "price_legacy_synthetic",
+        }
+    )
+    assert bad_shape.returncode != 0
+    assert "STRIPE_MCD_PRICE_ID has an invalid shape." in (
+        bad_shape.stdout + bad_shape.stderr
+    )
 
     ok = run(
         {
@@ -278,9 +305,7 @@ def test_production_env_and_deploy_paths_are_untouched_by_staging_billing_gate()
     # Production still injects both inside the integration block with no billing gate.
     assert "STRIPE_BILLING_ENABLED" not in integration
     production_deploy = _read("infra/deploy.sh")
-    assert "STRIPE_MCD_PRICE_ID is required when Stripe billing is enabled" not in (
-        production_deploy
-    )
+    assert "is required when Stripe billing is enabled" not in production_deploy
 
 
 def test_staging_deploy_owns_and_revokes_exact_stripe_scope() -> None:
