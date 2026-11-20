@@ -1620,6 +1620,40 @@ def test_exempt_practice_reports_seats_without_billing(
     assert summary["seat_sync_pending"] is False
 
 
+@pytest.mark.parametrize("bound_amount", [None, 8900, 9000])
+def test_seat_summary_shows_bound_amount_never_tier_guess(
+    bare_authenticated_client: TestClient, bound_amount: int | None
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    _bind_subscription(practice, subscription_status="active", quantity=1)
+    practice.stripe_bound_unit_amount = bound_amount
+    practice.save()
+
+    summary = _seat_summary(bare_authenticated_client)
+    assert summary is not None
+    assert summary["billed_seats"] == 1
+    assert summary["unit_amount"] == bound_amount
+
+    practice.subscription_status = "canceled"
+    practice.save()
+    summary = _seat_summary(bare_authenticated_client)
+    assert summary is not None
+    assert summary["unit_amount"] == stripe_billing.PUBLIC_PRICE_UNIT_AMOUNT
+
+    # Refused Core projections must not leak a previously stored bound amount
+    # (or invent the tier price). billed_seats already hides the UI cost.
+    for refused_status in ("invalid", "pending_verification"):
+        practice.subscription_status = refused_status
+        practice.stripe_bound_unit_amount = bound_amount if bound_amount else 9000
+        practice.save()
+        summary = _seat_summary(bare_authenticated_client)
+        assert summary is not None
+        assert summary["billed_seats"] is None
+        assert summary["unit_amount"] is None
+
+
 def test_invalid_seat_ledger_hides_summary_and_alerts_operators(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

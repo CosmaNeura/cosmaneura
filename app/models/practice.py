@@ -230,6 +230,8 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    stripe_bound_unit_amount: int | None = None
+    "Per-seat minor-unit amount Core last verified for the bound Stripe price."
     stripe_paid_seat_high_water: int | None = None
     "Highest seat count Stripe held in the recorded billing period."
     # A seat removal gives no credit, so re-adding up to this count within the
@@ -256,6 +258,12 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     "Set when self-delete leaves the practice without an owner"
+
+    late_checkout_refused_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Set when late Checkout was refused after owner self-delete; preserves unbound local trial without relying on owner_reassignment_needed_at"
 
     def negotiated_baa_in_force(self, *, at: datetime | None = None) -> bool:
         """Whether the negotiated instrument itself is effective now."""
@@ -328,7 +336,17 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
             return False
         if status in {"pending_verification", "invalid"}:
-            return False
+            # Only a durable late-Checkout refusal marker may preserve an
+            # unbound local trial. Other invalid paths (seat limit, contract)
+            # stay revoked even when unbound.
+            if (
+                status == "invalid"
+                and self.late_checkout_refused_at is not None
+                and not self.has_authoritative_stripe_subscription_binding()
+            ):
+                status = None
+            else:
+                return False
         if (
             self.acquisition_source
             == PracticeAcquisitionSource.public_self_service.value

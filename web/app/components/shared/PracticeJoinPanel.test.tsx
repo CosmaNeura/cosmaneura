@@ -438,6 +438,38 @@ describe("PracticeJoinPanel seat summary", () => {
     },
   )
 
+  it.each([
+    [{}, "You are paying for 4 seats"],
+    [{ subscription_status: "trialing" }, "Your subscription covers 4 seats"],
+  ])(
+    "shows seats without a guessed cost while the bound price is unknown",
+    (overrides, text) => {
+      render(
+        <PracticeJoinPanel
+          practice={subscribed({ unit_amount: null }, overrides)}
+          showBillingActions
+        />,
+      )
+
+      expect(screen.getByText(text)).toBeInTheDocument()
+      expect(screen.queryByText(/\$/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/after your trial/i)).not.toBeInTheDocument()
+    },
+  )
+
+  it("shows an existing subscriber the amount of their bound price", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({ unit_amount: 8900 })}
+        showBillingActions
+      />,
+    )
+
+    expect(
+      screen.getByText("You are paying for 4 seats · $356/month"),
+    ).toBeInTheDocument()
+  })
+
   it("renders nothing when there is neither a billed count nor a pending update", () => {
     render(
       <PracticeJoinPanel

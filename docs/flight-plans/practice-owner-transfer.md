@@ -49,12 +49,13 @@ reason code. Apply refreshes these facts under the practice-seat lock, followed
 by both Doctors and memberships in stable order. A changed plan is refused.
 
 One transaction changes the old owner's role to workforce, promotes the new
-owner and appends a `PracticeAccessAudit` record. Its existing string action
-column permits `practice_ownership_transferred` without a migration. Evidence
-contains stable identifiers and references plus the plan hash, never email,
-name, clinical content or legal text. No account/membership is deleted, moved,
-revoked or created. Seats, attestations, BAA history, billing, grants and provider
-or clinical ownership are retained.
+owner, clears `owner_reassignment_needed_at` when set, and appends a
+`PracticeAccessAudit` record. Its existing string action column permits
+`practice_ownership_transferred` without a migration. Evidence contains stable
+identifiers and references plus the plan hash, never email, name, clinical
+content or legal text. No account/membership is deleted, moved, revoked or
+created. Seats, attestations, BAA history, billing, grants and provider or
+clinical ownership are retained.
 
 Replay uses the exact practice and operation reference under the same lock.
 Matching audit/request bindings, hash and resulting roles return the existing

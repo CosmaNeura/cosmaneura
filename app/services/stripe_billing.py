@@ -42,11 +42,15 @@ from app.models.practice import (
 )
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 STRIPE_API = "https://api.stripe.com/v1"
+
+# Bound practice-row locks in `_apply_authoritative_subscription`. Stripe I/O
+# stays outside the transaction; this only caps wait for the FOR UPDATE itself.
+_STATE_APPLY_LOCK_TIMEOUT = "2000ms"
 
 # Explicit timeouts, split the way `recall.py` and `zoom_auth.py` do it: a hang
 # inside a Celery prefork slot looks alive while processing nothing, so a stuck
@@ -171,6 +175,8 @@ KNOWN_SUBSCRIPTION_STATUSES = {
     "paused",
 }
 TERMINAL_SUBSCRIPTION_STATUSES = {"canceled", "incomplete_expired"}
+# Core-only projections: keep the binding, never keep or show a bound amount.
+REFUSED_BOUND_AMOUNT_STATUSES = frozenset({"invalid", "pending_verification"})
 
 
 class StripeNotConfigured(Exception):
@@ -455,6 +461,45 @@ def price_unit_amount_for_practice(practice: Practice) -> int:
     )
 
 
+def _bound_price_unit_amount(price_id: object) -> int:
+    """Per-seat amount an accepted bound price must carry in Stripe."""
+
+    if price_id == stripe_config.STRIPE_PRICE_ID:
+        return PUBLIC_PRICE_UNIT_AMOUNT
+    if price_id == stripe_config.STRIPE_MCD_PRICE_ID:
+        return MCD_PRICE_UNIT_AMOUNT
+    return LEGACY_PRICE_UNIT_AMOUNT
+
+
+def _status_keeps_bound_unit_amount(status: object) -> bool:
+    """Whether a subscription status may store or expose a bound unit amount.
+
+    Used for both the bind write guard (raw Stripe status) and seat-summary
+    display (mirrored status) so the two cannot disagree.
+    """
+
+    return (
+        status not in TERMINAL_SUBSCRIPTION_STATUSES
+        and status not in REFUSED_BOUND_AMOUNT_STATUSES
+    )
+
+
+def seat_summary_unit_amount(practice: Practice) -> int | None:
+    """Per-seat amount to display, from persisted state only (no Stripe call).
+
+    Without a live subscription this is the tier Checkout would use. With one,
+    it is the amount Core last verified for the bound price; unknown is hidden,
+    never guessed. Refused Core projections (invalid / pending_verification)
+    never surface a stale bound amount.
+    """
+
+    if not has_nonterminal_subscription(practice):
+        return price_unit_amount_for_practice(practice)
+    if not _status_keeps_bound_unit_amount(practice.subscription_status):
+        return None
+    return practice.stripe_bound_unit_amount
+
+
 def _validate_runtime_price(*, require_active: bool) -> None:
     public = stripe_config.STRIPE_PRICE_ID
     mcd = stripe_config.STRIPE_MCD_PRICE_ID
@@ -725,13 +770,7 @@ def _retrieve_subscription(
     except StripeStateInvalid as exc:
         raise StripeSubscriptionContractInvalid(subscription, exc) from exc
     price_id = price.get("id") if isinstance(price, dict) else price
-    expected_amount = (
-        PUBLIC_PRICE_UNIT_AMOUNT
-        if price_id == stripe_config.STRIPE_PRICE_ID
-        else MCD_PRICE_UNIT_AMOUNT
-        if price_id == stripe_config.STRIPE_MCD_PRICE_ID
-        else LEGACY_PRICE_UNIT_AMOUNT
-    )
+    expected_amount = _bound_price_unit_amount(price_id)
     try:  # An accepted price ID with a drifted price object alerts; never revokes.
         _validate_price(cast(str, price_id), expected_amount, require_active=False)
     except StripeStateInvalid:
@@ -938,6 +977,9 @@ def _apply_authoritative_subscription(
                 ).one_or_none()
                 if receipt is not None:
                     return None, False
+            session.execute(
+                text(f"SET LOCAL lock_timeout = '{_STATE_APPLY_LOCK_TIMEOUT}'")
+            )
             snapshot = session.exec(
                 select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
@@ -1014,6 +1056,9 @@ def _apply_authoritative_subscription(
             return invalid.subscription, applied
 
         with _isolated_state_session() as session:
+            session.execute(
+                text(f"SET LOCAL lock_timeout = '{_STATE_APPLY_LOCK_TIMEOUT}'")
+            )
             row = session.exec(
                 select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
@@ -1318,53 +1363,129 @@ def _apply_authoritative_subscription(
                     # invariant, without leaving a stale active entitlement.
                     contract_error = exc
 
+            # Sticky refuse: owner_reassignment_needed_at OR a prior refuse
+            # audit for this subscription (survives ownership transfer).
             if (
-                row.owner_reassignment_needed_at is not None
-                and not same_subscription
+                not same_subscription
                 and mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
             ):
-                # The sole owner self-deleted; flag, never cancel or bind silently.
-                # Refuse unconditionally even when other active members remain —
-                # seat count alone must not bind a post-delete Checkout.
                 from app.models.practice_access_audit import (
-                    PracticeAccessAction as Action,
-                )
-                from app.models.practice_access_audit import (
+                    PracticeAccessAction,
                     PracticeAccessAudit,
                 )
 
                 document_reference = f"stripe-subscription:{subscription['id']}"
-                existing_follow_up = session.exec(
-                    select(PracticeAccessAudit).where(
-                        PracticeAccessAudit.practice_id == row.id,
-                        PracticeAccessAudit.action
-                        == Action.stripe_checkout_follow_up_required.value,
-                        PracticeAccessAudit.document_reference == document_reference,
-                    )
-                ).first()
-                if existing_follow_up is None:
-                    session.add(
-                        PracticeAccessAudit(
-                            practice_id=row.id,
-                            action=Action.stripe_checkout_follow_up_required.value,
-                            operator_ref="system:stripe-billing",
-                            reason=(
-                                "Stripe subscription arrived after owner self-delete"
+                prior_late_checkout_refusal = None
+                if row.owner_reassignment_needed_at is None:
+                    prior_late_checkout_refusal = session.exec(
+                        select(PracticeAccessAudit).where(
+                            PracticeAccessAudit.practice_id == row.id,
+                            col(PracticeAccessAudit.action).in_(
+                                [
+                                    PracticeAccessAction.stripe_checkout_follow_up_required.value,
+                                    PracticeAccessAction.stripe_refund_needed.value,
+                                ]
                             ),
-                            effective_at=datetime.now(timezone.utc),
-                            document_reference=document_reference,
+                            PracticeAccessAudit.document_reference
+                            == document_reference,
                         )
+                    ).first()
+                if (
+                    row.owner_reassignment_needed_at is not None
+                    or prior_late_checkout_refusal is not None
+                ):
+                    # The sole owner self-deleted; flag, never cancel or bind
+                    # silently. Refuse even when other active members remain —
+                    # seat count alone must not bind a post-delete Checkout.
+                    from app.services import alerting
+
+                    practice_ref = provider_log_ref(f"practice:{practice.id}")
+                    subscription_ref = provider_log_ref(subscription["id"])
+                    effective_at = datetime.now(timezone.utc)
+
+                    def _record_late_checkout_audit(
+                        action: PracticeAccessAction, reason: str
+                    ) -> bool:
+                        """Insert once; unique index wins concurrent races."""
+
+                        existing = session.exec(
+                            select(PracticeAccessAudit).where(
+                                PracticeAccessAudit.practice_id == row.id,
+                                PracticeAccessAudit.action == action.value,
+                                PracticeAccessAudit.document_reference
+                                == document_reference,
+                            )
+                        ).first()
+                        if existing is not None:
+                            return False
+                        try:
+                            with session.begin_nested():
+                                session.add(
+                                    PracticeAccessAudit(
+                                        practice_id=row.id,
+                                        action=action.value,
+                                        operator_ref="system:stripe-billing",
+                                        reason=reason,
+                                        effective_at=effective_at,
+                                        document_reference=document_reference,
+                                    )
+                                )
+                                session.flush()
+                        except IntegrityError:
+                            # Unique index won; confirm the row exists before
+                            # treating the race as a successful dedupe.
+                            raced = session.exec(
+                                select(PracticeAccessAudit).where(
+                                    PracticeAccessAudit.practice_id == row.id,
+                                    PracticeAccessAudit.action == action.value,
+                                    PracticeAccessAudit.document_reference
+                                    == document_reference,
+                                )
+                            ).first()
+                            if raced is None:
+                                raise
+                            return False
+                        return True
+
+                    _record_late_checkout_audit(
+                        PracticeAccessAction.stripe_checkout_follow_up_required,
+                        "Stripe subscription arrived after owner self-delete",
                     )
-                log.error(
-                    "Stripe subscription arrived after owner self-delete",
-                    practice_ref=provider_log_ref(f"practice:{practice.id}"),
-                    subscription_ref=provider_log_ref(subscription["id"]),
-                )
-                contract_error = StripeStateInvalid(
-                    "Stripe subscription arrived after owner self-delete"
-                )
+                    # Trialling / incomplete Checkout has not collected payment;
+                    # do not claim Stripe "charged" in the operator audit reason.
+                    if mirrored_status in {"trialing", "incomplete"}:
+                        refund_reason = (
+                            "Late Checkout completed after owner self-delete; "
+                            "cancel or refund follow-up needed"
+                        )
+                    else:
+                        refund_reason = (
+                            "Late Checkout charged after owner self-delete; "
+                            "refund needed"
+                        )
+                    wrote_refund = _record_late_checkout_audit(
+                        PracticeAccessAction.stripe_refund_needed,
+                        refund_reason,
+                    )
+                    if wrote_refund:
+                        alerting.alert(
+                            alerting.LateCheckoutRefundNeeded,
+                            practice_ref=practice_ref,
+                            subscription_ref=subscription_ref,
+                        )
+                    if row.late_checkout_refused_at is None:
+                        row.late_checkout_refused_at = effective_at
+                    log.error(
+                        "Stripe subscription arrived after owner self-delete",
+                        practice_ref=practice_ref,
+                        subscription_ref=subscription_ref,
+                    )
+                    contract_error = StripeStateInvalid(
+                        "Stripe subscription arrived after owner self-delete"
+                    )
             if contract_error is not None:
                 row.subscription_status = "invalid"
+                row.stripe_bound_unit_amount = None
                 row.stripe_state_version += 1
                 if isinstance(
                     contract_error,
@@ -1410,6 +1531,18 @@ def _apply_authoritative_subscription(
                 str, remote_entitlement_contract
             )
             row.subscription_status = mirrored_status
+            # A healthy bind replaces the durable late-Checkout refuse marker.
+            row.late_checkout_refused_at = None
+            if _status_keeps_bound_unit_amount(subscription.get("status")):
+                # _retrieve_subscription verified this amount against Stripe.
+                bound_price = _subscription_item(
+                    subscription, enforce_quantity_bounds=False
+                )["price"]
+                row.stripe_bound_unit_amount = _bound_price_unit_amount(
+                    bound_price.get("id")
+                    if isinstance(bound_price, dict)
+                    else bound_price
+                )
             if not same_subscription:
                 row.stripe_trial_clock_policy = trial_clock_policy
             elif (
