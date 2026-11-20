@@ -36,7 +36,17 @@ from superadmin_capability_config_preflight import (
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "CosmaNeura/cosmaneura"
 WORKFLOW = ".github/workflows/build_and_publish_local.yml"
+RELEASE_VERIFIED_CANDIDATE_WORKFLOW = ".github/workflows/release_verified_candidate.yml"
 WORKFLOW_REF = f"{REPOSITORY}/{WORKFLOW}@refs/heads/master"
+# context()/deploy.sh may run from Build & Publish prepare/promote or from the
+# reusable staging-verified candidate release. Artifact admit/publish stay on
+# the Build & Publish producer path only.
+ALLOWED_CONTEXT_WORKFLOW_REFS = frozenset(
+    {
+        WORKFLOW_REF,
+        f"{REPOSITORY}/{RELEASE_VERIFIED_CANDIDATE_WORKFLOW}@refs/heads/master",
+    }
+)
 REGISTRY = "cosmaneuraprodregistry"
 IMAGE = f"{REGISTRY}.azurecr.io/cosmaneura/cosmaneura"
 IMAGE_REPOSITORY = "cosmaneura/cosmaneura"
@@ -149,16 +159,24 @@ def api(path: str) -> Any:
     return decode(raw, maximum=MAX_METADATA)
 
 
-def source_context() -> dict[str, Any]:
+def source_context(*, allow_release_verified_candidate: bool = False) -> dict[str, Any]:
     expected = {
         "GITHUB_ACTOR": "JohnClem",
         "GITHUB_TRIGGERING_ACTOR": "JohnClem",
         "GITHUB_EVENT_NAME": "workflow_dispatch",
         "GITHUB_REF": "refs/heads/master",
         "GITHUB_REPOSITORY": REPOSITORY,
-        "GITHUB_WORKFLOW_REF": WORKFLOW_REF,
     }
     require(all(os.environ.get(key) == value for key, value in expected.items()))
+    # publish/admit/check stay on Build & Publish WORKFLOW_REF only. The wider
+    # allowlist is context-mode only so deploy.sh can run from Release verified
+    # candidate without admitting that workflow as a Core producer.
+    allowed = (
+        ALLOWED_CONTEXT_WORKFLOW_REFS
+        if allow_release_verified_candidate
+        else frozenset({WORKFLOW_REF})
+    )
+    require(os.environ.get("GITHUB_WORKFLOW_REF") in allowed)
     sha = os.environ.get("GITHUB_SHA", "")
     require(SHA.fullmatch(sha))
     git = ["git", "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(ROOT)]
@@ -731,7 +749,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.mode == "context":
-            source_context()
+            source_context(allow_release_verified_candidate=True)
         elif args.mode == "publish":
             require(args.configuration is not None and args.output is not None)
             publish(args.configuration, args.output, args.frontend_admission)

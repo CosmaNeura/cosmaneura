@@ -1,0 +1,308 @@
+name: Release verified candidate
+on:
+  workflow_dispatch:
+    inputs:
+      github_hosted_fallback_authorized:
+        type: boolean
+        description: "Operator attestation: hosted build/deploy"
+        required: true
+        default: false
+      candidate_sha:
+        type: string
+        description: "Master SHA that passed staging"
+        required: true
+      staging_run_id:
+        type: string
+        description: "Successful staging run id"
+        required: true
+      staging_image_digest:
+        type: string
+        description: "Staging image digest"
+        required: true
+      terraform_apply_run_id:
+        type: string
+        description: "Successful Terraform Apply run id"
+        required: true
+      provider_signed_recall_callback_verified:
+        type: boolean
+        description: "Operator attestation: signed Recall callback"
+        required: true
+        default: false
+concurrency:
+  group: Build & Publish-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLUMNS: 120
+jobs:
+  gate:
+    name: Gate staging-verified candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        inputs.github_hosted_fallback_authorized
+      }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Require candidate SHA equals GITHUB_SHA before checkout
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid candidate SHA." >&2; exit 1
+          fi
+          if [[ "$CANDIDATE_SHA" != "$GITHUB_SHA" ]]; then
+            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2; exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify staging-verified candidate before credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+          STAGING_IMAGE_DIGEST: ${{ inputs.staging_image_digest }}
+        run: python3 scripts/verify_release_verified_candidate.py
+      - name: Require operator attestation for Recall callback
+        env:
+          PROVIDER_CALLBACK_VERIFIED: ${{ inputs.provider_signed_recall_callback_verified }}
+        run: |
+          if [[ "$PROVIDER_CALLBACK_VERIFIED" != "true" ]]; then
+            echo "Operator attestation required: provider-signed synthetic Recall callback." >&2
+            exit 1
+          fi
+      - name: Verify successful applicable Terraform Apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TERRAFORM_APPLY_RUN_ID: ${{ inputs.terraform_apply_run_id }}
+          TARGET_SHA: ${{ github.sha }}
+        run: python3 scripts/release_verified_candidate_gate.py
+  publish-and-deploy:
+    name: Build, scan, publish and deploy
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: cosmaneura-production-container-apps
+      cancel-in-progress: false
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        inputs.github_hosted_fallback_authorized
+      }}
+    environment: production
+    env:
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false."
+            exit 1
+          fi
+      - name: Require candidate SHA equals GITHUB_SHA before checkout
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid candidate SHA." >&2; exit 1
+          fi
+          if [[ "$CANDIDATE_SHA" != "$GITHUB_SHA" ]]; then
+            echo "CANDIDATE_SHA must equal GITHUB_SHA." >&2; exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: zsh
+      - uses: ./.github/actions/install-nixpacks
+      - name: Resolve production frontend build configuration
+        env:
+          FRONTEND_ENV_SOURCE: .env.production.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/release-artifacts"
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV, OPENAPI_JSON_PATH, VITE_CLERK_PUBLIC_KEY, VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST, VITE_POSTHOG_KEY, VITE_PYTHON_URL, VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false", VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+          cp -- "$JAVASCRIPT_BUILD_ENV_JSON" \
+            "$RUNNER_TEMP/release-artifacts/production-frontend-build.artifact.json"
+      - name: Build production images from resolved public configuration
+        run: just build
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          PYTHON_ENV: production
+      - name: Scan the built production image with Trivy before publish
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          TRIVY_IMAGE: aquasec/trivy@sha256:ab70a02200597efa04748f210f793936eb647cbcdb0ea69cc30b226d6f5a22c7
+        run: |
+          set -euo pipefail
+          image="cosmaneura:${CANDIDATE_SHA}"
+          docker image inspect "$image" >/dev/null
+          docker pull "$TRIVY_IMAGE"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" \
+            image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed "$image"
+      - name: Export scanned image archive for publish admission
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/release-artifacts/scanned-production-image.tar"
+          docker image save --output "$archive" "cosmaneura:${CANDIDATE_SHA}"
+          sha256sum "$archive" | awk '{print $1}' > \
+            "$RUNNER_TEMP/release-artifacts/scanned-production-image.sha256"
+      - name: Remove resolved production frontend configuration
+        if: always()
+        env:
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - name: Reverify current master and admit production context before publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_SHA" != "$CANDIDATE_SHA" ]]; then
+            echo "Release SHA drifted from the staging-verified candidate." >&2; exit 1
+          fi
+          current_master_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced during the build; refusing to publish stale images." >&2; exit 1
+          fi
+          python3 scripts/production_core_candidate.py context
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Admit code-derived schema heads before publish
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_verified_candidate_ops.py admit-schema \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --output "$RUNNER_TEMP/release-artifacts/schema-heads.json"
+      - name: Record current production digests and revisions before publish
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          running_sha=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["running_source_sha"])' \
+            "$RUNNER_TEMP/release-artifacts/schema-heads.json")
+          python3 scripts/release_verified_candidate_ops.py record-baseline \
+            --baseline "$RUNNER_TEMP/release-artifacts/production-runtime-baseline.json" \
+            --candidate-sha "$CANDIDATE_SHA" --running-source-sha "$running_sha"
+      - name: Publish scanned image with equivalent Core admission checks
+        id: production_digest
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/release-artifacts/scanned-production-image.tar"
+          config="$RUNNER_TEMP/release-artifacts/production-frontend-build.artifact.json"
+          export SCANNED_IMAGE_ARCHIVE_SHA256=$(tr -d '[:space:]' < \
+            "$RUNNER_TEMP/release-artifacts/scanned-production-image.sha256")
+          out="$RUNNER_TEMP/release-artifacts/production-image-ref.txt"
+          running_sha=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["running_source_sha"])' \
+            "$RUNNER_TEMP/release-artifacts/schema-heads.json")
+          python3 scripts/release_verified_candidate_ops.py publish \
+            --configuration "$config" --source-sha "$CANDIDATE_SHA" --archive "$archive" \
+            --output "$out" --running-source-sha "$running_sha" \
+            --schema-output "$RUNNER_TEMP/release-artifacts/schema-heads.json"
+          image=$(tr -d '[:space:]' < "$out")
+          if [[ ! "$image" =~ ^cosmaneuraprodregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Published production image did not resolve to an immutable digest."; exit 1
+          fi
+          echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Deploy the pinned production digest to Azure
+        id: deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          CONTAINER_REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+          CORE_PRODUCTION_IMAGE_REF: ${{ steps.production_digest.outputs.image }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CORE_PRODUCTION_IMAGE_REF" =~ ^cosmaneuraprodregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Refusing deploy without an admitted production Core digest."; exit 1
+          fi
+          cd infra && bash deploy.sh "$CANDIDATE_SHA" "$CORE_PRODUCTION_IMAGE_REF"
+      - name: Verify healthcheck and ready-revision digests or roll back
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          CORE_PRODUCTION_IMAGE_REF: ${{ steps.production_digest.outputs.image }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+        run: |
+          set -euo pipefail
+          baseline="$RUNNER_TEMP/release-artifacts/production-runtime-baseline.json"
+          evidence="$RUNNER_TEMP/release-artifacts/production-runtime-evidence.json"
+          if [[ "$DEPLOY_OUTCOME" != "success" ]]; then
+            python3 scripts/release_verified_candidate_ops.py rollback --baseline "$baseline"
+            echo "Migration policy: image rollback only; Alembic forward-only." >&2
+            exit 1
+          fi
+          python3 scripts/release_verified_candidate_ops.py verify-ready \
+            --baseline "$baseline" --expected-image "$CORE_PRODUCTION_IMAGE_REF" --evidence "$evidence"
+      - name: Upload production release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-release-evidence-${{ inputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/release-artifacts/schema-heads.json
+            ${{ runner.temp }}/release-artifacts/production-runtime-baseline.json
+            ${{ runner.temp }}/release-artifacts/production-runtime-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
