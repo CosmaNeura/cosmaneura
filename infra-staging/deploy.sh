@@ -1223,6 +1223,20 @@ done
 			exit 1
 		fi
 	done
+	# MCD / legacy price IDs are acquisition-only. Keep them optional while
+	# billing stays off so staging can deploy with integration maintenance alone.
+	if [[ "$STRIPE_BILLING_ENABLED" == "true" ]]; then
+		for var in STRIPE_MCD_PRICE_ID STRIPE_LEGACY_PRICE_IDS; do
+			if [[ -z "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" ]]; then
+				echo "$var is required when Stripe billing is enabled."
+				exit 1
+			fi
+		done
+		if [[ "$(echo "$ENV_JSON" | jq -r '.STRIPE_MCD_PRICE_ID // empty')" != price_* ]]; then
+			echo "STRIPE_MCD_PRICE_ID has an invalid shape."
+			exit 1
+		fi
+	fi
 fi
 
 if ! RECALL_WEBHOOK_SECRET_INPUT=$(printf '%s' "$ENV_JSON" |
