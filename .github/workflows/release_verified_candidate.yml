@@ -152,7 +152,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          mkdir -p "$GITHUB_WORKSPACE/.release-artifacts"
+          mkdir -p "$RUNNER_TEMP/release-artifacts"
           just direnv_export "$FRONTEND_ENV_SOURCE" |
             jq -ce '{
               NODE_ENV, OPENAPI_JSON_PATH, VITE_CLERK_PUBLIC_KEY, VITE_INTAKE_CHAT_DOMAIN,
@@ -162,7 +162,7 @@ jobs:
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
           cp -- "$JAVASCRIPT_BUILD_ENV_JSON" \
-            "$GITHUB_WORKSPACE/.release-artifacts/production-frontend-build.artifact.json"
+            "$RUNNER_TEMP/release-artifacts/production-frontend-build.artifact.json"
       - name: Build production images from resolved public configuration
         run: just build
         env:
@@ -185,10 +185,10 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          archive="$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.tar"
+          archive="$RUNNER_TEMP/release-artifacts/scanned-production-image.tar"
           docker image save --output "$archive" "cosmaneura:${CANDIDATE_SHA}"
           sha256sum "$archive" | awk '{print $1}' > \
-            "$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.sha256"
+            "$RUNNER_TEMP/release-artifacts/scanned-production-image.sha256"
       - name: Remove resolved production frontend configuration
         if: always()
         env:
@@ -226,11 +226,11 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          archive="$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.tar"
-          config="$GITHUB_WORKSPACE/.release-artifacts/production-frontend-build.artifact.json"
+          archive="$RUNNER_TEMP/release-artifacts/scanned-production-image.tar"
+          config="$RUNNER_TEMP/release-artifacts/production-frontend-build.artifact.json"
           export SCANNED_IMAGE_ARCHIVE_SHA256=$(tr -d '[:space:]' < \
-            "$GITHUB_WORKSPACE/.release-artifacts/scanned-production-image.sha256")
-          out="$GITHUB_WORKSPACE/.release-artifacts/production-image-ref.txt"
+            "$RUNNER_TEMP/release-artifacts/scanned-production-image.sha256")
+          out="$RUNNER_TEMP/release-artifacts/production-image-ref.txt"
           python3 scripts/release_verified_candidate_ops.py publish \
             --configuration "$config" --source-sha "$CANDIDATE_SHA" --archive "$archive" --output "$out"
           image=$(tr -d '[:space:]' < "$out")
@@ -242,7 +242,7 @@ jobs:
       - name: Record current production digests and revisions before deploy
         run: |
           python3 scripts/release_verified_candidate_ops.py record-baseline \
-            --baseline "$GITHUB_WORKSPACE/.release-artifacts/production-runtime-baseline.json"
+            --baseline "$RUNNER_TEMP/release-artifacts/production-runtime-baseline.json"
       - name: Deploy the pinned production digest to Azure
         id: deploy
         env:
@@ -268,8 +268,8 @@ jobs:
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
         run: |
           set -euo pipefail
-          baseline="$GITHUB_WORKSPACE/.release-artifacts/production-runtime-baseline.json"
-          evidence="$GITHUB_WORKSPACE/.release-artifacts/production-runtime-evidence.json"
+          baseline="$RUNNER_TEMP/release-artifacts/production-runtime-baseline.json"
+          evidence="$RUNNER_TEMP/release-artifacts/production-runtime-evidence.json"
           if [[ "$DEPLOY_OUTCOME" != "success" ]]; then
             python3 scripts/release_verified_candidate_ops.py rollback --baseline "$baseline"
             echo "Migration policy: image rollback only; Alembic forward-only." >&2
@@ -283,7 +283,7 @@ jobs:
         with:
           name: production-release-evidence-${{ inputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .release-artifacts/production-runtime-baseline.json
-            .release-artifacts/production-runtime-evidence.json
+            ${{ runner.temp }}/release-artifacts/production-runtime-baseline.json
+            ${{ runner.temp }}/release-artifacts/production-runtime-evidence.json
           if-no-files-found: warn
           retention-days: 30

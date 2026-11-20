@@ -1,5 +1,4 @@
 # fmt: off
-"""Terraform Apply gate."""
 from __future__ import annotations  # noqa: I001
 import os
 import re
