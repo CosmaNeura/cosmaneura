@@ -20,6 +20,22 @@ APPS = {
     "cosmaneura-staging-scheduler",
 }
 
+# Owned by BILLING_PUBLIC_VARS in infra-staging/deploy.sh. Required only when
+# acquisition is on; while STRIPE_BILLING_ENABLED=false they are neither
+# projected into the desired runtime nor required for preservation checks.
+BILLING_PUBLIC_VARS = (
+    "STRIPE_INTEGRATION_ENABLED",
+    "STRIPE_BILLING_ENABLED",
+    "STRIPE_ACCOUNT_ID",
+    "STRIPE_PRICE_ID",
+    "STRIPE_MCD_PRICE_ID",
+    "STRIPE_LEGACY_PRICE_IDS",
+    "STRIPE_API_VERSION",
+    "STRIPE_LIVE_MODE",
+    "STRIPE_PORTAL_CONFIGURATION_ID",
+)
+BILLING_PRICE_ID_VARS = frozenset({"STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"})
+
 
 def require(value: object) -> None:
     if not value:
@@ -66,9 +82,17 @@ def desired(configuration: dict[str, Any], contract: dict[str, Any]) -> dict[str
         and contract["args"][0]
     )
     environment = {}
+    billing = configuration.get("STRIPE_BILLING_ENABLED")
     for name in names:
         value = configuration.get(name)
         require(value is None or type(value) is str)
+        if name in BILLING_PRICE_ID_VARS:
+            # Precise gate: skip only these two names while billing is off.
+            if billing == "false":
+                continue
+            # When billing is on, missing or empty still refuses.
+            if billing == "true":
+                require(value)
         # This is the deployer's existing empty-value removal behavior.
         if value:
             # jq -r is consumed through Bash command substitution. Trailing

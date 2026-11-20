@@ -140,8 +140,6 @@ printf 'secrets=%s,%s,%s,%s,%s\\n' "$STRIPE_SECRET_KEY" "$STRIPE_WEBHOOK_SECRET"
         "webhook-secret",
         "account-id",
         "price-id",
-        "mcd-price-id",
-        "legacy-price-ids",
         "portal-configuration-id",
     ):
         assert (
@@ -150,7 +148,135 @@ printf 'secrets=%s,%s,%s,%s,%s\\n' "$STRIPE_SECRET_KEY" "$STRIPE_WEBHOOK_SECRET"
             )
             == 1
         )
+    # Billing stays off in the reviewed staging source: do not inject acquisition
+    # price fields while STRIPE_BILLING_ENABLED=false.
+    for field in ("mcd-price-id", "legacy-price-ids"):
+        assert (
+            f"op://${{OP_STAGING_VAULT_UID}}/${{STRIPE_BILLING_ITEM_ID}}/{field}"
+            not in result.stdout
+        )
     assert "sk_live_synthetic_ambient" not in result.stdout
+
+
+def test_staging_injects_acquisition_price_ids_only_when_billing_is_enabled() -> None:
+    source = _read(".env.staging.backend")
+    start = source.index("export STRIPE_INTEGRATION_ENABLED=")
+    end = source.index("export SCRIBE_HANDOFF_ENABLED=", start)
+    # Flip only the billing flag in a synthetic copy; mock op, no vault access.
+    section = source[start:end].replace(
+        "export STRIPE_BILLING_ENABLED=false",
+        "export STRIPE_BILLING_ENABLED=true",
+        1,
+    )
+    script = (
+        """
+set -eu
+op_inject_source() { while IFS= read -r line; do printf '%s\\n' "$line"; done; }
+"""
+        + section
+        + """
+printf 'flags=%s,%s\\n' "$STRIPE_INTEGRATION_ENABLED" "$STRIPE_BILLING_ENABLED"
+"""
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        env={"PATH": "/bin:/usr/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stderr == ""
+    assert "flags=true,true\n" in result.stdout
+    for field in ("mcd-price-id", "legacy-price-ids"):
+        assert (
+            result.stdout.count(
+                f"op://${{OP_STAGING_VAULT_UID}}/${{STRIPE_BILLING_ITEM_ID}}/{field}"
+            )
+            == 1
+        )
+
+
+def test_staging_deploy_requires_acquisition_price_ids_only_when_billing_enabled() -> (
+    None
+):
+    deploy = _read("infra-staging/deploy.sh")
+    start = deploy.index('if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then')
+    # Include the nested billing-on require block that follows the integration checks.
+    end = deploy.index("\nfi\n", deploy.index("STRIPE_MCD_PRICE_ID has an invalid shape."))
+    block = deploy[start : end + len("\nfi\n")]
+    base = {
+        "STRIPE_INTEGRATION_ENABLED": "true",
+        "STRIPE_BILLING_ENABLED": "false",
+        "STRIPE_LIVE_MODE": "false",
+        "STRIPE_SECRET_KEY": "sk_test_synthetic",
+        "STRIPE_WEBHOOK_SECRET": "whsec_synthetic",
+        "STRIPE_ACCOUNT_ID": "acct_synthetic",
+        "STRIPE_PRICE_ID": "price_synthetic",
+        "STRIPE_PORTAL_CONFIGURATION_ID": "bpc_synthetic",
+        "STRIPE_API_VERSION": "2025-09-30.clover",
+    }
+
+    def run(env_json: dict) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["/bin/bash", "-c", block],
+            env={
+                "PATH": "/bin:/usr/bin",
+                "ENV_JSON": __import__("json").dumps(env_json),
+                "STRIPE_INTEGRATION_ENABLED": env_json["STRIPE_INTEGRATION_ENABLED"],
+                "STRIPE_BILLING_ENABLED": env_json["STRIPE_BILLING_ENABLED"],
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    # Billing off: missing acquisition price IDs are accepted.
+    off = run(base)
+    assert off.returncode == 0, off.stdout + off.stderr
+
+    # Billing on: missing or empty still refuses.
+    for broken in (
+        {**base, "STRIPE_BILLING_ENABLED": "true"},
+        {
+            **base,
+            "STRIPE_BILLING_ENABLED": "true",
+            "STRIPE_MCD_PRICE_ID": "",
+            "STRIPE_LEGACY_PRICE_IDS": "price_legacy_synthetic",
+        },
+        {
+            **base,
+            "STRIPE_BILLING_ENABLED": "true",
+            "STRIPE_MCD_PRICE_ID": "price_mcd_synthetic",
+            "STRIPE_LEGACY_PRICE_IDS": "",
+        },
+    ):
+        refused = run(broken)
+        assert refused.returncode != 0
+
+    ok = run(
+        {
+            **base,
+            "STRIPE_BILLING_ENABLED": "true",
+            "STRIPE_MCD_PRICE_ID": "price_mcd_synthetic",
+            "STRIPE_LEGACY_PRICE_IDS": "price_legacy_synthetic",
+        }
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_production_env_and_deploy_paths_are_untouched_by_staging_billing_gate() -> None:
+    production = _read(".env.production.backend")
+    integration = production[production.index("STRIPE_BILLING_ITEM_ID is required") :]
+    integration = integration[integration.index("op_inject_source <<'EOF'") :]
+    integration = integration[: integration.index("\nEOF\n")]
+    assert "mcd-price-id" in integration
+    assert "legacy-price-ids" in integration
+    # Production still injects both inside the integration block with no billing gate.
+    assert "STRIPE_BILLING_ENABLED" not in integration
+    production_deploy = _read("infra/deploy.sh")
+    assert "STRIPE_MCD_PRICE_ID is required when Stripe billing is enabled" not in (
+        production_deploy
+    )
 
 
 def test_staging_deploy_owns_and_revokes_exact_stripe_scope() -> None:
