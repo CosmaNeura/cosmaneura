@@ -202,7 +202,9 @@ def test_staging_deploy_requires_acquisition_price_ids_only_when_billing_enabled
     deploy = _read("infra-staging/deploy.sh")
     start = deploy.index('if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then')
     # Include the nested billing-on require block that follows the integration checks.
-    end = deploy.index("\nfi\n", deploy.index("STRIPE_MCD_PRICE_ID has an invalid shape."))
+    end = deploy.index(
+        "\nfi\n", deploy.index("STRIPE_MCD_PRICE_ID has an invalid shape.")
+    )
     block = deploy[start : end + len("\nfi\n")]
     base = {
         "STRIPE_INTEGRATION_ENABLED": "true",
@@ -264,7 +266,9 @@ def test_staging_deploy_requires_acquisition_price_ids_only_when_billing_enabled
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
-def test_production_env_and_deploy_paths_are_untouched_by_staging_billing_gate() -> None:
+def test_production_env_and_deploy_paths_are_untouched_by_staging_billing_gate() -> (
+    None
+):
     production = _read(".env.production.backend")
     integration = production[production.index("STRIPE_BILLING_ITEM_ID is required") :]
     integration = integration[integration.index("op_inject_source <<'EOF'") :]
