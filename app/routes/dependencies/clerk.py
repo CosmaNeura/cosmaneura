@@ -41,6 +41,14 @@ class AuthenticateClerkRequest:
         # self.sdk.sdk_configuration contains most of the core configuration
         self.sdk = Clerk(bearer_auth=clerk_secret_key)
 
+    def _authenticate_request(self, request: httpx.Request, token: str) -> RequestState:
+        # The generic verifier retains its original SDK behavior. Native capture
+        # alone supplies a bounded public-key lookup in a dedicated subclass.
+        return self.sdk.authenticate_request(
+            request,  # type: ignore
+            AuthenticateRequestOptions(),
+        )
+
     # NOTE: declared `def`, not `async def`. The Clerk SDK's
     # `authenticate_request` is synchronous, and on JWKS cache miss it
     # blocks for the duration of an HTTPS round-trip to
@@ -89,11 +97,7 @@ class AuthenticateClerkRequest:
         )
 
         # Authenticate the request
-        auth_state = self.sdk.authenticate_request(
-            # https://github.com/clerk/clerk-sdk-python/issues/116
-            httpx_request,  # type: ignore
-            AuthenticateRequestOptions(),
-        )
+        auth_state = self._authenticate_request(httpx_request, token)
 
         if not auth_state.is_signed_in:
             raise HTTPException(

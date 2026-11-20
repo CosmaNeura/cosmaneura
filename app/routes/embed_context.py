@@ -35,6 +35,7 @@ from .authority_errors import (
     token_problem_response,
 )
 from .dependencies.clerk import AuthenticateClerkRequest
+from .dependencies.scribe_native_clerk import AuthenticateNativeClerkRequest
 from .dependencies.view_as import view_as_browser_session_present
 
 embed_context_api_app = APIRouter(
@@ -45,6 +46,7 @@ embed_context_api_app = APIRouter(
 
 _embed_bearer = HTTPBearer(auto_error=False)
 _authenticate_clerk_session = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
+_authenticate_native_clerk_session = AuthenticateNativeClerkRequest(CLERK_PRIVATE_KEY)
 
 
 class AnonymousTokenIssueRequest(BaseModel):
@@ -109,7 +111,16 @@ def authenticate_embed_platform_session(
 ) -> VerifiedClerkIdentity:
     try:
         with phase("clerk_auth"):
-            auth_state = _authenticate_clerk_session(request, credentials)
+            # Only the fixed native facade needs the bounded JWKS seam. Embed
+            # exchange and every other Clerk-protected route stay unchanged.
+            verifier = (
+                _authenticate_native_clerk_session
+                if request.method == "POST"
+                and request.scope.get("path")
+                == "/service/v1/agent/scribe/native-capture"
+                else _authenticate_clerk_session
+            )
+            auth_state = verifier(request, credentials)
     except HTTPException:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
