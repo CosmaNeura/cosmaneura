@@ -48,15 +48,8 @@ def bundle(payload, name):
     raw = json.dumps(payload, sort_keys=True).encode()
     return {name: raw, "SHA256SUMS": f"{hashlib.sha256(raw).hexdigest()}  {name}\n".encode()}
 def files(candidate="a" * 40, digest="sha256:" + "c" * 64, run_id=99, attempt=1):
-    rel = {
-        "source_sha": candidate, "image": {"digest": digest},
-        "release_contract_result": "passed", "smoke": {"healthcheck": {"result": "passed"}},
-        "deployment_outcome": "success", "github": {"run_id": run_id, "run_attempt": attempt},
-    }
-    pub = {
-        "source_sha": candidate, "image": {"digest": digest},
-        "publication_outcome": "success", "run_id": run_id, "run_attempt": attempt,
-    }
+    rel = {"source_sha": candidate, "image": {"digest": digest}, "release_contract_result": "passed", "smoke": {"healthcheck": {"result": "passed"}}, "deployment_outcome": "success", "github": {"run_id": run_id, "run_attempt": attempt}}
+    pub = {"source_sha": candidate, "image": {"digest": digest}, "publication_outcome": "success", "run_id": run_id, "run_attempt": attempt}
     return bundle(rel, "release.json"), bundle(pub, "publication.json")
 def baseline_payload(*, running="aaaaaaaaaaaa", candidate="aaaaaaaaaaaa", migrate=None):
     migrate = running != candidate if migrate is None else migrate
@@ -94,16 +87,12 @@ def test_staging_and_workflow_gates():
     gate, publish = wf["jobs"]["gate"], wf["jobs"]["publish-and-deploy"]
     assert "environment" not in gate and publish["environment"] == "production"
     assert publish["permissions"]["id-token"] == "write"
-    assert "severity-exit-code" not in raw and "--exit-code 1" in raw
-    assert "ref: ${{ inputs.candidate_sha }}" not in raw
-    assert "GITHUB_WORKSPACE/.release-artifacts" not in raw
-    assert "$RUNNER_TEMP/release-artifacts" in raw
+    assert "severity-exit-code" not in raw and "--exit-code 1" in raw and "ref: ${{ inputs.candidate_sha }}" not in raw
+    assert "GITHUB_WORKSPACE/.release-artifacts" not in raw and "$RUNNER_TEMP/release-artifacts" in raw
     assert "admit-schema" in raw and "PRODUCTION_SCHEMA_REVISION" not in raw + OPS_SRC
     assert not ONE_TIME.exists()
     names = [s.get("name") for s in publish["steps"]]
-    assert names.index("Admit code-derived schema heads before publish") < names.index(
-        "Publish scanned image with equivalent Core admission checks"
-    )
+    assert names.index("Admit code-derived schema heads before publish") < names.index("Record current production digests and revisions before publish") < names.index("Publish scanned image with equivalent Core admission checks")
 def test_h10_artifacts_outside_checkout_keep_context_clean(tmp_path, monkeypatch):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -215,6 +204,15 @@ def test_equal_heads_skips_swap_when_already_at_baseline(tmp_path, monkeypatch):
     monkeypatch.setattr(ops.subprocess, "check_call", lambda *a, **k: calls.append(a))
     ops.rollback(baseline)
     assert calls == []
+def test_rollback_restores_all_apps_when_first_live_image_unreadable(tmp_path, monkeypatch):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps(baseline_payload()) + "\n")
+    first = ops.APPS[0]
+    monkeypatch.setattr(ops, "app_image", lambda n: (_ for _ in ()).throw(subprocess.CalledProcessError(1, ["az"])) if n == first else f"live@{n}")
+    restored = []
+    monkeypatch.setattr(ops.subprocess, "check_call", lambda args, **_k: restored.append(args[args.index("-n") + 1]))
+    ops.rollback(baseline)
+    assert restored == list(ops.APPS) and restored[0] == first
 def test_schema_refusal_before_publish_leaves_no_locked_tag(tmp_path, monkeypatch):
     monkeypatch.setenv("CONTAINER_REGISTRY_HOST", ops.HOST)
     monkeypatch.setenv("SCANNED_IMAGE_ARCHIVE_SHA256", "a" * 64)

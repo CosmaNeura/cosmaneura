@@ -206,9 +206,8 @@ def rollback(baseline_path: Path) -> None:
             continue
         try:
             live = app_image(name)
-        except SystemExit:
-            failures.append(f"{name}: could not read live image")
-            continue
+        except (SystemExit, subprocess.CalledProcessError):
+            live = None
         if live == image:
             continue
         print(f"az containerapp update -n {name} -g {RG} -i {image}")
