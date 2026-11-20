@@ -197,14 +197,14 @@ jobs:
         run: |
           set -euo pipefail
           docker builder prune -af
-          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-a.txt)
+          digest_a=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out "$RUNNER_TEMP/runtime-a.txt")
           docker builder prune -af
-          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out runtime-b.txt)
+          digest_b=$(python3 -m scripts.build_scribe_runtime --core-image core-proof:pr --derive-runtime-digest --manifest-out "$RUNNER_TEMP/runtime-b.txt")
           pin=$(python3 -c 'from scripts.scribe_runtime_pin import SCRIBE_RUNTIME_IMAGE_DIGEST; print(SCRIBE_RUNTIME_IMAGE_DIGEST)')
           printf 'Cold derivation A: `%s`\n\nCold derivation B: `%s`\n\nReviewed pin: `%s`\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_STEP_SUMMARY"
           printf 'digest_a=%s\ndigest_b=%s\npin=%s\n' "$digest_a" "$digest_b" "$pin" >> "$GITHUB_OUTPUT"
           printf 'Cold derivation A: %s\nCold derivation B: %s\nReviewed pin: %s\n' "$digest_a" "$digest_b" "$pin"
-          if [[ "$digest_a" != "$digest_b" ]] || ! cmp runtime-a.txt runtime-b.txt; then
+          if [[ "$digest_a" != "$digest_b" ]] || ! cmp "$RUNNER_TEMP/runtime-a.txt" "$RUNNER_TEMP/runtime-b.txt"; then
             echo "::error::Scribe runtime is non-reproducible across two cold derivations."
             exit 1
           fi
@@ -214,8 +214,8 @@ jobs:
         with:
           name: scribe-runtime-cold-manifests
           path: |
-            runtime-a.txt
-            runtime-b.txt
+            ${{ runner.temp }}/runtime-a.txt
+            ${{ runner.temp }}/runtime-b.txt
           if-no-files-found: warn
       - name: Assert hosted runtime equals reviewed pin
         env:
