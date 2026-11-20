@@ -2297,15 +2297,51 @@ def test_unbound_invalid_preserves_future_legacy_trial_with_refuse_marker():
     assert practice.entitled(at=NOW)
 
 
-def test_unbound_invalid_from_seat_limit_path_does_not_preserve_trial():
-    """Seat-limit / contract invalid without refuse marker stays revoked."""
+def test_unbound_invalid_from_seat_limit_path_does_not_preserve_trial(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Seat-limit invalidation (real apply path) never sets the refuse marker."""
 
     practice = _practice()
-    practice.subscription_status = "invalid"
     practice.trial_ends_at = NOW + timedelta(days=14)
+    practice.stripe_checkout_session_id = "cs_seat_limit_path"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    subscription = _subscription(practice, subscription_id="sub_seat_limit_path")
+    remote.subscriptions[subscription["id"]] = subscription
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLimitExceeded(
+                "authoritative active-clinician count is outside the 1-20 seat limit"
+            )
+        ),
+    )
+
+    event = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id="evt_seat_limit_path",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"] = {
+        "id": "cs_seat_limit_path",
+        "client_reference_id": str(practice.id),
+        "subscription": subscription["id"],
+    }
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id is None
     assert practice.late_checkout_refused_at is None
     assert not practice.has_authoritative_stripe_subscription_binding()
-
     assert not practice.entitled(at=NOW)
 
 
@@ -5197,13 +5233,55 @@ def test_stripe_refund_needed_unique_constraint_refuses_concurrent_duplicates():
     assert len(rows) == 1
 
 
-def test_late_checkout_refusal_stays_sticky_after_owner_transfer(
-    remote: FakeStripe,
-):
-    """Refuse audits keep the same subscription unbound after transfer."""
+def _transfer_practice_to_workforce_owner(practice: Practice) -> None:
+    """Promote the workforce member to owner (synthetic transfer helper)."""
 
     from app.services.practice_owner_transfer import transfer_practice_owner
 
+    suffix = secrets.token_hex(4)
+    with get_session() as session:
+        members = session.exec(
+            select(PracticeMember).where(PracticeMember.practice_id == practice.id)
+        ).all()
+    owners = [m for m in members if m.role == PracticeRole.owner.value]
+    workforce = [m for m in members if m.role == PracticeRole.workforce.value]
+    assert len(owners) == 1 and len(workforce) >= 1
+    old_owner = Doctor.get(id=owners[0].doctor_id)
+    new_owner = Doctor.get(id=workforce[0].doctor_id)
+    assert old_owner and new_owner and old_owner.clerk_id and new_owner.clerk_id
+    assert new_owner.email
+    emails = {
+        old_owner.clerk_id: old_owner.email,
+        new_owner.clerk_id: new_owner.email,
+    }
+    transfer_ref = f"synthetic-transfer-{suffix}"
+    plan = transfer_practice_owner(
+        practice_id=practice.id,
+        expected_owner_subject=old_owner.clerk_id,
+        new_owner_subject=new_owner.clerk_id,
+        new_owner_email_confirmation=new_owner.email,
+        transfer_ref=transfer_ref,
+        operator_ref="synthetic-operator",
+        reason="owner_correction",
+        verify_primary_email=emails.get,
+        now=NOW,
+    )
+    transfer_practice_owner(
+        practice_id=practice.id,
+        expected_owner_subject=old_owner.clerk_id,
+        new_owner_subject=new_owner.clerk_id,
+        new_owner_email_confirmation=new_owner.email,
+        transfer_ref=transfer_ref,
+        operator_ref="synthetic-operator",
+        reason="owner_correction",
+        verify_primary_email=emails.get,
+        now=NOW,
+        apply=True,
+        confirm_plan_sha256=plan.plan_sha256,
+    )
+
+
+def _practice_with_owner_and_workforce() -> Practice:
     suffix = secrets.token_hex(4)
     # Clerk subjects: Doctor requires user_ prefix; transfer requires
     # user_[A-Za-z0-9]+ (no extra underscores after the prefix).
@@ -5243,6 +5321,15 @@ def test_late_checkout_refusal_stays_sticky_after_owner_transfer(
             attestation_name="New Owner",
         )
     )
+    return practice
+
+
+def test_late_checkout_refusal_stays_sticky_after_owner_transfer(
+    remote: FakeStripe,
+):
+    """Refuse audits keep the same subscription unbound after transfer."""
+
+    practice = _practice_with_owner_and_workforce()
 
     event, subscription = _late_checkout_after_owner_self_delete_event(
         practice,
@@ -5258,36 +5345,7 @@ def test_late_checkout_refusal_stays_sticky_after_owner_transfer(
     assert practice.late_checkout_refused_at is not None
     assert practice.owner_reassignment_needed_at is not None
 
-    assert old_owner.clerk_id and new_owner.clerk_id and new_owner.email
-    emails = {
-        old_owner.clerk_id: old_owner.email,
-        new_owner.clerk_id: new_owner.email,
-    }
-    transfer_ref = f"synthetic-sticky-{suffix}"
-    plan = transfer_practice_owner(
-        practice_id=practice.id,
-        expected_owner_subject=old_owner.clerk_id,
-        new_owner_subject=new_owner.clerk_id,
-        new_owner_email_confirmation=new_owner.email,
-        transfer_ref=transfer_ref,
-        operator_ref="synthetic-operator",
-        reason="owner_correction",
-        verify_primary_email=emails.get,
-        now=NOW,
-    )
-    transfer_practice_owner(
-        practice_id=practice.id,
-        expected_owner_subject=old_owner.clerk_id,
-        new_owner_subject=new_owner.clerk_id,
-        new_owner_email_confirmation=new_owner.email,
-        transfer_ref=transfer_ref,
-        operator_ref="synthetic-operator",
-        reason="owner_correction",
-        verify_primary_email=emails.get,
-        now=NOW,
-        apply=True,
-        confirm_plan_sha256=plan.plan_sha256,
-    )
+    _transfer_practice_to_workforce_owner(practice)
     practice.refresh()
     assert practice.owner_reassignment_needed_at is None
     assert practice.late_checkout_refused_at is not None
@@ -5313,6 +5371,367 @@ def test_late_checkout_refusal_stays_sticky_after_owner_transfer(
     assert practice.subscription_status == "invalid"
     assert practice.stripe_subscription_id is None
     assert practice.late_checkout_refused_at is not None
+
+
+def test_bound_practice_rejects_late_event_for_refused_other_subscription(
+    remote: FakeStripe,
+):
+    """Refuse A, transfer, bind B: a late non-terminal A event cannot invalidate B.
+
+    Proves `_assert_subscription_belongs_to_practice` raises before the sticky
+    refuse branch when the practice is already bound to a different healthy sub.
+    """
+
+    practice = _practice_with_owner_and_workforce()
+    refused_event, refused_sub = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_guard_refuse_a",
+        subscription_id="sub_guard_refuse_a",
+        event_id="evt_guard_refuse_a",
+    )
+    remote.subscriptions[refused_sub["id"]] = refused_sub
+    stripe_billing.apply_stripe_event(refused_event)
+    practice.refresh()
+    assert practice.late_checkout_refused_at is not None
+    assert practice.stripe_subscription_id is None
+
+    _transfer_practice_to_workforce_owner(practice)
+    practice.refresh()
+    assert practice.owner_reassignment_needed_at is None
+
+    practice.stripe_checkout_session_id = "cs_guard_bind_b"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    healthy = _subscription(
+        practice,
+        subscription_id="sub_guard_bind_b",
+        customer_id="cus_guard_bind_b",
+    )
+    remote.subscriptions[healthy["id"]] = healthy
+    bind_event = _event(
+        "checkout.session.completed",
+        healthy,
+        event_id="evt_guard_bind_b",
+        created=int(NOW.timestamp()) + 30,
+    )
+    bind_event["data"]["object"] = {
+        "id": "cs_guard_bind_b",
+        "client_reference_id": str(practice.id),
+        "subscription": healthy["id"],
+    }
+    assert stripe_billing.apply_stripe_event(bind_event)
+    practice.refresh()
+    assert practice.stripe_subscription_id == healthy["id"]
+    assert practice.subscription_status == "active"
+    assert practice.late_checkout_refused_at is None
+
+    # Pending Checkout for refused sub A would otherwise reach the sticky branch;
+    # the belonging assert must raise first and leave B intact.
+    practice.stripe_checkout_session_id = "cs_guard_late_a"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    late_a = _event(
+        "checkout.session.completed",
+        refused_sub,
+        event_id="evt_guard_late_a",
+        created=int(NOW.timestamp()) + 90,
+    )
+    late_a["data"]["object"] = {
+        "id": "cs_guard_late_a",
+        "client_reference_id": str(practice.id),
+        "subscription": refused_sub["id"],
+    }
+    with pytest.raises(
+        stripe_billing.StripeStateInvalid,
+        match="already bound to another subscription",
+    ):
+        stripe_billing.apply_stripe_event(late_a)
+
+    practice.refresh()
+    assert practice.stripe_subscription_id == healthy["id"]
+    assert practice.subscription_status == "active"
+    assert practice.late_checkout_refused_at is None
+
+
+def test_successful_authoritative_bind_clears_late_checkout_refused_at(
+    remote: FakeStripe,
+):
+    """A healthy bind after a prior refuse clears the durable refuse marker."""
+
+    practice = _practice()
+    refused_event, refused_sub = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_clear_refuse",
+        subscription_id="sub_clear_refuse",
+        event_id="evt_clear_refuse",
+    )
+    remote.subscriptions[refused_sub["id"]] = refused_sub
+    stripe_billing.apply_stripe_event(refused_event)
+    practice.refresh()
+    assert practice.late_checkout_refused_at is not None
+    assert practice.subscription_status == "invalid"
+
+    # Clear ownerless gate so a new Checkout can bind (transfer is out of scope
+    # here; only the bind clear is under test).
+    practice.owner_reassignment_needed_at = None
+    practice.stripe_checkout_session_id = "cs_clear_bind"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    healthy = _subscription(
+        practice,
+        subscription_id="sub_clear_bind",
+        customer_id="cus_clear_bind",
+    )
+    remote.subscriptions[healthy["id"]] = healthy
+    bind_event = _event(
+        "checkout.session.completed",
+        healthy,
+        event_id="evt_clear_bind",
+        created=int(NOW.timestamp()) + 30,
+    )
+    bind_event["data"]["object"] = {
+        "id": "cs_clear_bind",
+        "client_reference_id": str(practice.id),
+        "subscription": healthy["id"],
+    }
+    assert stripe_billing.apply_stripe_event(bind_event)
+    practice.refresh()
+    assert practice.stripe_subscription_id == healthy["id"]
+    assert practice.subscription_status == "active"
+    assert practice.late_checkout_refused_at is None
+
+
+@pytest.mark.parametrize("status", ["trialing", "incomplete"])
+def test_late_checkout_refund_audit_reason_avoids_charged_for_unpaid_status(
+    remote: FakeStripe, status: str
+):
+    """Trialling / incomplete late Checkout must not claim Stripe charged."""
+
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id=f"cs_after_delete_{status}",
+        subscription_id=f"sub_after_delete_{status}",
+        event_id=f"evt_after_delete_{status}",
+    )
+    subscription["status"] = status
+    if status == "trialing":
+        subscription["trial_start"] = int(NOW.timestamp())
+        subscription["trial_end"] = int((NOW + timedelta(days=14)).timestamp())
+        subscription["metadata"]["trial_clock"] = (
+            stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+        )
+        subscription["metadata"]["trial_days"] = "14"
+        practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+        practice.save()
+    remote.subscriptions[subscription["id"]] = subscription
+
+    stripe_billing.apply_stripe_event(event)
+
+    refund = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_refund_needed"
+    )
+    assert refund is not None
+    assert "charged" not in refund.reason.lower()
+    assert "completed after owner self-delete" in refund.reason
+
+
+def test_late_checkout_refund_audit_reason_keeps_charged_for_active(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_after_delete_active_wording",
+        subscription_id="sub_after_delete_active_wording",
+        event_id="evt_after_delete_active_wording",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.apply_stripe_event(event)
+    refund = PracticeAccessAudit.get(
+        practice_id=practice.id, action="stripe_refund_needed"
+    )
+    assert refund is not None
+    assert "charged" in refund.reason.lower()
+
+
+def test_apply_authoritative_subscription_sets_lock_timeout(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Practice FOR UPDATE waits are capped with SET LOCAL lock_timeout."""
+
+    from sqlalchemy.orm import Session as SASession
+
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_lock_timeout"
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    subscription = _subscription(practice, subscription_id="sub_lock_timeout")
+    remote.subscriptions[subscription["id"]] = subscription
+
+    executed: list[str] = []
+    real_execute = SASession.execute
+
+    def tracking_execute(self, statement, *args, **kwargs):
+        executed.append(str(getattr(statement, "text", statement)))
+        return real_execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(SASession, "execute", tracking_execute)
+
+    event = _event(
+        "checkout.session.completed",
+        subscription,
+        event_id="evt_lock_timeout",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"] = {
+        "id": "cs_lock_timeout",
+        "client_reference_id": str(practice.id),
+        "subscription": subscription["id"],
+    }
+    assert stripe_billing.apply_stripe_event(event)
+    assert any(
+        "lock_timeout" in sql and stripe_billing._STATE_APPLY_LOCK_TIMEOUT in sql
+        for sql in executed
+    )
+
+
+def test_late_checkout_audit_integrity_error_reselects_existing_row(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Unique-index race: IntegrityError then re-select finds the winner."""
+
+    from sqlalchemy.orm import Session as SASession
+
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_ie_reselect",
+        subscription_id="sub_ie_reselect",
+        event_id="evt_ie_reselect",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    document_reference = f"stripe-subscription:{subscription['id']}"
+
+    real_begin_nested = SASession.begin_nested
+    real_flush = SASession.flush
+    planted: set[str] = set()
+
+    def planting_begin_nested(self):
+        # First select already returned None. Plant the winner in the outer
+        # transaction so savepoint rollback leaves it visible to re-select.
+        for action in (
+            "stripe_checkout_follow_up_required",
+            "stripe_refund_needed",
+        ):
+            if action in planted:
+                continue
+            planted.add(action)
+            self.add(
+                PracticeAccessAudit(
+                    practice_id=practice.id,
+                    action=action,
+                    operator_ref="system:preseed-race",
+                    reason="concurrent winner",
+                    effective_at=NOW,
+                    document_reference=document_reference,
+                )
+            )
+            real_flush(self)
+            break
+        return real_begin_nested(self)
+
+    def flush_fail_billing_audit(self, objects=None):
+        for obj in list(self.new):
+            if (
+                isinstance(obj, PracticeAccessAudit)
+                and obj.operator_ref == "system:stripe-billing"
+                and obj.document_reference == document_reference
+            ):
+                raise IntegrityError(
+                    "synthetic unique race",
+                    params=None,
+                    orig=Exception("unique_violation"),
+                )
+        return real_flush(self, objects)
+
+    monkeypatch.setattr(SASession, "begin_nested", planting_begin_nested)
+    monkeypatch.setattr(SASession, "flush", flush_fail_billing_audit)
+
+    stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    with get_session() as session:
+        follow_ups = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_checkout_follow_up_required",
+                PracticeAccessAudit.document_reference == document_reference,
+            )
+        ).all()
+        refunds = session.exec(
+            select(PracticeAccessAudit).where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action == "stripe_refund_needed",
+                PracticeAccessAudit.document_reference == document_reference,
+            )
+        ).all()
+    assert len(follow_ups) == 1
+    assert follow_ups[0].operator_ref == "system:preseed-race"
+    assert len(refunds) == 1
+    assert refunds[0].operator_ref == "system:preseed-race"
+
+
+def test_late_checkout_audit_integrity_error_reraises_when_no_row(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """IntegrityError with no surviving row must not be swallowed."""
+
+    from sqlalchemy.orm import Session as SASession
+
+    practice = _practice()
+    event, subscription = _late_checkout_after_owner_self_delete_event(
+        practice,
+        session_id="cs_ie_reraise",
+        subscription_id="sub_ie_reraise",
+        event_id="evt_ie_reraise",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    document_reference = f"stripe-subscription:{subscription['id']}"
+
+    real_flush = SASession.flush
+
+    def flush_fail_billing_audit(self, objects=None):
+        for obj in list(self.new):
+            if (
+                isinstance(obj, PracticeAccessAudit)
+                and obj.operator_ref == "system:stripe-billing"
+                and obj.document_reference == document_reference
+            ):
+                raise IntegrityError(
+                    "synthetic integrity failure",
+                    params=None,
+                    orig=Exception("other_integrity"),
+                )
+        return real_flush(self, objects)
+
+    monkeypatch.setattr(SASession, "flush", flush_fail_billing_audit)
+
+    with pytest.raises(IntegrityError, match="synthetic integrity failure"):
+        stripe_billing.apply_stripe_event(event)
 
 
 def test_late_checkout_follow_up_insert_survives_unique_race(
