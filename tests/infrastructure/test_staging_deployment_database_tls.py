@@ -188,7 +188,10 @@ class StagingDatabaseTlsTests(unittest.TestCase):
     ) -> None:
         staging = (ROOT / ".env.staging.backend").read_text()
         self.assertIn(
-            "if ! DATABASE_URL=$(python scripts/staging_deployment_database_tls.py); then\n\treturn 1\nfi\nexport DATABASE_URL",
+            "if ! DATABASE_URL=$(python scripts/staging_deployment_database_tls.py); then\n"
+            '\techo "guard=staging_deployment_database_tls" >&2\n'
+            '\techo "config_key=DATABASE_URL" >&2\n'
+            "\treturn 1\nfi\nexport DATABASE_URL",
             staging,
         )
         self.assertGreater(

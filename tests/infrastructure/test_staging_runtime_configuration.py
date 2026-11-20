@@ -76,13 +76,18 @@ def test_preservation_inputs_are_an_explicit_complete_pair(mode, fingerprint, ac
     assert (result.returncode == 0) == accepted
 
 
-def test_resolver_runs_once_and_does_not_emit_arbitrary_secret_errors(tmp_path):
+def _config_load_block() -> str:
     source = DEPLOY.read_text()
     start = source.index("CONFIGURATION_STATUS=0\n")
-    block = source[start : source.index("if ! printf '%s'", start)]
+    return source[start : source.index("if ! printf '%s'", start)]
+
+
+def test_resolver_runs_once_and_does_not_emit_arbitrary_secret_errors(tmp_path):
+    block = _config_load_block()
     calls = tmp_path / "resolver-calls"
     program = f"""
 REPOSITORY_ROOT={shlex.quote(str(ROOT))}
+PYTHON_BIN={shlex.quote(sys.executable)}
 just() {{
     printf 'called\\n' >> {shlex.quote(str(calls))}
     printf 'export AZURE_OPENAI_API_KEY=synthetic-new-secret-never-log\\n' >&2
@@ -99,9 +104,112 @@ just() {{
     )
     assert result.returncode == 1
     assert calls.read_text() == "called\n"
-    assert result.stdout == "Failed to load staging deployment configuration.\n"
+    assert result.stdout == (
+        "Failed to load staging deployment configuration: "
+        "reason=unclassified key=AZURE_OPENAI_API_KEY\n"
+    )
     assert result.stderr == ""
     assert "synthetic-new-secret" not in result.stdout
+    assert "sk_test_" not in result.stdout
+    assert "op://" not in result.stdout
+
+
+@pytest.mark.parametrize("resolver_succeeds", [True, False])
+def test_config_stderr_temp_dir_is_removed_after_success_and_failure(
+    tmp_path, resolver_succeeds
+):
+    block = _config_load_block()
+    work = tmp_path / ("ok" if resolver_succeeds else "fail")
+    work.mkdir()
+    fake_just = "printf '{}'" if resolver_succeeds else "return 1"
+    program = f"""
+REPOSITORY_ROOT={shlex.quote(str(ROOT))}
+PYTHON_BIN={shlex.quote(sys.executable)}
+just() {{ {fake_just}; }}
+{block}
+"""
+    result = subprocess.run(
+        ["bash", "-c", program],
+        env={**_environment(), "TMPDIR": str(work)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == (0 if resolver_succeeds else 1)
+    leftovers = [path for path in work.iterdir()]
+    assert leftovers == []
+    assert "sk_test_" not in result.stdout + result.stderr
+    assert "op://" not in result.stdout + result.stderr
+
+
+def test_classifier_child_does_not_see_resolver_credentials(tmp_path):
+    block = _config_load_block()
+    probe = tmp_path / "classifier-env.json"
+    stub = tmp_path / "python-stub"
+    credentials = (
+        "OP_SERVICE_ACCOUNT_TOKEN",
+        "RECALL_WEBHOOK_SECRET",
+        "RECALL_API_KEY_INPUT",
+    )
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "if any('classify_staging_deployment_config_failure.py' in arg "
+        "for arg in sys.argv):\n"
+        f"    json.dump({{name: name in os.environ for name in {credentials!r}}}, "
+        f"open({str(probe)!r}, 'w'))\n"
+        "    print('reason=unclassified')\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit('unexpected python-stub invocation')\n"
+    )
+    stub.chmod(0o755)
+    program = f"""
+REPOSITORY_ROOT={shlex.quote(str(ROOT))}
+PYTHON_BIN={shlex.quote(str(stub))}
+just() {{ return 1; }}
+{block}
+"""
+    result = subprocess.run(
+        ["bash", "-c", program],
+        env=_environment()
+        | {name: "synthetic-resolver-credential-never-log" for name in credentials},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert probe.exists()
+    assert json.loads(probe.read_text()) == {name: False for name in credentials}
+    assert "synthetic-resolver-credential" not in result.stdout + result.stderr
+    assert result.stdout == (
+        "Failed to load staging deployment configuration: reason=unclassified\n"
+    )
+
+
+@pytest.mark.parametrize("resolver_succeeds", [True, False])
+def test_config_block_restores_preexisting_exit_trap(tmp_path, resolver_succeeds):
+    block = _config_load_block()
+    sentinel = tmp_path / "exit-trap-fired"
+    fake_just = "printf '{}'" if resolver_succeeds else "return 1"
+    program = f"""
+REPOSITORY_ROOT={shlex.quote(str(ROOT))}
+PYTHON_BIN={shlex.quote(sys.executable)}
+trap {shlex.quote(f"touch {sentinel}")} EXIT
+just() {{ {fake_just}; }}
+{block}
+"""
+    result = subprocess.run(
+        ["bash", "-c", program],
+        env=_environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == (0 if resolver_succeeds else 1)
+    assert sentinel.exists()
 
 
 def _function(source: str, name: str) -> str:
