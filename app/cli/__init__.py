@@ -196,6 +196,63 @@ def ensure_staging_synthetic_preview_appointment(
     )
 
 
+@app.command("ensure-staging-zoom-join-test-appointments")
+def ensure_staging_zoom_join_test_appointments_command(
+    run_date: str = typer.Option(
+        "2026-11-17",
+        help="Calendar day baked into external_id zoom-synthetic-join-<date>:{1..4}.",
+    ),
+    start_time: datetime | None = typer.Option(
+        None,
+        help=(
+            "Optional first appointment instant (UTC). Defaults to the next "
+            "whole hour UTC plus one hour; later slots are hourly."
+        ),
+    ),
+    confirm_staging_only: bool = typer.Option(
+        False,
+        "--confirm-staging-only",
+        help="Confirm this command is targeting the staging deployment only.",
+    ),
+    confirm_no_real_patient_data: bool = typer.Option(
+        False,
+        "--confirm-no-real-patient-data",
+        help="Confirm the command must create fixed synthetic data only.",
+    ),
+) -> None:
+    """Create or find four synthetic Zoom join-test appointments for lab A."""
+
+    from app.services.staging_zoom_join_test_appointments import (
+        StagingZoomJoinTestError,
+        ensure_staging_zoom_join_test_appointments,
+    )
+
+    if not confirm_staging_only or not confirm_no_real_patient_data:
+        typer.echo(
+            "Provisioning refused: --confirm-staging-only and "
+            "--confirm-no-real-patient-data are required.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    try:
+        with global_session():
+            result = ensure_staging_zoom_join_test_appointments(
+                run_date=run_date,
+                start_time=start_time,
+            )
+    except StagingZoomJoinTestError as exc:
+        typer.echo(f"Provisioning refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    for item in result.appointments:
+        state = "created" if item.created else "exists"
+        typer.echo(
+            f"{state} appointment_id={item.appointment_id} "
+            f"patient_id={item.patient_id} external_id={item.external_id}"
+        )
+
+
 @app.command("provision-athena-preview-record")
 def provision_athena_preview_record(
     doctor_id: str = typer.Option(...),
