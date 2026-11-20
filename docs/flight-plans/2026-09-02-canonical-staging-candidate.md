@@ -532,6 +532,39 @@ negative boundary before the gate can pass.
   owner records the duration before dispatch; it is not shortened after seeing
   results.
 
+## Staging candidate deploy (deploy_staging_candidate.yml): fingerprint input and re-dispatch
+
+1. The `staging_identity_fingerprints_sha256` input
+   (`.github/workflows/deploy_staging_candidate.yml:28-31`) must be computed with
+   the same logic the workflow later checks: shell function
+   `build_configuration_evidence` in `infra-staging/deploy.sh:502`, which builds
+   per-field digests and the set hash at `infra-staging/deploy.sh:554-562`. Any
+   other computation fails the deploy boundary with
+   `staging_identity_fingerprint_set_mismatch`
+   (`infra-staging/deploy.sh:567-568`).
+2. Once a candidate SHA's tag has been published to the registry, a re-dispatch
+   of the same candidate is refused at step
+   `Publish candidate SHA tag and resolve immutable digest`
+   (`.github/workflows/deploy_staging_candidate.yml:867`) by design: when the tag
+   already exists outside recovery mode, the step exits rather than overwrite
+   (`.github/workflows/deploy_staging_candidate.yml:900-902`). Optional
+   `publication_recovery_json`
+   (`.github/workflows/deploy_staging_candidate.yml:48-51`) is checked only by
+   `scripts/verify_staging_publication_recovery.py`
+   (`.github/workflows/deploy_staging_candidate.yml:198`); that script accepts
+   only its exact allowlisted runs (module constants and `READER039` at
+   `scripts/verify_staging_publication_recovery.py:19-24` and
+   `scripts/verify_staging_publication_recovery.py:75-77`, selected in `main` at
+   `scripts/verify_staging_publication_recovery.py:727-731`) and otherwise exits
+   `canonical_publication_recovery_refused`
+   (`scripts/verify_staging_publication_recovery.py:787`). It is not a general
+   retry path. To retry, deploy a new candidate SHA.
+3. Do not delete or overwrite registry tags to retry. Recovery verification
+   itself performs no tag push, overwrite, or deletion
+   (`.github/workflows/deploy_staging_candidate.yml:894`); ordinary publication
+   refuses overwrite by design
+   (`.github/workflows/deploy_staging_candidate.yml:900-902`).
+
 ## Completion
 
 - The outcome is complete only when the workflow change is merged and reviewed,
