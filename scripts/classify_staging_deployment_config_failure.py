@@ -29,6 +29,16 @@ REASON_CODES = frozenset(
     }
 )
 
+# Exact guard= names emitted by .env.staging.backend failure branches only.
+ALLOWED_GUARDS = frozenset(
+    {
+        "staging_deployment_database_tls",
+        "core_cab_runtime_config",
+        "stripe_billing_item",
+        "staging_recall_api_key_live_guard",
+    }
+)
+
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,80}$")
 KEY_TOKEN_RE = re.compile(r"\b([A-Z][A-Z0-9_]{1,80})\b")
 CONFIG_KEY_MARKER_RE = re.compile(
@@ -158,10 +168,19 @@ def _extract_key(stderr: str, allowed: frozenset[str]) -> str | None:
     return None
 
 
+def _extract_guard_marker(stderr: str) -> str | None:
+    """Return the last guard= marker value, if any."""
+    marker = None
+    for match in GUARD_MARKER_RE.finditer(stderr):
+        marker = match.group(1)
+    return marker
+
+
 def _extract_guard(stderr: str) -> str | None:
-    marker = GUARD_MARKER_RE.search(stderr)
+    """Return an allowlisted guard name from the last marker or text heuristics."""
+    marker = _extract_guard_marker(stderr)
     if marker is not None:
-        return marker.group(1)
+        return marker if marker in ALLOWED_GUARDS else None
     lowered = stderr.lower()
     if "core cab" in lowered or "core_cab" in lowered or "invalid_core_cab" in lowered:
         return "core_cab_runtime_config"
@@ -182,7 +201,7 @@ def classify(stderr: str, allowed_keys: frozenset[str]) -> str:
         return "reason=unclassified"
 
     key = _extract_key(stderr, allowed_keys)
-    guard_marker = GUARD_MARKER_RE.search(stderr)
+    guard_marker = _extract_guard_marker(stderr)
     guard = _extract_guard(stderr)
 
     # Explicit failure markers win over heuristic op:// / CLI text matching so
@@ -212,7 +231,7 @@ def classify(stderr: str, allowed_keys: frozenset[str]) -> str:
 
     parts = [f"reason={reason}"]
     if reason == "guard_failed":
-        if guard is not None and re.fullmatch(r"[a-z][a-z0-9_]{1,80}", guard):
+        if guard is not None and guard in ALLOWED_GUARDS:
             parts.append(f"guard={guard}")
     elif key is not None:
         parts.append(f"key={key}")

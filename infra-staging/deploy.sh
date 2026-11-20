@@ -332,8 +332,11 @@ fi
 # On failure, capture resolver stderr only long enough to classify a closed
 # reason code; never echo the captured text, values, tokens, or op:// ids.
 CONFIGURATION_STATUS=0
-CONFIGURATION_STDERR_DIR=$(mktemp -d)
-chmod 700 "$CONFIGURATION_STDERR_DIR"
+CONFIGURATION_STDERR_DIR=$(mktemp -d) || CONFIGURATION_STDERR_DIR=
+if [[ -z "${CONFIGURATION_STDERR_DIR}" || ! -d "${CONFIGURATION_STDERR_DIR}" ]]; then
+	echo "Failed to load staging deployment configuration: reason=unclassified"
+	exit 1
+fi
 CONFIGURATION_STDERR_FILE="$CONFIGURATION_STDERR_DIR/stderr"
 # Preserve any pre-existing EXIT trap (tests and later deployer handlers).
 CONFIGURATION_STDERR_PREV_TRAP=$(trap -p EXIT || true)
@@ -345,7 +348,9 @@ ENV_JSON=$(
 # Drop resolver capabilities before any later child, including the classifier.
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET RECALL_API_KEY_INPUT
 _restore_configuration_stderr_trap() {
-	rm -rf -- "${CONFIGURATION_STDERR_DIR:-}"
+	if [[ -n "${CONFIGURATION_STDERR_DIR:-}" ]]; then
+		rm -rf -- "$CONFIGURATION_STDERR_DIR"
+	fi
 	unset CONFIGURATION_STDERR_DIR CONFIGURATION_STDERR_FILE
 	if [[ -n "${CONFIGURATION_STDERR_PREV_TRAP:-}" ]]; then
 		eval "$CONFIGURATION_STDERR_PREV_TRAP"

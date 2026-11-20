@@ -177,6 +177,35 @@ def test_guard_failed_emits_stable_guard_name(tmp_path):
     )
 
 
+def test_last_allowlisted_guard_marker_wins(tmp_path):
+    stderr = (
+        "guard=stripe_billing_item\n"
+        "guard=core_cab_runtime_config\n"
+        "sk_test_SYNTHETIC123\n"
+    )
+    result = _classify_file(tmp_path, stderr)
+    assert result.stdout.strip() == (
+        "reason=guard_failed guard=core_cab_runtime_config"
+    )
+
+
+def test_hostile_guard_marker_never_echoed(tmp_path):
+    hostile = "nb3ek7syndz57cezc3gkfi7eli"
+    stderr = (
+        f"guard={hostile}\n"
+        "Core CAB runtime configuration is invalid.\n"
+        "sk_test_SYNTHETIC123\n"
+        "op://vault/item/field\n"
+    )
+    result = _classify_file(tmp_path, stderr)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "reason=guard_failed"
+    assert hostile not in result.stdout
+    assert hostile not in result.stderr
+    assert "sk_test_SYNTHETIC123" not in result.stdout
+    assert "op://" not in result.stdout
+
+
 def test_module_classify_matches_cli_closed_set():
     allowed = MODULE["_allowed_keys"](ENV_FILE)
     for reason, sample in SYNTHETIC_SAMPLES.items():
