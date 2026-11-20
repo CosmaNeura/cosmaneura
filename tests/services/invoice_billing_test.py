@@ -13,7 +13,7 @@ from app.cli import app as cli_app
 from app.services import invoice_billing as invoice
 from app.services import stripe_billing as stripe
 
-from activemodel.session_manager import get_session
+from activemodel.session_manager import SessionManager, get_session
 from app.models.practice import Practice
 from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.practice_invoice_billing import PracticeInvoiceBilling
@@ -248,6 +248,7 @@ def test_bill_by_invoice_refuses_bound_marker_or_open_checkout_practice(
     assert _access(practice) == before
 
 
+@pytest.mark.committed_database
 def test_reservation_persists_before_first_post_and_refuses_retry(
     practice, invoice_remote, monkeypatch
 ):
@@ -255,7 +256,10 @@ def test_reservation_persists_before_first_post_and_refuses_retry(
     monkeypatch.setattr(stripe, "_request", outage)
     with pytest.raises(RuntimeError):
         _issue(practice)
-    with get_session() as session:
+    from sqlmodel import Session
+
+    # An independent connection only sees a row that was really committed.
+    with Session(SessionManager.get_instance().get_engine()) as session:
         row = session.get(PracticeInvoiceBilling, practice.id)
     assert row is not None and row.stripe_customer_id is None
     assert outage.call_count == 1 and invoice.invoice_billing_open(row)
@@ -313,3 +317,60 @@ def test_invoice_seat_change_updates_only_invoice_record(
         assert not invoice.sync_invoice_subscription_quantity(practice.id)
     assert logs[-1]["event"] == ALERT
     assert _access(practice) == before and practice.entitled()
+
+
+def _card_checkout(practice):
+    return stripe.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings",
+        cancel_url="https://app.example/settings",
+        now=NOW,
+    )
+
+
+def test_open_invoice_lane_refuses_card_checkout_at_both_call_sites(
+    invoice_remote,
+):
+    practice = _practice()
+    _row(practice)
+    with pytest.raises(stripe.StripeManagedBilling):
+        _card_checkout(practice)
+    with pytest.raises(stripe.StripeManagedBilling):
+        stripe._checkout_request_snapshot(
+            practice, {}, current=NOW, verified_binding=None
+        )
+    assert invoice_remote == []
+
+
+@pytest.mark.parametrize(
+    ("status", "managed"),
+    [
+        (None, True),
+        ("active", True),
+        ("canceled", False),
+        ("incomplete_expired", False),
+    ],
+)
+def test_only_an_open_invoice_row_manages_card_checkout(status, managed):
+    practice = _practice()
+    with get_session() as session:
+        assert stripe._invoice_checkout_is_managed(session, practice) is False
+    row = _row(practice)
+    row.subscription_status = status
+    row.save()
+    with get_session() as session:
+        assert stripe._invoice_checkout_is_managed(session, practice) is managed
+
+
+def test_bill_by_invoice_defaults_to_dry_run(practice, invoice_remote):
+    before = _access(practice)
+    assert invoice.bill_by_invoice(practice, operator_ref="test:F1", reason="x") is None
+    args = ["bill-by-invoice", "--practice-id", str(practice.id)]
+    args += ["--operator-ref", "test:F1", "--reason", "Synthetic"]
+    env = {"NO_COLOR": "1", "TERM": "dumb"}
+    result = CliRunner().invoke(cli_app, args, env=env, color=False)
+    assert result.exit_code == 0 and "Dry run: no changes" in result.output
+    assert invoice_remote == []
+    assert PracticeInvoiceBilling.get(practice_id=practice.id) is None
+    assert _access(practice) == before

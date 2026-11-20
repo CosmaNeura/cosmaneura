@@ -32,6 +32,9 @@ class PracticeAccessAction(str, Enum):
     doctor_identity_rebound = "doctor_identity_rebound"
     pilot_practice_snapshot_bound = "pilot_practice_snapshot_bound"
     doctor_account_closed = "doctor_account_closed"
+    doctor_self_deleted = "doctor_self_deleted"
+    stripe_checkout_follow_up_required = "stripe_checkout_follow_up_required"
+    stripe_refund_needed = "stripe_refund_needed"
     practice_member_access_revoked = "practice_member_access_revoked"
     practice_member_access_restored = "practice_member_access_restored"
 
@@ -56,6 +59,25 @@ class PracticeAccessAudit(
             postgresql_where=sa.text(
                 "action = 'provider_practice_bootstrapped' "
                 "AND document_reference IS NOT NULL"
+            ),
+        ),
+        sa.Index(
+            "uq_practice_access_audit_stripe_checkout_follow_up",
+            "practice_id",
+            "document_reference",
+            unique=True,
+            postgresql_where=sa.text(
+                "action = 'stripe_checkout_follow_up_required' "
+                "AND document_reference IS NOT NULL"
+            ),
+        ),
+        sa.Index(
+            "uq_practice_access_audit_stripe_refund_needed",
+            "practice_id",
+            "document_reference",
+            unique=True,
+            postgresql_where=sa.text(
+                "action = 'stripe_refund_needed' AND document_reference IS NOT NULL"
             ),
         ),
     )

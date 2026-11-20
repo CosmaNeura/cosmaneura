@@ -44,7 +44,12 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
 
     backend = jobs["app"]
     assert backend["name"] == "Backend"
-    assert backend["needs"] == ["backend-quality", "backend-tests", "ci-mode"]
+    assert backend["needs"] == [
+        "backend-quality",
+        "backend-tests",
+        "ci-mode",
+        "scribe-runtime-real-build",
+    ]
     gate = next(
         step
         for step in backend["steps"]
@@ -52,13 +57,17 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
     )
     assert gate["run"] == (
         'if [[ "$BACKEND_QUALITY_RESULT" != "success" '
-        '|| "$BACKEND_TESTS_RESULT" != "success" ]]; then\n'
-        '  if [[ "$BACKEND_TESTS_RESULT" == "skipped" ]]; then\n'
+        '|| "$BACKEND_TESTS_RESULT" != "success" '
+        '|| "$SCRIBE_RUNTIME_REAL_BUILD_RESULT" != "success" ]]; then\n'
+        '  if [[ "$BACKEND_TESTS_RESULT" == "skipped" '
+        '|| "$SCRIBE_RUNTIME_REAL_BUILD_RESULT" == "skipped" ]]; then\n'
         '    echo "::error::Light draft run is red by design '
         '(backend-tests skipped). Add the ci:full label for a full run."\n'
         "  else\n"
         '    echo "::error::Backend prerequisites did not all succeed '
         '(quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."\n'
+        '    echo "::error::Scribe runtime real build result: '
+        '$SCRIBE_RUNTIME_REAL_BUILD_RESULT."\n'
         "  fi\n"
         "  exit 1\n"
         "fi\n"
@@ -83,4 +92,10 @@ def test_draft_light_ci_mode_and_fail_closed_backend_gate() -> None:
     for job_id in MASTER_JOB_IDS:
         assert job_id in jobs
         assert jobs[job_id]["name"] == MASTER_JOB_NAMES[job_id]
-    assert set(jobs) == set(MASTER_JOB_IDS) | {"ci-mode"}
+    assert set(jobs) == set(MASTER_JOB_IDS) | {"ci-mode", "scribe-runtime-real-build"}
+    assert jobs["scribe-runtime-real-build"]["needs"] == ["ci-mode"]
+    assert (
+        jobs["scribe-runtime-real-build"]["if"]
+        == "needs.ci-mode.outputs.full != 'false'"
+    )
+    assert jobs["scribe-runtime-real-build"]["runs-on"] == "ubuntu-24.04"

@@ -16,7 +16,7 @@ export type BillingSeatSummary = {
   active_clinicians: number
   billed_seats: number | null
   seat_sync_pending: boolean
-  unit_amount: number
+  unit_amount: number | null
   currency: "usd"
   interval: "month"
 }

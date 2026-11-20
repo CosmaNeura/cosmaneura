@@ -1557,6 +1557,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
             "backend-quality",
             "backend-tests",
             "ci-mode",
+            "scribe-runtime-real-build",
         ]
     else:
         assert aggregator["needs"] == ["backend-quality", "backend-tests"]
@@ -1597,6 +1598,35 @@ def test_backend_aggregator_rejects_every_non_success_dependency(
     environment = os.environ | {
         "BACKEND_QUALITY_RESULT": quality_result,
         "BACKEND_TESTS_RESULT": tests_result,
+        "SCRIBE_RUNTIME_REAL_BUILD_RESULT": "success",
+    }
+    completed = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{command}"],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    assert completed.returncode == expected_status
+
+
+@pytest.mark.parametrize(
+    ("scribe_result", "expected_status"),
+    [("success", 0), ("failure", 1), ("cancelled", 1), ("skipped", 1), ("", 1)],
+)
+def test_pr_backend_aggregator_requires_scribe_runtime_success(
+    scribe_result: str, expected_status: int
+) -> None:
+    aggregator = _workflow(ROOT / ".github/workflows/pull_request_checks.yml")["jobs"][
+        "app"
+    ]
+    command = _named_step(aggregator, "Require every backend prerequisite to succeed")[
+        "run"
+    ]
+    environment = os.environ | {
+        "BACKEND_QUALITY_RESULT": "success",
+        "BACKEND_TESTS_RESULT": "success",
+        "SCRIBE_RUNTIME_REAL_BUILD_RESULT": scribe_result,
     }
     completed = subprocess.run(
         ["bash", "-c", f"set -euo pipefail\n{command}"],

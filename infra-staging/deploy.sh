@@ -627,6 +627,8 @@ SCRIBE_API_ONLY_PUBLIC_VARS=(
 	SCRIBE_CANCELLATION_ENABLED SCRIBE_CANCELLATION_GRACE_DAYS
 	SCRIBE_CANCELLATION_PHI_SCOPE SCRIBE_CANCELLATION_POLICY_SHA256
 )
+# API-only: DELETE /v1/me/account latch. Staging sets true via .env.staging.backend.
+ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)
 API_WORKER_PUBLIC_VARS=(ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED)
 WORKER_ONLY_PUBLIC_VARS=(SESSION_PREP_HEALTH_ALERTS_ENABLED)
 BILLING_SECRET_VARS=(STRIPE_SECRET_KEY)
@@ -698,6 +700,7 @@ configure_workload_contract() {
 		container_secret_vars+=("${CAB_API_ONLY_SECRET_VARS[@]}")
 		container_public_vars+=("${CAB_API_ONLY_PUBLIC_VARS[@]}")
 		container_public_vars+=("${SCRIBE_API_ONLY_PUBLIC_VARS[@]}")
+		container_public_vars+=("${ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS[@]}")
 	fi
 	if [[ "$container_name" == "$API_CONTAINER" || "$container_name" == "$WORKER_CONTAINER" ]]; then
 		container_public_vars+=("${API_WORKER_PUBLIC_VARS[@]}")
@@ -1220,6 +1223,20 @@ done
 			exit 1
 		fi
 	done
+	# MCD / legacy price IDs are acquisition-only. Keep them optional while
+	# billing stays off so staging can deploy with integration maintenance alone.
+	if [[ "$STRIPE_BILLING_ENABLED" == "true" ]]; then
+		for var in STRIPE_MCD_PRICE_ID STRIPE_LEGACY_PRICE_IDS; do
+			if [[ -z "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" ]]; then
+				echo "$var is required when Stripe billing is enabled."
+				exit 1
+			fi
+		done
+		if [[ "$(echo "$ENV_JSON" | jq -r '.STRIPE_MCD_PRICE_ID // empty')" != price_* ]]; then
+			echo "STRIPE_MCD_PRICE_ID has an invalid shape."
+			exit 1
+		fi
+	fi
 fi
 
 if ! RECALL_WEBHOOK_SECRET_INPUT=$(printf '%s' "$ENV_JSON" |
