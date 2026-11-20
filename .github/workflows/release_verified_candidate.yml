@@ -219,6 +219,14 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Admit code-derived schema heads before publish
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_verified_candidate_ops.py admit-schema \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --output "$RUNNER_TEMP/release-artifacts/schema-heads.json"
       - name: Publish scanned image with equivalent Core admission checks
         id: production_digest
         env:
@@ -231,8 +239,12 @@ jobs:
           export SCANNED_IMAGE_ARCHIVE_SHA256=$(tr -d '[:space:]' < \
             "$RUNNER_TEMP/release-artifacts/scanned-production-image.sha256")
           out="$RUNNER_TEMP/release-artifacts/production-image-ref.txt"
+          running_sha=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["running_source_sha"])' \
+            "$RUNNER_TEMP/release-artifacts/schema-heads.json")
           python3 scripts/release_verified_candidate_ops.py publish \
-            --configuration "$config" --source-sha "$CANDIDATE_SHA" --archive "$archive" --output "$out"
+            --configuration "$config" --source-sha "$CANDIDATE_SHA" --archive "$archive" \
+            --output "$out" --running-source-sha "$running_sha" \
+            --schema-output "$RUNNER_TEMP/release-artifacts/schema-heads.json"
           image=$(tr -d '[:space:]' < "$out")
           if [[ ! "$image" =~ ^cosmaneuraprodregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::Published production image did not resolve to an immutable digest."; exit 1
@@ -240,9 +252,15 @@ jobs:
           echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
       - name: Record current production digests and revisions before deploy
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
+          set -euo pipefail
+          running_sha=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["running_source_sha"])' \
+            "$RUNNER_TEMP/release-artifacts/schema-heads.json")
           python3 scripts/release_verified_candidate_ops.py record-baseline \
-            --baseline "$RUNNER_TEMP/release-artifacts/production-runtime-baseline.json"
+            --baseline "$RUNNER_TEMP/release-artifacts/production-runtime-baseline.json" \
+            --candidate-sha "$CANDIDATE_SHA" --running-source-sha "$running_sha"
       - name: Deploy the pinned production digest to Azure
         id: deploy
         env:
@@ -283,6 +301,7 @@ jobs:
         with:
           name: production-release-evidence-${{ inputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/release-artifacts/schema-heads.json
             ${{ runner.temp }}/release-artifacts/production-runtime-baseline.json
             ${{ runner.temp }}/release-artifacts/production-runtime-evidence.json
           if-no-files-found: warn

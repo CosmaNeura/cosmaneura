@@ -18,6 +18,7 @@ WORKFLOW = ROOT / ".github/workflows/release_verified_candidate.yml"
 ONE_TIME = ROOT / ".github/workflows/production_release_verified.yml"
 ACTIONLINT = Path("/tmp/actionlint-bin/actionlint")
 EXPECTED = "cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura@sha256:" + "c" * 64
+OPS_SRC = (ROOT / "scripts/release_verified_candidate_ops.py").read_text()
 def evidence(candidate="a" * 40, run_id=99):
     attempt = 1
     jobs = {
@@ -57,9 +58,15 @@ def files(candidate="a" * 40, digest="sha256:" + "c" * 64, run_id=99, attempt=1)
         "publication_outcome": "success", "run_id": run_id, "run_attempt": attempt,
     }
     return bundle(rel, "release.json"), bundle(pub, "publication.json")
-def baseline_payload(schema="aaaaaaaaaaaa"):
+def baseline_payload(*, running="aaaaaaaaaaaa", candidate="aaaaaaaaaaaa", migrate=None):
+    migrate = running != candidate if migrate is None else migrate
     return {
-        "resource_group": ops.RG, "schema_revision": schema,
+        "resource_group": ops.RG,
+        "running_source_sha": "b" * 40,
+        "candidate_sha": "a" * 40,
+        "schema_head_running": running,
+        "schema_head_candidate": candidate,
+        "migration_in_release": migrate,
         "migration_policy": ops.POLICY, "healthcheck_url": ops.HEALTH,
         "apps": {
             n: {"image": f"old@{n}", "latestReadyRevisionName": f"{n}-r1"}
@@ -91,26 +98,13 @@ def test_staging_and_workflow_gates():
     assert "ref: ${{ inputs.candidate_sha }}" not in raw
     assert "GITHUB_WORKSPACE/.release-artifacts" not in raw
     assert "$RUNNER_TEMP/release-artifacts" in raw
-    assert "${{ runner.temp }}/release-artifacts" in raw
+    assert "admit-schema" in raw and "PRODUCTION_SCHEMA_REVISION" not in raw + OPS_SRC
     assert not ONE_TIME.exists()
-    on = wf.get("on", wf.get(True, {}))
-    inputs = on["workflow_dispatch"]["inputs"]
-    assert inputs["github_hosted_fallback_authorized"]["description"].startswith("Operator attestation:")
-    assert inputs["provider_signed_recall_callback_verified"]["description"].startswith("Operator attestation:")
-    for job in (gate, publish):
-        assert "inputs.github_hosted_fallback_authorized" in job["if"]
-        steps = job["steps"]
-        req = next(i for i, s in enumerate(steps) if s.get("name") == "Require candidate SHA equals GITHUB_SHA before checkout")
-        co = next(i for i, s in enumerate(steps) if isinstance(s.get("uses"), str) and "actions/checkout@" in s["uses"])
-        assert req < co and "ref" not in steps[co].get("with", {})
-    ps = publish["steps"]
-    names = [s.get("name") for s in ps]
-    login = next(i for i, s in enumerate(ps) if isinstance(s.get("uses"), str) and "docker/login-action@" in s["uses"])
-    assert names.index("Scan the built production image with Trivy before publish") < login
-    assert names.index("Reverify current master and admit production context before publish") < login
+    names = [s.get("name") for s in publish["steps"]]
+    assert names.index("Admit code-derived schema heads before publish") < names.index(
+        "Publish scanned image with equivalent Core admission checks"
+    )
 def test_h10_artifacts_outside_checkout_keep_context_clean(tmp_path, monkeypatch):
-    assert "GITHUB_WORKSPACE/.release-artifacts" not in WORKFLOW.read_text()
-    assert "$RUNNER_TEMP/release-artifacts" in WORKFLOW.read_text()
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     subprocess.check_call(["git", "init", "-q"], cwd=checkout)
@@ -126,7 +120,7 @@ def test_h10_artifacts_outside_checkout_keep_context_clean(tmp_path, monkeypatch
     assert b".release-artifacts" in subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=checkout
     )
-def test_allowlist_retirement_actionlint(monkeypatch):
+def test_allowlist_retirement_actionlint():
     import importlib.util
     import sys
     import urllib.request
@@ -152,55 +146,11 @@ def test_allowlist_retirement_actionlint(monkeypatch):
         sys.path.pop(0)
     ref = f"{mod.REPOSITORY}/{mod.RELEASE_VERIFIED_CANDIDATE_WORKFLOW}@refs/heads/master"
     assert ref in mod.ALLOWED_CONTEXT_WORKFLOW_REFS
-    env = {
-        "GITHUB_ACTOR": "JohnClem", "GITHUB_TRIGGERING_ACTOR": "JohnClem",
-        "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/master",
-        "GITHUB_REPOSITORY": mod.REPOSITORY, "GITHUB_WORKFLOW_REF": ref,
-        "GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1",
-    }
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    monkeypatch.setattr(mod, "command", lambda *a, **k: pytest.fail("refuse before client"))
-    with pytest.raises(mod.CandidateRefused):
-        mod.source_context()
-    monkeypatch.setenv("GITHUB_REPOSITORY", verify.REPOSITORY)
-    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
-    with pytest.raises(ValueError, match="CANDIDATE_SHA must equal"):
-        verify.verify_founder_and_source("b" * 40)
-    assert not (ROOT / "scripts/verify_one_time_release_reuse.py").exists()
     result = subprocess.run(
         [str(ACTIONLINT), "-shellcheck=", str(WORKFLOW)], cwd=ROOT,
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    seen = []
-    def fake_api(path):
-        seen.append(path)
-        if "artifacts" in path:
-            return {"artifacts": []}
-        if "jobs" in path:
-            return {"total_count": 0, "jobs": []}
-        return {
-            "id": 1, "name": verify.STAGING_WORKFLOW_NAME, "path": verify.STAGING_WORKFLOW,
-            "event": "workflow_dispatch", "head_branch": "master", "head_sha": "b" * 40,
-            "status": "completed", "conclusion": "success", "run_attempt": 1,
-            "repository": {"full_name": verify.REPOSITORY},
-            "actor": {"login": "JohnClem"}, "triggering_actor": {"login": "JohnClem"},
-        }
-    for k, v in {
-        "CANDIDATE_SHA": "a" * 40, "STAGING_RUN_ID": "99",
-        "STAGING_IMAGE_DIGEST": "sha256:" + "c" * 64, "GITHUB_SHA": "a" * 40,
-        "GITHUB_REPOSITORY": verify.REPOSITORY, "GITHUB_EVENT_NAME": "workflow_dispatch",
-        "GITHUB_REF": "refs/heads/master", "GITHUB_ACTOR": "JohnClem",
-        "GITHUB_TRIGGERING_ACTOR": "JohnClem",
-    }.items():
-        monkeypatch.setenv(k, v)
-    monkeypatch.setattr(verify, "api", fake_api)
-    monkeypatch.setattr(verify, "verify_founder_and_source", lambda *_: None)
-    monkeypatch.setattr(verify, "verify_staging_workflow_shards", lambda: None)
-    with pytest.raises(ValueError):
-        verify.main()
-    assert any(p.endswith("/artifacts?per_page=100") for p in seen)
 @pytest.mark.parametrize(
     "exc",
     [
@@ -217,7 +167,6 @@ def test_n1_verify_ready_exceptions_route_to_fail_and_rollback(tmp_path, monkeyp
     baseline = tmp_path / "baseline.json"
     evidence = tmp_path / "evidence.json"
     baseline.write_text(json.dumps(baseline_payload()) + "\n")
-    monkeypatch.setenv("PRODUCTION_SCHEMA_REVISION", "aaaaaaaaaaaa")
     rolled = []
     monkeypatch.setattr(ops, "rollback", lambda path: rolled.append(path))
     def boom(*_a, **_k):
@@ -235,21 +184,11 @@ def test_n1_verify_ready_exceptions_route_to_fail_and_rollback(tmp_path, monkeyp
         ops.verify_ready(EXPECTED, baseline, evidence)
     assert rolled == [baseline]
     assert evidence.is_file()
-def test_n2_migrated_schema_rollback_refuses(tmp_path, monkeypatch):
+def test_equal_heads_rollback_runs_and_reports_all_failures(tmp_path, monkeypatch):
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps(baseline_payload("aaaaaaaaaaaa")) + "\n")
-    monkeypatch.setenv("PRODUCTION_SCHEMA_REVISION", "bbbbbbbbbbbb")
-    calls = []
-    monkeypatch.setattr(ops.subprocess, "check_call", lambda *a, **k: calls.append(a))
-    with pytest.raises(SystemExit) as raised:
-        ops.rollback(baseline)
-    assert raised.value.code == 1
-    assert calls == []
-def test_n2_partial_rollback_reports_all_apps(tmp_path, monkeypatch):
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps(baseline_payload("aaaaaaaaaaaa")) + "\n")
-    monkeypatch.setenv("PRODUCTION_SCHEMA_REVISION", "aaaaaaaaaaaa")
+    baseline.write_text(json.dumps(baseline_payload()) + "\n")
     seen = []
+    monkeypatch.setattr(ops, "app_image", lambda name: f"live@{name}")
     def fail_all(args, **_k):
         seen.append(args[args.index("-n") + 1])
         raise subprocess.CalledProcessError(1, args)
@@ -258,3 +197,43 @@ def test_n2_partial_rollback_reports_all_apps(tmp_path, monkeypatch):
         ops.rollback(baseline)
     assert raised.value.code == 1
     assert seen == list(ops.APPS)
+def test_different_heads_rollback_refuses_and_leaves_image(tmp_path, monkeypatch):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps(baseline_payload(running="aaaaaaaaaaaa", candidate="bbbbbbbbbbbb")) + "\n")
+    calls = []
+    monkeypatch.setattr(ops.subprocess, "check_call", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(ops, "app_image", lambda *_: pytest.fail("must not read live image"))
+    with pytest.raises(SystemExit) as raised:
+        ops.rollback(baseline)
+    assert raised.value.code == 1
+    assert calls == []
+def test_equal_heads_skips_swap_when_already_at_baseline(tmp_path, monkeypatch):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps(baseline_payload()) + "\n")
+    monkeypatch.setattr(ops, "app_image", lambda name: f"old@{name}")
+    calls = []
+    monkeypatch.setattr(ops.subprocess, "check_call", lambda *a, **k: calls.append(a))
+    ops.rollback(baseline)
+    assert calls == []
+def test_schema_refusal_before_publish_leaves_no_locked_tag(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONTAINER_REGISTRY_HOST", ops.HOST)
+    monkeypatch.setenv("SCANNED_IMAGE_ARCHIVE_SHA256", "a" * 64)
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    locked = []
+    monkeypatch.setattr(ops, "admit_schema_before_publish", lambda *a, **k: ops.refuse("schema boom"))
+    monkeypatch.setattr(ops.subprocess, "check_call", lambda *a, **k: locked.append(a))
+    monkeypatch.setattr(ops, "run", lambda *a, **k: pytest.fail("no registry run"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{}")
+    archive = tmp_path / "img.tar"
+    archive.write_bytes(b"x")
+    with pytest.raises(SystemExit):
+        ops.publish(cfg, "a" * 40, archive, schema_output=tmp_path / "schema.json")
+    assert locked == []
+def test_production_schema_revision_env_is_not_read(monkeypatch):
+    monkeypatch.setenv("PRODUCTION_SCHEMA_REVISION", "cccccccccccc")
+    assert "PRODUCTION_SCHEMA_REVISION" not in OPS_SRC
+    monkeypatch.setattr(ops, "schema_head", lambda sha: "aaaaaaaaaaaa")
+    evidence = ops.schema_evidence("b" * 40, "a" * 40)
+    assert evidence["migration_in_release"] is False

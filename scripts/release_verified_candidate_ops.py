@@ -26,6 +26,7 @@ IMAGE, REPO = f"{HOST}/cosmaneura/cosmaneura", "cosmaneura/cosmaneura"
 APPS = ("cosmaneura-prod-app", "cosmaneura-prod-worker", "cosmaneura-prod-scheduler")
 RG, HEALTH = "cosmaneura-prod", "https://app.cosmaneura.com/healthcheck"
 POLICY = "Image rollback restores prior digests/revisions only; Alembic is forward-only."
+REVISION_LABEL = "org.opencontainers.image.revision"
 def refuse(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(1)
@@ -33,18 +34,75 @@ def run(args: list[str]) -> str:
     return subprocess.check_output(args, text=True).strip()
 def az_json(args: list[str]) -> Any:
     return json.loads(run(["az", *args, "--output", "json"]))
-def read_schema_revision() -> str:
-    """Return the live production alembic head (exactly one 12-hex revision)."""
-    pinned = os.environ.get("PRODUCTION_SCHEMA_REVISION")
-    if pinned is not None:
-        pinned = pinned.strip()
-        if not SCHEMA.fullmatch(pinned):
-            refuse("Invalid PRODUCTION_SCHEMA_REVISION.")
-        return pinned
-    refuse("PRODUCTION_SCHEMA_REVISION is required for rollback safety.")
-def publish(config_path: Path, source_sha: str, archive: Path) -> str:
-    if not SHA.fullmatch(source_sha):
-        refuse("Invalid source SHA.")
+def schema_head(sha: str) -> str:
+    if not SHA.fullmatch(sha):
+        refuse("Invalid SHA for schema-head lookup.")
+    from verify_staging_candidate import (  # noqa: E402,I001
+        CandidateVerificationError,
+        _candidate_schema_head,
+    )
+    try:
+        head = _candidate_schema_head(sha, stdout=run)
+    except CandidateVerificationError as exc:
+        refuse(f"Cannot resolve Alembic head at {sha}: {exc}")
+    if not isinstance(head, str) or not SCHEMA.fullmatch(head):
+        refuse(f"Alembic head at {sha} is not a single 12-hex revision.")
+    return head
+def app_image(name: str) -> str:
+    props = az_json(["containerapp", "show", "-n", name, "-g", RG])["properties"]
+    containers = (props.get("template") or {}).get("containers") or []
+    if not containers:
+        refuse(f"No containers on {name}.")
+    image = containers[0].get("image")
+    if not isinstance(image, str) or not image:
+        refuse(f"Missing image on {name}.")
+    return image
+def image_source_revision(image: str) -> str:
+    subprocess.check_call(["docker", "pull", "--quiet", image])
+    inspected = json.loads(run(["docker", "image", "inspect", image]))
+    if not isinstance(inspected, list) or not inspected:
+        refuse(f"Inspect failed for {image}.")
+    rev = ((inspected[0].get("Config") or {}).get("Labels") or {}).get(REVISION_LABEL, "")
+    if not isinstance(rev, str) or not SHA.fullmatch(rev):
+        refuse(f"Image missing {REVISION_LABEL}: {image}")
+    return rev
+def running_source_sha() -> str:
+    found: set[str] = set()
+    for name in APPS:
+        found.add(image_source_revision(app_image(name)))
+    if len(found) != 1:
+        refuse("Production apps disagree on source revision labels.")
+    return found.pop()
+def schema_evidence(running_sha: str, candidate_sha: str) -> dict[str, Any]:
+    running_head = schema_head(running_sha)
+    candidate_head = schema_head(candidate_sha)
+    return {
+        "running_source_sha": running_sha,
+        "candidate_sha": candidate_sha,
+        "schema_head_running": running_head,
+        "schema_head_candidate": candidate_head,
+        "migration_in_release": running_head != candidate_head,
+    }
+def admit_schema_before_publish(
+    candidate_sha: str, *, running_sha: str | None = None
+) -> dict[str, Any]:
+    """Refuse on unreadable heads before any registry tag/lock."""
+    if not SHA.fullmatch(candidate_sha):
+        refuse("Invalid candidate SHA.")
+    resolved = running_sha or running_source_sha()
+    return schema_evidence(resolved, candidate_sha)
+def publish(
+    config_path: Path,
+    source_sha: str,
+    archive: Path,
+    *,
+    running_sha: str | None = None,
+    schema_output: Path | None = None,
+) -> str:
+    # Schema-head refusal happens before push/import/lock so no locked tag remains.
+    evidence = admit_schema_before_publish(source_sha, running_sha=running_sha)
+    if schema_output is not None:
+        schema_output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     if os.environ.get("CONTAINER_REGISTRY_HOST") != HOST:
         refuse("Production registry host drifted.")
     config = core.public_configuration(core.read_json(config_path))
@@ -63,7 +121,7 @@ def publish(config_path: Path, source_sha: str, archive: Path) -> str:
     if not isinstance(image_id, str) or not DIGEST.fullmatch(image_id):
         refuse("Scanned image Id is not an immutable digest.")
     labels = (inspected[0].get("Config") or {}).get("Labels") or {}
-    if labels.get("org.opencontainers.image.revision") != source_sha:
+    if labels.get(REVISION_LABEL) != source_sha:
         refuse("Scanned image revision label mismatch.")
     upload = f"upload-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}-{source_sha}"
     tag = f"candidate-{source_sha}-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
@@ -98,7 +156,13 @@ def publish(config_path: Path, source_sha: str, archive: Path) -> str:
         if attrs.get("writeEnabled") is not False or attrs.get("deleteEnabled") is not False:
             refuse("ACR lock did not disable write/delete.")
     return f"{IMAGE}@{digest}"
-def record_baseline(path: Path) -> None:
+def record_baseline(
+    path: Path, candidate_sha: str, *, running_sha: str | None = None
+) -> None:
+    if not SHA.fullmatch(candidate_sha):
+        refuse("Invalid candidate SHA for baseline.")
+    resolved = running_sha or running_source_sha()
+    schema = schema_evidence(resolved, candidate_sha)
     apps = {}
     for name in APPS:
         props = az_json(["containerapp", "show", "-n", name, "-g", RG])["properties"]
@@ -113,23 +177,25 @@ def record_baseline(path: Path) -> None:
     payload = {
         "resource_group": RG,
         "apps": apps,
-        "schema_revision": read_schema_revision(),
         "migration_policy": POLICY,
         "healthcheck_url": HEALTH,
+        **schema,
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(json.dumps(payload, indent=2, sort_keys=True))
 def rollback(baseline_path: Path) -> None:
     baseline = json.loads(baseline_path.read_text())
-    recorded = baseline.get("schema_revision")
-    if not isinstance(recorded, str) or not SCHEMA.fullmatch(recorded):
-        refuse("Baseline missing a valid schema_revision.")
-    live = read_schema_revision()
-    if live != recorded:
-        refuse(
-            f"Refusing image rollback: schema advanced ({recorded} -> {live}); "
-            "Alembic is forward-only. Human intervention required."
-        )
+    running_head = baseline.get("schema_head_running")
+    candidate_head = baseline.get("schema_head_candidate")
+    if (
+        not isinstance(running_head, str)
+        or not SCHEMA.fullmatch(running_head)
+        or not isinstance(candidate_head, str)
+        or not SCHEMA.fullmatch(candidate_head)
+    ):
+        refuse("Baseline missing code-derived schema heads.")
+    if running_head != candidate_head or baseline.get("migration_in_release") is True:
+        refuse(f"Refusing image rollback: migration in this release ({running_head} -> {candidate_head}); Alembic forward-only; human intervention required.")
     print("ROLLBACK: restoring recorded digests/revisions.", file=sys.stderr)
     print(POLICY, file=sys.stderr)
     failures: list[str] = []
@@ -137,6 +203,13 @@ def rollback(baseline_path: Path) -> None:
         image = state.get("image")
         if not image:
             failures.append(f"{name}: baseline missing image")
+            continue
+        try:
+            live = app_image(name)
+        except SystemExit:
+            failures.append(f"{name}: could not read live image")
+            continue
+        if live == image:
             continue
         print(f"az containerapp update -n {name} -g {RG} -i {image}")
         try:
@@ -218,27 +291,45 @@ def verify_ready(expected_image: str, baseline_path: Path, evidence_path: Path) 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "mode", choices=("publish", "record-baseline", "verify-ready", "rollback")
+        "mode",
+        choices=("publish", "record-baseline", "verify-ready", "rollback", "admit-schema"),
     )
     parser.add_argument("--configuration", type=Path)
     parser.add_argument("--source-sha")
+    parser.add_argument("--candidate-sha")
+    parser.add_argument("--running-source-sha")
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--schema-output", type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--expected-image")
     parser.add_argument("--evidence", type=Path)
     args = parser.parse_args()
     try:
-        if args.mode == "publish":
+        if args.mode == "admit-schema":
+            sha = args.candidate_sha or args.source_sha
+            if not sha:
+                refuse("admit-schema requires --candidate-sha")
+            evidence = admit_schema_before_publish(sha, running_sha=args.running_source_sha)
+            if args.output:
+                args.output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+        elif args.mode == "publish":
             if not args.configuration or not args.source_sha or not args.archive or not args.output:
                 refuse("publish requires --configuration --source-sha --archive --output")
-            image = publish(args.configuration, args.source_sha, args.archive)
+            image = publish(
+                args.configuration,
+                args.source_sha,
+                args.archive,
+                running_sha=args.running_source_sha,
+                schema_output=args.schema_output,
+            )
             args.output.write_text(image + "\n")
             print(image)
         elif args.mode == "record-baseline":
-            if not args.baseline:
-                refuse("record-baseline requires --baseline")
-            record_baseline(args.baseline)
+            sha = args.candidate_sha or args.source_sha
+            if not args.baseline or not sha:
+                refuse("record-baseline requires --baseline and --candidate-sha")
+            record_baseline(args.baseline, sha, running_sha=args.running_source_sha)
         elif args.mode == "rollback":
             if not args.baseline:
                 refuse("rollback requires --baseline")
