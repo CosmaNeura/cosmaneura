@@ -719,11 +719,11 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
     # Pin the independently reviewed deploy.sh bytes. Rebinds when staging
-    # keeps acquisition price IDs optional while STRIPE_BILLING_ENABLED=false.
-    # Founder-user, readiness/traffic, runtime preservation and job cleanup
-    # guards remain; hosted selectors require canonical candidate
+    # config-load failures emit a classified reason code without stderr
+    # values. Founder-user, readiness/traffic, runtime preservation and job
+    # cleanup guards remain; hosted selectors require canonical candidate
     # reverification. This pin does not remove or loosen any gate.
-    assert hashlib.sha256(deploy).hexdigest() == "2ce9c5288981c892d1588b209fa0a83aae6c7e1e7e2ebcb2bb4adecea21f84a1"
+    assert hashlib.sha256(deploy).hexdigest() == "057cfae3f760959e4784b386c11664d37df9f9c98bb2eafa2e52bac98498d5a8"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
     assert "ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)" in deploy.decode()
     assert (

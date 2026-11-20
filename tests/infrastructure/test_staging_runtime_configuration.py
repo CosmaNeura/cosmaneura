@@ -83,6 +83,7 @@ def test_resolver_runs_once_and_does_not_emit_arbitrary_secret_errors(tmp_path):
     calls = tmp_path / "resolver-calls"
     program = f"""
 REPOSITORY_ROOT={shlex.quote(str(ROOT))}
+PYTHON_BIN={shlex.quote(sys.executable)}
 just() {{
     printf 'called\\n' >> {shlex.quote(str(calls))}
     printf 'export AZURE_OPENAI_API_KEY=synthetic-new-secret-never-log\\n' >&2
@@ -99,9 +100,14 @@ just() {{
     )
     assert result.returncode == 1
     assert calls.read_text() == "called\n"
-    assert result.stdout == "Failed to load staging deployment configuration.\n"
+    assert result.stdout.startswith(
+        "Failed to load staging deployment configuration: reason="
+    )
     assert result.stderr == ""
     assert "synthetic-new-secret" not in result.stdout
+    assert "sk_test_" not in result.stdout
+    assert "op://" not in result.stdout
+    assert "AZURE_OPENAI_API_KEY" in result.stdout
 
 
 def _function(source: str, name: str) -> str:
