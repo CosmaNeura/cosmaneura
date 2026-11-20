@@ -1028,3 +1028,83 @@ def test_preservation_cleanup_is_read_only_even_with_disabled_capabilities(
     result, calls = _shell_harness(tmp_path, configuration, contracts, action="cleanup")
     assert result.returncode == 0
     assert calls == []
+
+
+def test_billing_price_ids_absent_when_billing_is_off_still_preserve(
+    configuration, contracts
+):
+    module = runpy.run_path(str(SCRIPT))
+    assert module["BILLING_PRICE_ID_VARS"] == frozenset(
+        {"STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"}
+    )
+    api = next(item for item in contracts if item["name"] == API)
+    assert "STRIPE_MCD_PRICE_ID" in api["public_names"]
+    configuration = dict(configuration)
+    configuration["STRIPE_BILLING_ENABLED"] = "false"
+    configuration.pop("STRIPE_MCD_PRICE_ID", None)
+    configuration.pop("STRIPE_LEGACY_PRICE_IDS", None)
+    payload = _workload_payload(configuration, api)
+    assert "STRIPE_MCD_PRICE_ID" not in payload["state"]["publicConfig"]
+    assert "STRIPE_LEGACY_PRICE_IDS" not in payload["state"]["publicConfig"]
+    result = _cli("--check-workload", payload)
+    assert result.returncode == 0, result.stderr
+    _no_secret_output(result, configuration)
+
+
+def test_billing_off_present_price_ids_refuse_when_workload_lacks_them(
+    configuration, contracts
+):
+    api = next(item for item in contracts if item["name"] == API)
+    configuration = dict(configuration)
+    configuration["STRIPE_BILLING_ENABLED"] = "false"
+    configuration["STRIPE_MCD_PRICE_ID"] = "price_mcd_synthetic"
+    configuration["STRIPE_LEGACY_PRICE_IDS"] = "price_legacy_synthetic"
+    payload = _workload_payload(configuration, api)
+    payload["state"]["publicConfig"].pop("STRIPE_MCD_PRICE_ID", None)
+    payload["state"]["publicConfig"].pop("STRIPE_LEGACY_PRICE_IDS", None)
+    result = _cli("--check-workload", payload)
+    assert (result.returncode, result.stdout, result.stderr) == (1, "", REFUSAL)
+    _no_secret_output(result, configuration)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    (
+        "missing",
+        "empty_mcd",
+        "empty_legacy",
+    ),
+)
+def test_billing_price_ids_still_refuse_when_billing_is_on_and_missing_or_empty(
+    configuration, contracts, broken
+):
+    api = next(item for item in contracts if item["name"] == API)
+    configuration = dict(configuration)
+    configuration["STRIPE_BILLING_ENABLED"] = "true"
+    configuration["STRIPE_MCD_PRICE_ID"] = "price_mcd_synthetic"
+    configuration["STRIPE_LEGACY_PRICE_IDS"] = "price_legacy_synthetic"
+    if broken == "missing":
+        configuration.pop("STRIPE_MCD_PRICE_ID")
+        configuration.pop("STRIPE_LEGACY_PRICE_IDS")
+    elif broken == "empty_mcd":
+        configuration["STRIPE_MCD_PRICE_ID"] = ""
+    else:
+        configuration["STRIPE_LEGACY_PRICE_IDS"] = ""
+    payload = _workload_payload(configuration, api)
+    result = _cli("--check-workload", payload)
+    assert (result.returncode, result.stdout, result.stderr) == (1, "", REFUSAL)
+    _no_secret_output(result, configuration)
+
+
+def test_billing_price_ids_pass_preservation_when_billing_is_on_and_present(
+    configuration, contracts
+):
+    api = next(item for item in contracts if item["name"] == API)
+    configuration = dict(configuration)
+    configuration["STRIPE_BILLING_ENABLED"] = "true"
+    configuration["STRIPE_MCD_PRICE_ID"] = "price_mcd_synthetic"
+    configuration["STRIPE_LEGACY_PRICE_IDS"] = "price_legacy_synthetic"
+    payload = _workload_payload(configuration, api)
+    result = _cli("--check-workload", payload)
+    assert result.returncode == 0, result.stderr
+    _no_secret_output(result, configuration)

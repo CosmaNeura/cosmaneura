@@ -718,13 +718,12 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     for forbidden in ("docker build", "docker push", "az acr import", "az acr repository delete", "az containerapp update", "az containerapp secret", "az containerapp ingress", "revision deactivate", "alembic upgrade"):
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
-    # Pin the independently reviewed deploy.sh bytes. Rebinds when additive
-    # non-secret public runtime is extended (ACCOUNT_SELF_DELETE_ENABLED
-    # API-only) atop master's hosted handoff. Founder-user, readiness/traffic,
-    # runtime preservation and job cleanup guards remain; hosted selectors
-    # require canonical candidate reverification. This pin does not remove or
-    # loosen any gate.
-    assert hashlib.sha256(deploy).hexdigest() == "e6ff656b0c9e2dc8e1fb0cb59a786f02857894bdcbdd80a6c152e095161b947b"
+    # Pin the independently reviewed deploy.sh bytes. Rebinds when staging
+    # keeps acquisition price IDs optional while STRIPE_BILLING_ENABLED=false.
+    # Founder-user, readiness/traffic, runtime preservation and job cleanup
+    # guards remain; hosted selectors require canonical candidate
+    # reverification. This pin does not remove or loosen any gate.
+    assert hashlib.sha256(deploy).hexdigest() == "2ce9c5288981c892d1588b209fa0a83aae6c7e1e7e2ebcb2bb4adecea21f84a1"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
     assert "ACCOUNT_SELF_DELETE_API_ONLY_PUBLIC_VARS=(ACCOUNT_SELF_DELETE_ENABLED)" in deploy.decode()
     assert (

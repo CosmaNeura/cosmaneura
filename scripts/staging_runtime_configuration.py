@@ -20,6 +20,8 @@ APPS = {
     "cosmaneura-staging-scheduler",
 }
 
+BILLING_PRICE_ID_VARS = frozenset({"STRIPE_MCD_PRICE_ID", "STRIPE_LEGACY_PRICE_IDS"})
+
 
 def require(value: object) -> None:
     if not value:
@@ -66,9 +68,15 @@ def desired(configuration: dict[str, Any], contract: dict[str, Any]) -> dict[str
         and contract["args"][0]
     )
     environment = {}
+    billing = configuration.get("STRIPE_BILLING_ENABLED")
     for name in names:
         value = configuration.get(name)
         require(value is None or type(value) is str)
+        # When billing is on, missing or empty still refuses. Present values
+        # stay projected even while billing is off so fingerprint and
+        # --check-workload see runtime_public / deployer-supplied values.
+        if name in BILLING_PRICE_ID_VARS and billing == "true":
+            require(value)
         # This is the deployer's existing empty-value removal behavior.
         if value:
             # jq -r is consumed through Bash command substitution. Trailing
