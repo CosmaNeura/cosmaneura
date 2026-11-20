@@ -46,10 +46,9 @@ def repo(tmp_path: Path):
     for path in audit["files"]:
         destination = tmp_path / path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes((source_root / path).read_bytes())
-        destination.chmod(
-            0o755 if (source_root / path).stat().st_mode & 0o111 else 0o644
-        )
+        source = source_root / path
+        destination.write_bytes(source.read_bytes())
+        destination.chmod(source.stat().st_mode & 0o777)
     write(manifest_path, (source_root / manifest_path).read_text())
     write(
         "scripts/verify_staging_candidate.py",
@@ -163,6 +162,7 @@ def test_application_master_advance_passes_only_later_reverification(repo) -> No
         "AGENTS.md",
         ".env.staging.backend",
         "web/pnpm-lock.yaml",
+        "just/build.just",
     ],
 )
 def test_changed_or_added_protected_dependency_refuses(repo, path: str) -> None:
@@ -200,6 +200,24 @@ def test_unknown_controller_import_refuses_even_at_initial_dispatch(repo) -> Non
     repo["write"]("app/deployment_guard.py", "changed imported controller helper\n")
     repo["git"]("add", ".")
     repo["git"]("commit", "-qm", "Synthetic unaudited controller import")
+    repo["master"] = repo["controller"] = repo["git"]("rev-parse", "HEAD")
+    with pytest.raises(CandidateVerificationError, match="unaudited"):
+        repo["verify"](reverify=False)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "just/build.just",
+        "scripts/scribe_runtime_pin.py",
+        "infra/production_live_settings.tf",
+    ],
+)
+def test_changed_build_requires_new_audit_even_at_initial_dispatch(repo, path) -> None:
+    repo["git"]("checkout", "--detach", "-q", repo["master"])
+    repo["write"](path, "synthetic changed image builder\n")
+    repo["git"]("add", ".")
+    repo["git"]("commit", "-qm", "Synthetic unaudited build change")
     repo["master"] = repo["controller"] = repo["git"]("rev-parse", "HEAD")
     with pytest.raises(CandidateVerificationError, match="unaudited"):
         repo["verify"](reverify=False)

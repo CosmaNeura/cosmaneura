@@ -206,6 +206,17 @@ ephemeral JavaScript builder image as a registry cache. Consequently,
 `sentry-release` is not a protected-build prerequisite and must not be copied
 into either build path merely to re-enable the old behavior.
 
+The deployable Core image also contains `/opt/scribe/runtime`, including its
+executable `bin/python`. `just build` rebuilds that runtime from the locked
+Scribe source at `45e979fd680ed7b9aa5e3a5a4f6f7e72ff27618f`, using Core's Python
+3.13 and the digest-pinned UV builder. It canonicalizes the runtime files into
+a local OCI image and layers only that OCI's reviewed manifest digest from
+`scripts/scribe_runtime_pin.py`; no published runtime image or mutable runtime
+tag is required. The Core application, user and entrypoints are retained by
+the layering step. Candidate preparation refuses a missing or non-executable
+runtime, a different layered digest, altered runtime bytes, or a Core Python
+closure mismatch when the production bundle API source pin is enabled.
+
 Common setup installs the exact 1Password CLI package version pinned in
 `.github/actions/install-op/action.yml` and verifies its official SHA-256 before
 execution. Updating that version requires a reviewed checksum update from the

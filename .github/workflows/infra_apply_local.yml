@@ -287,6 +287,11 @@ jobs:
               .github/workflows/build_and_publish_local.yml \
               .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
               .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+              scripts/build_scribe_runtime.py \
+              scripts/scribe_runtime_check.py \
+              scripts/scribe_runtime_lineage.py \
+              scripts/scribe_runtime_oci.py \
+              scripts/scribe_runtime_pin.py \
               scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner |
               LC_ALL=C sort -z |
               xargs -0 -I{} sha256sum "../{}" |

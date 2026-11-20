@@ -181,6 +181,11 @@ jobs:
               .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+            scripts/build_scribe_runtime.py \
+            scripts/scribe_runtime_check.py \
+            scripts/scribe_runtime_lineage.py \
+            scripts/scribe_runtime_oci.py \
+            scripts/scribe_runtime_pin.py \
             scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
             scripts/production_core_candidate.py scripts/production_core_runtime_binding.py \
             scripts/session_prep_production_frontend_admission.py \
@@ -477,6 +482,11 @@ jobs:
             .github/workflows/build_and_publish_local.yml \
             .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
             .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+            scripts/build_scribe_runtime.py \
+            scripts/scribe_runtime_check.py \
+            scripts/scribe_runtime_lineage.py \
+            scripts/scribe_runtime_oci.py \
+            scripts/scribe_runtime_pin.py \
             scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner \
             scripts/production_core_candidate.py scripts/production_core_runtime_binding.py \
             scripts/session_prep_production_frontend_admission.py \
@@ -568,6 +578,8 @@ jobs:
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
           JAVASCRIPT_SESSION_PREP_ADMISSION_JSON: ${{ runner.temp }}/production-session-prep-admission.json
           PYTHON_ENV: production
+      - name: Refuse candidate preparation without the pinned executable Scribe runtime
+        run: just _scribe_runtime_prepare_check
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
