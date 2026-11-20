@@ -7,7 +7,7 @@ practice.late_checkout_refused_at as the durable refuse marker that preserves
 local trial for remaining clinicians.
 
 Revision ID: 5708b4399768
-Revises: c764298c7590
+Revises: 5f3c9a1e7b24
 Create Date: 2026-11-19 18:35:00.000000
 """
 

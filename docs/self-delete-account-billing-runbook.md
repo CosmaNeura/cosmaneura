@@ -9,6 +9,14 @@ This is intentional: auto-cancel remains a founder decision, and canceling
 from the delete path would expand the billing surface beyond the self-delete
 feature latch (`ACCOUNT_SELF_DELETE_ENABLED`, production default OFF).
 
+## Deploy order (migration before code)
+
+Migration `5708b4399768` (`practice.late_checkout_refused_at` plus the partial
+unique indexes on late-Checkout follow-up / refund audit rows) **must be
+applied before** the application revision that reads or writes those objects
+serves traffic. Deploying the new code against a database that has not reached
+`5708b4399768` fails closed on missing column / index.
+
 ## When this runbook applies
 
 Look for append-only `PracticeAccessAudit` rows on the practice:
@@ -71,7 +79,9 @@ Agents never run this against production or any real patient database.
 4. Decide ownership transfer vs practice wind-down only after Stripe cancel /
    refund is settled. Self-delete does not terminate the covered entity.
    Successful `transfer-practice-owner` clears `owner_reassignment_needed_at`
-   but does **not** clear refuse audits or `late_checkout_refused_at`.
+   but does **not** clear refuse audits or `late_checkout_refused_at`. A later
+   successful authoritative subscription bind clears `late_checkout_refused_at`
+   (refuse audits for the refused subscription id stay sticky).
 5. Record the Stripe decision on the same change ticket (`operator_ref`).
 
 ## What self-delete does not do
