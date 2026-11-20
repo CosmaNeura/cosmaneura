@@ -42,11 +42,15 @@ from app.models.practice import (
 )
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 STRIPE_API = "https://api.stripe.com/v1"
+
+# Bound practice-row locks in `_apply_authoritative_subscription`. Stripe I/O
+# stays outside the transaction; this only caps wait for the FOR UPDATE itself.
+_STATE_APPLY_LOCK_TIMEOUT = "2000ms"
 
 # Explicit timeouts, split the way `recall.py` and `zoom_auth.py` do it: a hang
 # inside a Celery prefork slot looks alive while processing nothing, so a stuck
@@ -973,6 +977,9 @@ def _apply_authoritative_subscription(
                 ).one_or_none()
                 if receipt is not None:
                     return None, False
+            session.execute(
+                text(f"SET LOCAL lock_timeout = '{_STATE_APPLY_LOCK_TIMEOUT}'")
+            )
             snapshot = session.exec(
                 select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
@@ -1049,6 +1056,9 @@ def _apply_authoritative_subscription(
             return invalid.subscription, applied
 
         with _isolated_state_session() as session:
+            session.execute(
+                text(f"SET LOCAL lock_timeout = '{_STATE_APPLY_LOCK_TIMEOUT}'")
+            )
             row = session.exec(
                 select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
@@ -1441,12 +1451,21 @@ def _apply_authoritative_subscription(
                         PracticeAccessAction.stripe_checkout_follow_up_required,
                         "Stripe subscription arrived after owner self-delete",
                     )
-                    wrote_refund = _record_late_checkout_audit(
-                        PracticeAccessAction.stripe_refund_needed,
-                        (
+                    # Trialling / incomplete Checkout has not collected payment;
+                    # do not claim Stripe "charged" in the operator audit reason.
+                    if mirrored_status in {"trialing", "incomplete"}:
+                        refund_reason = (
+                            "Late Checkout completed after owner self-delete; "
+                            "cancel or refund follow-up needed"
+                        )
+                    else:
+                        refund_reason = (
                             "Late Checkout charged after owner self-delete; "
                             "refund needed"
-                        ),
+                        )
+                    wrote_refund = _record_late_checkout_audit(
+                        PracticeAccessAction.stripe_refund_needed,
+                        refund_reason,
                     )
                     if wrote_refund:
                         alerting.alert(
@@ -1512,6 +1531,8 @@ def _apply_authoritative_subscription(
                 str, remote_entitlement_contract
             )
             row.subscription_status = mirrored_status
+            # A healthy bind replaces the durable late-Checkout refuse marker.
+            row.late_checkout_refused_at = None
             if _status_keeps_bound_unit_amount(subscription.get("status")):
                 # _retrieve_subscription verified this amount against Stripe.
                 bound_price = _subscription_item(
