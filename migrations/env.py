@@ -86,6 +86,8 @@ def run_migrations_online() -> None:
         connection.exec_driver_sql(
             f"SET lock_timeout = '{MIGRATION_LOCK_TIMEOUT}'"
         )
+        # Ends the implicit transaction opened by the SET so Alembic owns the
+        # migration transaction (otherwise migrations never commit). Do not remove.
         connection.commit()
 
         context.configure(
