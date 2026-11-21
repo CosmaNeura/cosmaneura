@@ -12,8 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = ROOT / "migrations" / "env.py"
 
 
-def _load_run_migrations_online() -> tuple[Any, str, dict[str, Any]]:
-    """Load run_migrations_online without importing app models."""
+def _load_env_helpers(
+    *function_names: str,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    """Load selected env.py helpers without importing app models."""
     source = ENV_PATH.read_text()
     tree = ast.parse(source)
 
@@ -26,33 +28,36 @@ def _load_run_migrations_online() -> tuple[Any, str, dict[str, Any]]:
             for target in node.targets
         )
     )
-    function = next(
+    functions = [
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run_migrations_online"
-    )
+        if isinstance(node, ast.FunctionDef) and node.name in function_names
+    ]
+    assert {function.name for function in functions} == set(function_names)
 
     namespace: dict[str, Any] = {}
     exec(
         compile(
-            ast.Module(body=[constant, function], type_ignores=[]),
+            ast.Module(body=[constant, *functions], type_ignores=[]),
             str(ENV_PATH),
             "exec",
         ),
         namespace,
     )
     return (
-        namespace["run_migrations_online"],
+        {name: namespace[name] for name in function_names},
         namespace["MIGRATION_LOCK_TIMEOUT"],
         namespace,
     )
 
 
 def test_online_migration_sets_lock_timeout_before_run_migrations() -> None:
-    run_migrations_online, lock_timeout, namespace = _load_run_migrations_online()
+    helpers, lock_timeout, namespace = _load_env_helpers("run_migrations_online")
+    run_migrations_online = helpers["run_migrations_online"]
     assert lock_timeout == "4s"
 
     order: list[tuple[str, str | None]] = []
+    inside_transaction = {"active": False}
 
     connection = MagicMock(name="connection")
     connection.exec_driver_sql.side_effect = lambda statement: order.append(
@@ -72,11 +77,24 @@ def test_online_migration_sets_lock_timeout_before_run_migrations() -> None:
     @contextmanager
     def _begin_transaction():
         order.append(("begin_transaction", None))
-        yield
+        inside_transaction["active"] = True
+        try:
+            yield
+        finally:
+            inside_transaction["active"] = False
+            order.append(("end_transaction", None))
+
+    def _configure(**kwargs: Any) -> None:
+        order.append(("configure", None))
+        assert kwargs.get("connection") is connection
+
+    def _run_migrations() -> None:
+        assert inside_transaction["active"] is True
+        order.append(("run_migrations", None))
 
     context.begin_transaction.side_effect = lambda: _begin_transaction()
-    context.configure.side_effect = lambda **kwargs: order.append(("configure", None))
-    context.run_migrations.side_effect = lambda: order.append(("run_migrations", None))
+    context.configure.side_effect = _configure
+    context.run_migrations.side_effect = _run_migrations
 
     config = MagicMock()
     config.config_ini_section = "alembic"
@@ -104,6 +122,77 @@ def test_online_migration_sets_lock_timeout_before_run_migrations() -> None:
         ("run_migrations", None)
     )
     assert order.index(("commit", None)) < order.index(("configure", None))
-    assert order.index(("configure", None)) < order.index(("run_migrations", None))
+    assert order.index(("configure", None)) < order.index(("begin_transaction", None))
+    assert order.index(("begin_transaction", None)) < order.index(
+        ("run_migrations", None)
+    )
+    assert order.index(("run_migrations", None)) < order.index(
+        ("end_transaction", None)
+    )
     connection.exec_driver_sql.assert_called_once_with(set_statement)
     connection.commit.assert_called_once_with()
+    context.configure.assert_called_once()
+    configure_kwargs = context.configure.call_args.kwargs
+    assert configure_kwargs["connection"] is connection
+
+
+def test_offline_migration_sets_lock_timeout_inside_begin_transaction() -> None:
+    helpers, lock_timeout, namespace = _load_env_helpers("run_migrations_offline")
+    run_migrations_offline = helpers["run_migrations_offline"]
+    assert lock_timeout == "4s"
+
+    order: list[tuple[str, str | None]] = []
+    inside_transaction = {"active": False}
+
+    context = MagicMock(name="context")
+
+    @contextmanager
+    def _begin_transaction():
+        order.append(("begin_transaction", None))
+        inside_transaction["active"] = True
+        try:
+            yield
+        finally:
+            inside_transaction["active"] = False
+            order.append(("end_transaction", None))
+
+    def _execute(statement: str) -> None:
+        assert inside_transaction["active"] is True
+        order.append(("execute", statement))
+
+    def _run_migrations() -> None:
+        assert inside_transaction["active"] is True
+        order.append(("run_migrations", None))
+
+    context.begin_transaction.side_effect = lambda: _begin_transaction()
+    context.configure.side_effect = lambda **kwargs: order.append(("configure", None))
+    context.execute.side_effect = _execute
+    context.run_migrations.side_effect = _run_migrations
+
+    config = MagicMock()
+    config.get_main_option.return_value = "postgresql://example.invalid/db"
+
+    namespace.update(
+        {
+            "context": context,
+            "config": config,
+            "target_metadata": object(),
+        }
+    )
+
+    run_migrations_offline()
+
+    set_statement = f"SET lock_timeout = '{lock_timeout}'"
+    assert ("configure", None) in order
+    assert order.index(("configure", None)) < order.index(("begin_transaction", None))
+    assert order.index(("begin_transaction", None)) < order.index(
+        ("execute", set_statement)
+    )
+    assert order.index(("execute", set_statement)) < order.index(
+        ("run_migrations", None)
+    )
+    assert order.index(("run_migrations", None)) < order.index(
+        ("end_transaction", None)
+    )
+    context.execute.assert_called_once_with(set_statement)
+    context.run_migrations.assert_called_once_with()
