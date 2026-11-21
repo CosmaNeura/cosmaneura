@@ -126,7 +126,9 @@ def test_online_migration_sets_lock_timeout_before_run_migrations() -> None:
     assert order.index(("begin_transaction", None)) < order.index(
         ("run_migrations", None)
     )
-    assert order.index(("run_migrations", None)) < order.index(("end_transaction", None))
+    assert order.index(("run_migrations", None)) < order.index(
+        ("end_transaction", None)
+    )
     connection.exec_driver_sql.assert_called_once_with(set_statement)
     connection.commit.assert_called_once_with()
     context.configure.assert_called_once()
@@ -189,6 +191,8 @@ def test_offline_migration_sets_lock_timeout_inside_begin_transaction() -> None:
     assert order.index(("execute", set_statement)) < order.index(
         ("run_migrations", None)
     )
-    assert order.index(("run_migrations", None)) < order.index(("end_transaction", None))
+    assert order.index(("run_migrations", None)) < order.index(
+        ("end_transaction", None)
+    )
     context.execute.assert_called_once_with(set_statement)
     context.run_migrations.assert_called_once_with()
