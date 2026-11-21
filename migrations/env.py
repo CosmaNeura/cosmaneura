@@ -36,6 +36,10 @@ target_metadata = SQLModel.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+# Fail fast if a migration cannot take a lock (Postgres LockNotAvailable /
+# SQLSTATE 55P03) instead of queueing behind it and stalling sign-in.
+MIGRATION_LOCK_TIMEOUT = "4s"
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -58,6 +62,7 @@ def run_migrations_offline() -> None:
     )
 
     with context.begin_transaction():
+        context.execute(f"SET lock_timeout = '{MIGRATION_LOCK_TIMEOUT}'")
         context.run_migrations()
 
 
@@ -75,6 +80,14 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        # Session-level (not SET LOCAL). Commit so SQLAlchemy 2.x autobegin
+        # does not leave the SET in an open transaction that could roll back
+        # before migrations start.
+        connection.exec_driver_sql(
+            f"SET lock_timeout = '{MIGRATION_LOCK_TIMEOUT}'"
+        )
+        connection.commit()
+
         context.configure(
             connection=connection, target_metadata=target_metadata
         )
