@@ -565,6 +565,26 @@ negative boundary before the gate can pass.
    refuses overwrite by design
    (`.github/workflows/deploy_staging_candidate.yml:900-902`).
 
+## Live staging schema baseline and Staging environment secrets (R2-CAND2)
+
+1. Live staging Alembic baseline is `5708b4399768` since
+   [Deploy Staging Candidate run 44835805587](https://github.com/CosmaNeura/cosmaneura/actions/runs/44835805587)
+   (attempt 1, candidate `09d88182`, 20 Nov 2026 6:49pm ET), which upgraded
+   `e78845cecca6` → `5708b4399768`. The next staging dispatch must use
+   `expected_schema_before=5708b4399768` (migration is a no-op when the candidate
+   head is already that revision). Do not dispatch with
+   `expected_schema_before=e78845cecca6`; that value is historical for the
+   pre-44835805587 baseline only.
+2. A GitHub Environment secret on `Staging` overrides the repo-level secret of
+   the same name. Staging token resets must use
+   `gh secret set OP_STAGING_SERVICE_ACCOUNT_TOKEN --env Staging` (secret name
+   only; never a value). Setting the repo secret alone has no effect on staging
+   jobs that resolve secrets from the `Staging` environment.
+3. The `3191ecca` publication
+   ([run 44930381073](https://github.com/CosmaNeura/cosmaneura/actions/runs/44930381073)
+   attempt 4, ACR digest `sha256:8f7c4404…`) and its ACR tag are left untouched:
+   never delete or overwrite them to retry or recover.
+
 ## Completion
 
 - The outcome is complete only when the workflow change is merged and reviewed,
