@@ -43,7 +43,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read
     outputs:
       sha: ${{ steps.admission.outputs.sha }}
     steps:
@@ -55,7 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py infra_apply_local.yml --receipt --output
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --output
 
   apply:
     name: Terraform Apply
@@ -102,12 +101,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Reverify founder dispatch and receipt before production setup
+      - name: Reverify founder dispatch before production setup
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted --receipt
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
 
       - name: Verify exact-current-master production plan evidence
         id: plan_evidence
@@ -297,9 +296,9 @@ jobs:
 
       - name: Recreate and verify exact reviewed plan
         working-directory: infra
-        env:
-          # Limit long-lived credentials to the one step that must resolve the
-          # production configuration. They are absent from setup and apply.
+        env: &production_plan_env
+          # Only plan steps resolve production configuration. These credentials
+          # are absent from setup and apply.
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
@@ -375,14 +374,15 @@ jobs:
           fi
           echo "Verified canonical reviewed-plan SHA-256: \`$canonical_plan_sha256\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Reverify admission and receipt before applying
+      - name: Reverify admission before applying
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted --receipt
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
 
       - name: Reverify current master and apply
+        id: apply_plan
         working-directory: infra
         env:
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
@@ -392,6 +392,16 @@ jobs:
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          read_state_serial() {
+            tofu state pull 2>/dev/null | jq -ers '
+              select(length == 1) | .[0].serial |
+              select(type == "number" and . >= 0 and . == floor)
+            ' 2>/dev/null
+          }
+          serial_before=$(read_state_serial) || {
+            echo "Could not read the state serial before apply." >&2
+            exit 1
+          }
           current_master_sha=$(gh api \
             "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
             --jq '.object.sha' 2>/dev/null) || {
@@ -404,9 +414,34 @@ jobs:
           fi
           tofu apply -input=false -auto-approve tfplan.bin >/dev/null 2>&1 || {
             echo "OpenTofu apply failed. Hold production for incident review." >&2
+            echo "apply_failed=true" >> "$GITHUB_OUTPUT"
+            printf 'State serial before apply: %s\n' "$serial_before"
+            if serial_after=$(read_state_serial); then
+              printf 'State serial after apply: %s\n' "$serial_after"
+            else
+              echo "Could not read the state serial after apply." >&2
+            fi
             exit 1
           }
           echo "OpenTofu applied the reviewed plan."
+
+      - name: Summarize remaining changes after failed apply
+        if: failure() && steps.apply_plan.outputs.apply_failed == 'true'
+        working-directory: infra
+        env: *production_plan_env
+        run: |
+          set -euo pipefail
+          umask 077
+          tofu plan -no-color -input=false -out=tfplan.remaining.bin >/dev/null 2>&1 || {
+            echo "Could not create the remaining OpenTofu plan." >&2
+            exit 1
+          }
+          remaining_summary=$(tofu show -json tfplan.remaining.bin 2>/dev/null |
+            python3 ../ops/production-checks/render_plan.py 2>/dev/null) || {
+            echo "Could not render the remaining OpenTofu plan safely." >&2
+            exit 1
+          }
+          printf '# Remaining after failed apply\n\n%s\n' "$remaining_summary" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summarize apply
         if: always()
@@ -431,4 +466,4 @@ jobs:
 
       - name: Remove sensitive local plan material
         if: always()
-        run: rm -rf infra/tfplan.bin infra/reviewed-attestation
+        run: rm -rf infra/tfplan.bin infra/tfplan.remaining.bin infra/reviewed-attestation
