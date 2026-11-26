@@ -1,6 +1,5 @@
 """Capability-protected platform administration routes."""
 
-import csv
 import io
 from typing import Annotated
 
@@ -22,6 +21,7 @@ from app.services.usage import (
     RecentAppointmentRow,
     TimeToNoteRow,
 )
+from app.utils.spreadsheet import write_safe_csv
 
 from activemodel.session_manager import get_session
 from app.models.baa import BaaAcceptance, BaaVersion
@@ -158,12 +158,11 @@ def baa_acceptances_export(format: str = "json") -> Response:
 
     if format == "csv":
         buffer = io.StringIO()
-        writer = csv.DictWriter(
-            buffer, fieldnames=list(BaaAcceptanceExportRow.model_fields)
+        write_safe_csv(
+            buffer,
+            list(BaaAcceptanceExportRow.model_fields),
+            (row.model_dump() for row in rows),
         )
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row.model_dump())
         return Response(
             content=buffer.getvalue(),
             media_type="text/csv",
