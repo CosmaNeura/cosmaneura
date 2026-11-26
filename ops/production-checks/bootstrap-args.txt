@@ -1,0 +1,1 @@
+-cimport base64,hashlib,os,sys,zlib;r=zlib.decompress(base64.b64decode(os.environ['CORE_RUNNER_Z']));ok=hashlib.sha256(r).hexdigest()=='b940747c7ed2fdd0d414dca664c8d642adae0f92539fe2ae28d28c72f59a9b59';print('RUNNER_SHA_OK=1' if ok else 'RUN_ERROR=runner_sha_mismatch',flush=True);ok or sys.exit(0);exec(compile(r,'<runner>','exec'))

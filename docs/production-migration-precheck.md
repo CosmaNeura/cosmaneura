@@ -77,3 +77,16 @@ immediately before the human decision.
 
 Merge does not promote or publish production. John still makes the deploy
 decision. Existing users keep their current access and onboarding state.
+
+## Proposed GitHub Actions deviation (CTO-18)
+
+The separately reviewed **Run production checks** path uses one execution of the
+existing Container Apps migration job. The production app credential has write
+privileges. The read-only restriction is imposed and checked by the database
+session and transactions, with the existing host, database and TLS checks. The
+workflow supplies the matching secret reference name only. The app and job have
+separate secret stores, so matching names alone provide no database-target
+evidence. This deviation requires final review and the controls in the hosted
+production runbook before dispatch. Hosted Plan and Apply admission and the
+receipt hold land in PR 2. The checks workflow and its runbook
+(`docs/production-hosted-checks.md`) land in PR 3.
