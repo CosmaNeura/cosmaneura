@@ -20,59 +20,50 @@ concurrency:
 jobs:
   authorize-production:
     name: Authorize production infrastructure plan
-    runs-on: [self-hosted, Linux, ARM64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.admission.outputs.sha }}
     steps:
-      - name: Require founder-authorized manual plan from master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Admit founder dispatch on fresh master
+        id: admission
         env:
-          PLAN_ACTOR: ${{ github.actor }}
-          PLAN_EVENT: ${{ github.event_name }}
-          PLAN_REF: ${{ github.ref }}
-          PLAN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          if [[ "$PLAN_EVENT" != "workflow_dispatch" ]]; then
-            echo "::error::Production infrastructure planning must be started manually with workflow_dispatch."
-            exit 1
-          fi
-          if [[ "$PLAN_REF" != "refs/heads/master" ]]; then
-            echo "::error::Production infrastructure planning must target the exact master branch."
-            exit 1
-          fi
-          if [[ "$PLAN_ACTOR" != "JohnClem" ]]; then
-            echo "::error::Production infrastructure planning is restricted to the founder account."
-            exit 1
-          fi
-          if [[ "$PLAN_TRIGGERING_ACTOR" != "JohnClem" ]]; then
-            echo "::error::Production infrastructure plan reruns are restricted to the founder account."
-            exit 1
-          fi
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --receipt --output
 
   plan:
     name: Terraform production plan
     needs: authorize-production
     if: >-
       ${{
+        github.repository == 'CosmaNeura/cosmaneura' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/master' &&
         github.actor == 'JohnClem' &&
         github.triggering_actor == 'JohnClem' &&
-        needs.authorize-production.result == 'success'
+        needs.authorize-production.result == 'success' &&
+        needs.authorize-production.outputs.sha == github.sha
       }}
-    runs-on: [self-hosted, Linux, ARM64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: production
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_LOG: "OFF"
+      AZURE_CORE_OUTPUT: none
     steps:
       - name: Reject unreviewed durable webhook activation
         env:
@@ -88,24 +79,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify this run targets current master
+      - name: Reverify founder dispatch and receipt before production setup
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          current_master_sha=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
-            --jq '.object.sha')
-          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
-            echo "This plan is not running from the current master commit." >&2
-            exit 1
-          fi
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --admitted --receipt
 
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
         with:
           apt-packages: zsh
+          enable_cache: "false"
+
+      - name: Reverify admission before Azure login
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --admitted
 
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
@@ -121,7 +113,10 @@ jobs:
             --name cosmaneura-prod-scheduler \
             --query properties.outboundIpAddresses \
             --output json \
-            --only-show-errors)
+            --only-show-errors 2>/dev/null) || {
+            echo "Could not verify the production scheduler egress." >&2
+            exit 1
+          }
           production_egress=$(jq -er '
             select(type == "array" and length == 1) |
             .[0] |
@@ -137,44 +132,63 @@ jobs:
           tofu_version: 1.12.5
           tofu_wrapper: false
 
+      - name: Reverify admission before production state access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --admitted
+
       - name: tofu init
         working-directory: infra
-        run: tofu init -input=false -lockfile=readonly
+        env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          tofu init -input=false -lockfile=readonly >/dev/null 2>&1 || {
+            echo "OpenTofu initialization failed." >&2
+            exit 1
+          }
 
       - name: tofu fmt -check against production configuration
         working-directory: infra
-        run: tofu fmt -check -diff -recursive
+        run: |
+          tofu fmt -check -recursive >/dev/null 2>&1 || {
+            echo "OpenTofu formatting check failed." >&2
+            exit 1
+          }
 
       - name: tofu validate against production configuration
         working-directory: infra
-        run: tofu validate
+        run: |
+          tofu validate >/dev/null 2>&1 || {
+            echo "OpenTofu validation failed." >&2
+            exit 1
+          }
+
+      - name: Reverify admission before creating the plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --admitted
 
       - name: tofu plan against protected production state
         working-directory: infra
         env:
           # These long-lived credentials exist only while OpenTofu resolves
           # the reviewed production configuration into its ephemeral plan.
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
           RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
           umask 077
-          tofu plan -no-color -input=false -detailed-exitcode -out=tfplan.bin 2>&1 | tee plan.txt || plan_exit=$?
+          tofu plan -no-color -input=false -detailed-exitcode -out=tfplan.bin >/dev/null 2>&1 || plan_exit=$?
           plan_exit=${plan_exit:-0}
-          {
-            echo "## Protected Terraform Plan"
-            echo ''
-            echo "Run ID: $GITHUB_RUN_ID"
-            echo "Commit: $GITHUB_SHA"
-            echo ''
-            echo '```'
-            head -c 60000 plan.txt
-            if [ "$(wc -c < plan.txt)" -gt 60000 ]; then
-              echo ''
-              echo '...[truncated, see full plan in step log]'
-            fi
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
           case "$plan_exit" in
             0 | 2) ;;
             *)
@@ -182,10 +196,18 @@ jobs:
               exit 1
               ;;
           esac
+          tofu show -json tfplan.bin 2>/dev/null |
+            python3 ../ops/production-checks/render_plan.py >> "$GITHUB_STEP_SUMMARY" || {
+            echo "Could not render the OpenTofu plan." >&2
+            exit 1
+          }
 
       - name: Create nonsecret reviewed-plan attestation
         working-directory: infra
         env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           ARTIFACT_NAME: terraform-production-plan-attestation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
         run: |
           set -euo pipefail
@@ -193,13 +215,16 @@ jobs:
 
           # OpenTofu emits this set-like metadata array in nondeterministic
           # order. Sort only that array; every substantive plan field remains.
-          canonical_plan_sha256=$(tofu show -json tfplan.bin |
-            jq -cS 'del(.timestamp) | .relevant_attributes |= ((. // []) | sort_by(.resource, .attribute))' |
+          canonical_plan_sha256=$(tofu show -json tfplan.bin 2>/dev/null |
+            jq -cS 'del(.timestamp) | .relevant_attributes |= ((. // []) | sort_by(.resource, .attribute))' 2>/dev/null |
             sha256sum |
-            awk '{print $1}')
+            awk '{print $1}') || {
+            echo "Could not compute the canonical OpenTofu plan digest." >&2
+            exit 1
+          }
           configuration_sha256=$(
             git -C .. ls-files -z -- \
-              infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+              ops/production-checks infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
               Justfile just Procfile .github/actions \
               .github/workflows/infra_production_plan_local.yml \
               .github/workflows/infra_apply_local.yml \
@@ -219,8 +244,11 @@ jobs:
               awk '{print $1}'
           )
           provider_lock_sha256=$(sha256sum .terraform.lock.hcl | awk '{print $1}')
-          state_identity=$(tofu state pull | jq -cS '{lineage, serial}')
-          state_lineage=$(jq -er '.lineage | select(type == "string" and length > 0)' <<<"$state_identity")
+          state_identity=$(tofu state pull 2>/dev/null | jq -cS '{lineage, serial}' 2>/dev/null) || {
+            echo "Could not read the production state identity." >&2
+            exit 1
+          }
+          state_lineage=$(jq -er '.lineage | select(type == "string" and test("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"))' <<<"$state_identity")
           state_serial=$(jq -er '.serial | select(type == "number" and . >= 0)' <<<"$state_identity")
 
           jq -n \
@@ -259,7 +287,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # Remove the sensitive plan before even the pinned artifact action
           # runs, so that action can access only the nonsecret attestation.
-          rm -f tfplan.bin plan.txt
+          rm -f tfplan.bin
 
       - name: Upload immutable reviewed-plan attestation
         id: upload_attestation
@@ -290,4 +318,4 @@ jobs:
 
       - name: Remove sensitive local plan material
         if: always()
-        run: rm -f infra/tfplan.bin infra/plan.txt infra/plan-attestation.json
+        run: rm -f infra/tfplan.bin infra/plan-attestation.json

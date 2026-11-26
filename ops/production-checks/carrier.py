@@ -1,0 +1,473 @@
+"""One-shot Azure Container Apps Jobs carrier. CLI output stays private."""
+
+import json
+import os
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
+
+from admission import RECEIPT_FILE, check_context
+from contract import (
+    CHECKS_WORKFLOW,
+    IMAGE,
+    PACKAGE,
+    PRODUCTION_JOB,
+    SELECTORS,
+    Stop,
+    encoded_inputs,
+    execution_name,
+    parse_markers,
+    receipt_header,
+    require,
+    sha256,
+    verify_package,
+    verify_receipt,
+)
+
+PRODUCTION_SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+PRODUCTION_WORKSPACE = "2a7d954b-373c-4de6-884f-c050ecc1d863"
+PRODUCTION_APP = "cosmaneura-prod-app"
+PYTHON = "/opt/venv/bin/python"
+TERMINAL = {"Succeeded", "Failed", "Stopped", "Degraded"}
+ACTIVE = {"Running", "Pending", "Processing", "Starting"}
+CONTAINERS = "properties.template.containers"
+TEMPLATE_QUERY = (
+    "{containers:properties.template.containers[].{name:name,image:image,command:command,"
+    "args:args,env:env[].{name:name,secretRef:secretRef}},"
+    "initContainers:properties.template.initContainers[].name,"
+    "trigger:properties.configuration.triggerType,"
+    "parallelism:properties.configuration.manualTriggerConfig.parallelism,"
+    "completion:properties.configuration.manualTriggerConfig.replicaCompletionCount,"
+    "retry:properties.configuration.replicaRetryLimit,timeout:properties.configuration.replicaTimeout}"
+)
+EXECUTION_QUERY = (
+    "{name:name,status:properties.status,containers:properties.template.containers[]."
+    "{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef},"
+    "nonce:env[?name=='CORE_BUNDLE_Z'].value}}"
+)
+
+
+@dataclass(frozen=True)
+class Target:
+    subscription: str
+    group: str
+    job: str
+    workspace: str
+    image: str
+    container: str
+
+
+PRODUCTION = Target(
+    PRODUCTION_SUBSCRIPTION,
+    "cosmaneura-prod",
+    PRODUCTION_JOB,
+    PRODUCTION_WORKSPACE,
+    IMAGE,
+    PRODUCTION_JOB,
+)
+
+
+class Carrier:
+    def __init__(self, target, *, clock=time.monotonic, sleep=time.sleep):
+        self.target = target
+        self.clock = clock
+        self.sleep = sleep
+
+    def az(self, *args, timeout=15, output="json") -> Any:
+        # All calls fail closed. Callers catching Stop do cleanup only.
+        try:
+            result = subprocess.run(
+                [
+                    "az",
+                    *args,
+                    "--subscription",
+                    self.target.subscription,
+                    "--only-show-errors",
+                    "--output",
+                    output,
+                ],
+                capture_output=True,
+                timeout=timeout,
+                check=True,
+                env={
+                    **{
+                        key: value
+                        for key, value in os.environ.items()
+                        if key != "GH_TOKEN"
+                    },
+                    "AZURE_CORE_LOG_LEVEL": "error",
+                    "AZURE_CORE_COLLECT_TELEMETRY": "no",
+                    "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no",
+                },
+            )
+            require(not result.stderr, "azure_diagnostic")
+            return json.loads(result.stdout) if output == "json" else None
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            raise Stop("azure_command_failed") from error
+
+    def job(self, *args, **options):
+        return self.az(
+            "containerapp",
+            "job",
+            *args,
+            "--name",
+            self.target.job,
+            "--resource-group",
+            self.target.group,
+            **options,
+        )
+
+    def serving_selector(self):
+        query = (
+            f"[].{{weight:properties.trafficWeight,containers:{CONTAINERS}[]."
+            "{name:name,image:image,selectors:env[?name=='DATABASE_URL'].{ref:secretRef}}}"
+        )
+        revisions = self.az(
+            "containerapp",
+            "revision",
+            "list",
+            "--name",
+            PRODUCTION_APP,
+            "--resource-group",
+            self.target.group,
+            "--query",
+            query,
+        )
+        total, selectors = 0, set()
+        for revision in revisions:
+            weight = revision["weight"]
+            require(
+                type(weight) is int and 0 <= weight <= 100, "unknown_traffic_weight"
+            )
+            if weight:
+                web = [
+                    item
+                    for item in revision["containers"]
+                    if item["name"] == f"{PRODUCTION_APP}-web"
+                ]
+                require(
+                    len(web) == 1 and web[0]["image"] == IMAGE, "traffic_image_drift"
+                )
+                selector = web[0]["selectors"]
+                require(
+                    len(selector) == 1 and selector[0]["ref"] in SELECTORS,
+                    "traffic_database_selector",
+                )
+                selectors.add(selector[0]["ref"])
+                total += weight
+        require(total == 100 and len(selectors) == 1, "traffic_not_fully_verified")
+        return selectors.pop()
+
+    def template(self):
+        value = self.job("show", "--query", TEMPLATE_QUERY)
+        require(
+            value["trigger"] == "Manual"
+            and value["initContainers"] in (None, [])
+            and type(value["parallelism"]) is int
+            and value["parallelism"] == 1
+            and type(value["completion"]) is int
+            and value["completion"] == 1
+            and len(value["containers"]) == 1
+            and value["containers"][0]["name"] == self.target.container,
+            "job_template_topology",
+        )
+        require(
+            type(value["retry"]) is int and value["retry"] == 0, "retry_must_be_zero"
+        )
+        require(
+            type(value["timeout"]) is int and value["timeout"] > 0,
+            "unknown_replica_timeout",
+        )
+        return sha256(json.dumps(value, sort_keys=True).encode()), value["timeout"]
+
+    def executions(self):
+        # The CLI execution-list wrapper drops nextLink. Use the ARM envelope
+        # and reject a partial view instead of admitting on the first page.
+        target = self.target
+        url = (
+            f"https://management.azure.com/subscriptions/{target.subscription}"
+            f"/resourceGroups/{target.group}/providers/Microsoft.App/jobs/{target.job}"
+            "/executions?api-version=2025-01-01"
+        )
+        page = self.az(
+            "rest",
+            "--method",
+            "get",
+            "--url",
+            url,
+            "--query",
+            "{next:nextLink,rows:value[].{name:name,status:properties.status}}",
+        )
+        require(
+            page["next"] is None and type(page["rows"]) is list,
+            "execution_list_incomplete",
+        )
+        executions = {}
+        for row in page["rows"]:
+            name = row["name"]
+            require(
+                execution_name(name, target.job) and name not in executions,
+                "execution_list_invalid",
+            )
+            executions[name] = row["status"]
+        return executions
+
+    def execution(self, name, query, **options):
+        require(execution_name(name, self.target.job), "invalid_execution_name")
+        return self.job(
+            "execution",
+            "show",
+            "--job-execution-name",
+            name,
+            "--query",
+            query,
+            **options,
+        )
+
+    def status(self, name, *, timeout=15):
+        record = self.execution(
+            name, "{name:name,status:properties.status}", timeout=timeout
+        )
+        require(record["name"] == name, "execution_identity")
+        status = record["status"]
+        return status if type(status) is str else None
+
+    def reconcile(self, before, bootstrap, variables, deadline):
+        """Identify only the execution with this invocation's unique override."""
+        while self.clock() < deadline:
+            new = self.executions().keys() - before.keys()
+            require(len(new) <= 1, "incident_multiple_new_executions")
+            if new:
+                name = next(iter(new))
+                record = self.execution(name, EXECUTION_QUERY)
+                names = [
+                    {
+                        "name": key,
+                        "secretRef": value.removeprefix("secretref:")
+                        if key == "DATABASE_URL"
+                        else None,
+                    }
+                    for key, value in variables.items()
+                ]
+                expected = {
+                    "name": self.target.container,
+                    "image": self.target.image,
+                    "command": [PYTHON],
+                    "args": [bootstrap],
+                    "env": sorted(names, key=lambda item: item["name"]),
+                    "nonce": [variables["CORE_BUNDLE_Z"]],
+                }
+                for container in record["containers"]:
+                    container["env"] = sorted(
+                        container["env"], key=lambda item: item["name"]
+                    )
+                require(
+                    record["name"] == name and record["containers"] == [expected],
+                    "incident_execution_not_identified",
+                )
+                return name
+            self.sleep(3)
+        raise Stop("incident_execution_not_identified")
+
+    def stop_and_confirm(self, name):
+        """Only execution-scoped stop. A failed stop remains an incident."""
+        deadline = self.clock() + 60
+        failed = False
+        try:
+            self.job("stop", "--job-execution-name", name, output="none")
+        except Stop:
+            failed = True
+        while self.clock() < deadline:
+            try:
+                terminal = self.status(name) in TERMINAL
+            except (Stop, KeyError, TypeError) as error:
+                raise Stop("incident_stop_unconfirmed") from error
+            if terminal:
+                require(not failed, "incident_stop_failed_terminal")
+                return
+            self.sleep(3)
+        raise Stop("incident_stop_unconfirmed")
+
+    def run_once(self, before, bootstrap, variables, *, wait_seconds=300):
+        deadline = self.clock() + wait_seconds
+        try:
+            start = self.job(
+                "start",
+                "--container-name",
+                self.target.container,
+                "--image",
+                self.target.image,
+                "--command",
+                PYTHON,
+                "--args=" + bootstrap,
+                "--env-vars",
+                *(f"{key}={value}" for key, value in variables.items()),
+                "--query",
+                "{name:name}",
+            )
+            name = start.get("name") if isinstance(start, dict) else None
+            require(
+                execution_name(name, self.target.job) and name not in before,
+                "ambiguous_start",
+            )
+        except Stop:
+            try:
+                name = self.reconcile(before, bootstrap, variables, self.clock() + 45)
+            except (Stop, KeyError, TypeError) as error:
+                raise Stop("incident_start_unresolved") from error
+            # The execution is positively identified even if its status read
+            # fails. A failed read must still take the scoped cleanup path.
+            try:
+                terminal = self.status(name) in TERMINAL
+            except (Stop, KeyError, TypeError):
+                terminal = False
+            if not terminal:
+                self.stop_and_confirm(name)
+            raise Stop("start_response_lost_execution_terminal") from None
+
+        while self.clock() < deadline:
+            try:
+                status = self.status(name, timeout=min(15, deadline - self.clock()))
+            except (Stop, KeyError, TypeError):
+                self.stop_and_confirm(name)
+                raise Stop("execution_status_unavailable_stopped") from None
+            if status in TERMINAL:
+                require(status == "Succeeded", "execution_terminal_failure")
+                return name
+            if status not in ACTIVE:
+                self.stop_and_confirm(name)
+                raise Stop("execution_unknown_status_stopped")
+            self.sleep(min(5, max(0, deadline - self.clock())))
+        self.stop_and_confirm(name)
+        raise Stop("execution_timed_out_stopped")
+
+    def finished_logs(self, name):
+        require(execution_name(name, self.target.job), "invalid_execution_name")
+        # Finished replicas can lose their stream. Use the existing Log
+        # Analytics path directly. Scope to this job container and exact
+        # execution (or its one replica suffix), never a substring search.
+        query = (
+            "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(30m) "
+            f"| where ContainerName_s == '{self.target.container}' "
+            f"| where ContainerGroupName_s matches regex '^{name}(-[a-z0-9]+)?$' "
+            "| order by TimeGenerated asc | project log=Log_s"
+        )
+        deadline = self.clock() + 120
+        while self.clock() < deadline:
+            response = self.az(
+                "rest",
+                "--method",
+                "post",
+                "--resource",
+                "https://api.loganalytics.io",
+                "--url",
+                f"https://api.loganalytics.io/v1/workspaces/{self.target.workspace}/query",
+                "--headers",
+                "Content-Type=application/json",
+                "--body",
+                json.dumps({"query": query}),
+            )
+            require(
+                type(response) is dict
+                and set(response) == {"tables"}
+                and type(response["tables"]) is list
+                and len(response["tables"]) == 1,
+                "analytics_response",
+            )
+            table = cast("dict[str, Any]", response)["tables"][0]
+            require(
+                table["columns"] == [{"name": "log", "type": "string"}]
+                and type(table["rows"]) is list
+                and all(
+                    type(row) is list and len(row) == 1 and type(row[0]) is str
+                    for row in table["rows"]
+                ),
+                "analytics_response",
+            )
+            if table["rows"]:
+                return [row[0] for row in table["rows"]]
+            self.sleep(5)
+        raise Stop("finished_logs_missing")
+
+    def verify_only_execution(self, before, name):
+        after = self.executions()
+        require(
+            after.keys() - before.keys() == {name}
+            and after[name] == "Succeeded"
+            and all(state in TERMINAL for state in after.values()),
+            "execution_count_or_status_changed",
+        )
+
+
+def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=None):
+    verify_package()
+    require(checkout_sha == candidate, "checkout_sha")
+    variables = encoded_inputs(candidate)
+    bootstrap = (PACKAGE / "bootstrap-args.txt").read_bytes().decode()
+    selector = carrier.serving_selector()
+    template_before = carrier.template()
+    before = carrier.executions()
+    require(all(state in TERMINAL for state in before.values()), "migration_job_busy")
+    variables = {"DATABASE_URL": f"secretref:{selector}", **variables}
+    if before_start is not None:
+        before_start()
+    try:
+        name = carrier.run_once(before, bootstrap, variables)
+        receipt = receipt_header(candidate, run_id, name, selector)
+        lines = carrier.finished_logs(name)
+        carrier.verify_only_execution(before, name)
+    except Exception:
+        try:
+            require(carrier.template() == template_before, "migration_template_changed")
+        except Exception:
+            print("Production job template could not be reverified after the failure.")
+        raise
+    require(carrier.template() == template_before, "migration_template_changed")
+    counts, shape = parse_markers(lines)
+    receipt.update(
+        template_unchanged=True,
+        template_sha256=template_before[0],
+        retry_limit=0,
+        replica_timeout_seconds=template_before[1],
+        execution_count=1,
+        g2_shape=shape,
+        access_counts=counts,
+    )
+    require(shape == "match", "g2_shape_differs")
+    verify_receipt(receipt, candidate, run_id)
+    return receipt
+
+
+def main():
+    try:
+        run_id = int(os.environ["GITHUB_RUN_ID"])
+        require(run_id > 0, "run_id")
+        receipt = run_production(
+            Carrier(PRODUCTION),
+            os.environ["GITHUB_SHA"],
+            run_id,
+            checkout_sha=os.environ["CHECKOUT_SHA"],
+            before_start=lambda: check_context(
+                CHECKS_WORKFLOW, os.environ, admitted=True
+            ),
+        )
+        path = Path(os.environ["RUNNER_TEMP"]) / RECEIPT_FILE
+        with path.open("x") as output:
+            output.write(json.dumps(receipt) + "\n")
+        print(
+            "Production checks passed. Review the immutable production-checks receipt."
+        )
+    except Stop as error:
+        print(f"Production checks stopped ({error}).")
+        return 1
+    except Exception:
+        print("Production checks stopped (invalid_or_unavailable_metadata).")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
