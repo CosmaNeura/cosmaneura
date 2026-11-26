@@ -15,7 +15,7 @@ import textwrap
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import carrier
 import contract
@@ -53,6 +53,10 @@ def markers():
 
 
 class ProbeTests(unittest.TestCase):
+    @staticmethod
+    def workflow_job(source, job):
+        return re.split(r"\n  [\w-]+:\n", source.split(f"\n  {job}:\n", 1)[1])[0]
+
     def test_transition_receipt_steps_keep_automatic_rollback_independent(self):
         self.assertIn("production-checks-receipt", WORKFLOW.read_text())
         release = WORKFLOW.with_name("release_verified_candidate.yml").read_text()
@@ -75,7 +79,13 @@ class ProbeTests(unittest.TestCase):
             "--receipt", WORKFLOW.with_name("build_and_publish.yml").read_text()
         )
 
-        release_steps = release.split("\n      - ")
+        release_steps = self.workflow_job(release, "publish-and-deploy").split(
+            "\n      - "
+        )
+        checkout = next(
+            step for step in release_steps if "uses: actions/checkout@" in step
+        )
+        self.assertRegex(checkout, r"(?m)^          fetch-depth: 0$")
         receipt = next(
             index for index, step in enumerate(release_steps) if "--receipt" in step
         )
@@ -114,13 +124,24 @@ class ProbeTests(unittest.TestCase):
             ("deploy", "id: candidate", "Deploy the previously verified Core digest"),
         ):
             with self.subTest(job=job):
-                body = re.split(r"\n  [\w-]+:\n", build.split(f"\n  {job}:\n", 1)[1])[0]
-                steps = body.split("\n      - ")
+                steps = self.workflow_job(build, job).split("\n      - ")
+                checkout = next(
+                    step for step in steps if "uses: actions/checkout@" in step
+                )
+                self.assertRegex(checkout, r"(?m)^          fetch-depth: 0$")
                 receipt = next(
                     index for index, step in enumerate(steps) if "--receipt" in step
                 )
+                read = receipt - 1
                 self.assertIn(previous, steps[receipt - 2])
-                self.assertIn("running-source-sha --output", steps[receipt - 1])
+                self.assertIn("running-source-sha --output", steps[read])
+                self.assertTrue(
+                    any(
+                        "uses: docker/login-action@" in step or "az acr login " in step
+                        for step in steps[:read]
+                    ),
+                    "Registry authentication must precede the running revision read",
+                )
                 self.assertIn(following, steps[receipt + 1])
 
     def test_running_source_sha_mode_writes_revision_file(self):
@@ -141,6 +162,12 @@ class ProbeTests(unittest.TestCase):
 
     def test_button_records_carrier_reconciliation_in_job_history(self):
         source = WORKFLOW.read_text()
+        for job in ("authorize-production", "checks"):
+            with self.subTest(job=job):
+                self.assertRegex(
+                    self.workflow_job(source, job),
+                    r"(?m)^    permissions:\n(?:      \S[^\n]*\n)*?      actions: read$",
+                )
         self.assertIn(
             "- name: Run exactly one checked execution\n        id: carrier", source
         )
@@ -507,7 +534,7 @@ class FakeAzureTests(unittest.TestCase):
                 self.assertEqual(self.state()["stops"], [])
 
     def test_button_admission_checks_first_attempt_and_sets_sha(self):
-        candidate = "a" * 40
+        candidate = MASTER
         repository = "CosmaNeura/cosmaneura"
         ref = "refs/heads/master"
         workflow_ref = f"{repository}/.github/workflows/run_production_checks.yml@{ref}"
@@ -524,22 +551,31 @@ class FakeAzureTests(unittest.TestCase):
             "GITHUB_OUTPUT": str(self.state_path),
         }
         master = {"ref": ref, "object": {"type": "commit", "sha": candidate}}
+        responses = {
+            "git/ref/heads/master": master,
+            "actions/workflows/run_production_checks.yml/runs?branch=master"
+            "&event=workflow_dispatch&per_page=100&page=1": {
+                "workflow_runs": [],
+                "total_count": 0,
+            },
+        }
+        expected_calls = [call(path) for path in responses]
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("admission.api", return_value=master) as lookup,
+            patch("admission.api", side_effect=responses.__getitem__) as lookup,
             patch("sys.stdout", io.StringIO()) as stdout,
         ):
             with patch.object(sys, "argv", ["carrier.py", "--output"]):
-                self.assertEqual(carrier.main(), 0)
+                self.assertEqual(carrier.main(), 0, stdout.getvalue())
             sha_output = self.state_path.read_text()
             self.assertEqual(sha_output, f"sha={candidate}\n")
-            lookup.assert_called_once_with("git/ref/heads/master")
+            self.assertEqual(lookup.call_args_list, expected_calls)
             lookup.reset_mock()
             os.environ["ADMITTED_SHA"] = sha_output.strip().removeprefix("sha=")
             with patch.object(sys, "argv", ["carrier.py", "--admitted"]):
-                self.assertEqual(carrier.main(), 0)
+                self.assertEqual(carrier.main(), 0, stdout.getvalue())
             self.assertEqual(self.state_path.read_text(), sha_output)
-            lookup.assert_called_once_with("git/ref/heads/master")
+            self.assertEqual(lookup.call_args_list, expected_calls)
             lookup.reset_mock()
             with patch.object(sys, "argv", ["carrier.py", "--output"]):
                 os.environ["GITHUB_WORKFLOW_REF"] = (

@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       sha: ${{ steps.admission.outputs.sha }}
@@ -44,6 +45,7 @@ jobs:
     timeout-minutes: 31
     environment: production
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:

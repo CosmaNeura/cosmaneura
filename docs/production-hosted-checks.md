@@ -5,10 +5,10 @@ Release and Build & Publish require a receipt when the exact master tip contains
 `cf67a63129426c558b84559618822a6b59e7cdba` and the running production source revision
 does not. Ancestry includes the commit itself and applies to merge commits.
 
-**Run production checks** is a JohnClem-only dispatch on `master`. Each dispatch must
+**Run production checks** is a founder-only dispatch on `master`. Each dispatch must
 be a new first attempt. It uses the existing Release OIDC identity and the
-`production` environment, and shares the `cosmaneura-production-container-apps`
-concurrency group with Plan, Apply and deployments, with `cancel-in-progress: false`.
+`production` environment, and shares the production deployment concurrency group
+with Plan, Apply and deployments, with `cancel-in-progress: false`.
 
 ## Candidate and receipt
 
@@ -25,15 +25,34 @@ selector names and embedded source.
 Once the running revision contains the reviewed commit, later releases and
 revert-commit rollbacks follow the existing release path without a receipt.
 Automatic image rollback keeps its existing path and has no receipt dependency.
-A revert commit released before the first successful R2 release still requires
-a receipt if it contains R2 and production is still running a pre-R2 image.
-If migrations have already run, the checks cannot issue that receipt because
-the pre-migration G2 shape no longer matches.
 
-Run production checks on the final merged master tip. The receipt is valid for
-that exact tip, expires after one day, and must be used before another commit
-lands on master. Plan and Apply retain their exact-tip admission and do not gate
-on a receipt because they supply no running revision file.
+Before the first successful release, a receipt is required and checks or
+admission cannot provide a usable receipt in these cases:
+
+- **(a)** A new master tip contains the reviewed R2 commit, including a
+  fix-forward or revert, while the running image predates that commit and
+  migrations have run. The pre-migration G2 shape no longer matches.
+- **(b)** The same tip's receipt artifact has expired after one day. After
+  migrations run, checks cannot produce a replacement.
+- **(c)** A later Run production checks dispatch on the same SHA supersedes
+  the receipt. Admission reads only the newest run. After migrations run, that
+  run cannot produce a replacement.
+- **(d)** A new migration file lands on master before the first release. The
+  candidate no longer matches the pinned 97-file manifest.
+- **(e)** A partial deploy leaves the three apps reporting different revisions.
+  The running-revision read fails before admission can verify a receipt.
+
+The only exit in each case is a reviewed PR to master that removes or repins
+the receipt step. No ungated manual path exists.
+
+Dispatch Run production checks on the final merged master tip. From that
+dispatch until Release succeeds, make no merges and add no new migrations on
+master. Run checks and Release on the same day. Never re-dispatch checks after
+Release has started. Plan and Apply retain their exact-tip admission and do
+not gate on a receipt because they supply no running revision file.
+
+**Retire.** After the first successful release, a follow-up PR removes the
+receipt steps and the running-revision read from Build & Publish.
 
 The transition check requires a full-history checkout. If ancestry cannot be
 established, or if the candidate contains R2 and the running SHA file is invalid
@@ -43,9 +62,9 @@ immutable candidate on the promote path. The check still precedes publish and
 deploy. A missing first-release receipt therefore stops the run after the build.
 
 The running SHA comes from the `org.opencontainers.image.revision` label on the
-three live apps' images, read using Azure Container Apps and Docker. The label
-on the currently serving image (`877fe96e…`) is unverified. Release already
-refuses at schema admission if it cannot read the revision, and Build & Publish
+three live apps' images, read using Azure Container Apps and Docker. The live
+labels are unverified. Release already refuses at schema admission if it
+cannot read the revision, and Build & Publish
 would refuse at its new read step. The new read mode and its placement in
 prepare and promote have only offline verification. Whether production
 environment approvals add manual steps is unverified.
@@ -70,8 +89,7 @@ environment approvals add manual steps is unverified.
 Before preflight, the workflow uses Entra token login to ACR, pulls the pinned digest
 and probes the cached image without network or credential inputs. AcrPull remains
 unverified until run. The probe checks `/opt/venv/bin/python`, Python 3.13,
-psycopg 3.2.6 and libpq 17.4 or later. Record its result for digest
-`877fe96e9b43297be2ac479ef939c5e47476229fc867062ad0fda2bd1a50fac6`.
+psycopg 3.2.6 and libpq 17.4 or later. Record its result for the pinned image digest.
 
 The carrier verifies the image and one approved selector across all positive traffic
 weights totaling 100%. It requires a manual job with one replica and completion,

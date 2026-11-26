@@ -465,9 +465,6 @@ class AdmissionTests(unittest.TestCase):
     def test_receipt_provenance_and_digest(self):
         receipt, run, jobs, artifact, lookup = self.receipt_fixture(MASTER)
         admission.verify_production_receipt(MASTER, lookup)
-        with patch.dict(receipt, preflight={"query_workspace": True}):
-            with self.assertRaisesRegex(contract.Stop, "receipt_preflight"):
-                admission.verify_production_receipt(MASTER, lookup)
         with self.assertRaisesRegex(contract.Stop, "receipt_missing"):
             admission.verify_production_receipt(MASTER, lambda _: {"workflow_runs": []})
         for field, wrong in (
@@ -497,6 +494,25 @@ class AdmissionTests(unittest.TestCase):
         ):
             with patch.dict(receipt, {field: wrong}):
                 with self.assertRaisesRegex(contract.Stop, "receipt_contract"):
+                    admission.verify_production_receipt(MASTER, lookup)
+
+    def test_receipt_gate_requires_exact_preflight_shape(self):
+        receipt, _, _, _, lookup = self.receipt_fixture(MASTER)
+        preflight = receipt["preflight"]
+        for case, value in (
+            ("missing", None),
+            ("missing keys", {"query_workspace": True}),
+            ("extra key", dict(preflight, unexpected=True)),
+            ("non-bool value", dict(preflight, list_executions=1)),
+            ("both true", dict(preflight, show_execution=True)),
+            ("both false", dict(preflight, no_prior_execution=False)),
+        ):
+            with self.subTest(case=case), patch.dict(receipt):
+                if value is None:
+                    del receipt["preflight"]
+                else:
+                    receipt["preflight"] = value
+                with self.assertRaisesRegex(contract.Stop, "^receipt_preflight$"):
                     admission.verify_production_receipt(MASTER, lookup)
 
 
