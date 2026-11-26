@@ -578,8 +578,8 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
     assert f"vars.{FLAG}" not in plan_workflow
 
     for protected_job in (
-        production_plan,
-        apply_workflow,
+        _workflow_job(production_plan, "plan"),
+        _workflow_job(apply_workflow, "apply"),
         production_deploy,
     ):
         assert protected_job.count(fixed_false) == 1
@@ -789,7 +789,10 @@ def test_production_plan_uploads_only_nonsecret_immutable_attestation() -> None:
     assert "overwrite: false" in upload_step
     assert "tfplan.bin" not in upload_step
     assert "rm -f infra/tfplan.bin" in plan_workflow
-    assert plan_workflow.index("rm -f tfplan.bin plan.txt") < upload_start
+    assert plan_workflow.index("rm -f tfplan.bin") < upload_start
+    assert "plan.txt" not in plan_workflow
+    assert "render_plan.py" in plan_step
+    assert ">/dev/null 2>&1" in plan_step
     assert 'artifact_sha256_hex="${ARTIFACT_DIGEST#sha256:}"' in digest_step
     assert '[[ ! "$artifact_sha256_hex" =~ ^[0-9a-f]{64}$ ]]' in digest_step
     assert 'normalized_artifact_digest="sha256:$artifact_sha256_hex"' in digest_step

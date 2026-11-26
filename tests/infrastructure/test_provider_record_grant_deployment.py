@@ -239,27 +239,31 @@ def test_legacy_staging_branch_deployment_path_is_absent() -> None:
 
 
 def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
-    for path, protected_job_name, prefix in (
-        (".github/workflows/infra_production_plan_local.yml", "plan", "PLAN"),
-        (".github/workflows/infra_apply_local.yml", "apply", "APPLY"),
+    for path, protected_job_name in (
+        (".github/workflows/infra_production_plan_local.yml", "plan"),
+        (".github/workflows/infra_apply_local.yml", "apply"),
     ):
         workflow = _read(path)
         authorization_start = workflow.index("\n  authorize-production:")
         protected_start = workflow.index(f"\n  {protected_job_name}:")
         authorization_job = workflow[authorization_start:protected_start]
         protected_job = workflow[protected_start:]
+        filename = Path(path).name
 
-        assert "permissions: {}" in authorization_job
+        assert "contents: read" in authorization_job
+        assert "id-token:" not in authorization_job
+        assert "secrets." not in authorization_job
         assert "environment: production" not in authorization_job
-        assert f"{prefix}_ACTOR: ${{{{ github.actor }}}}" in authorization_job
-        assert (
-            f"{prefix}_TRIGGERING_ACTOR: ${{{{ github.triggering_actor }}}}"
-            in authorization_job
-        )
-        assert f'"${prefix}_EVENT" != "workflow_dispatch"' in authorization_job
-        assert f'"${prefix}_REF" != "refs/heads/master"' in authorization_job
-        assert f'"${prefix}_ACTOR" != "JohnClem"' in authorization_job
-        assert f'"${prefix}_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
+        assert "TRIGGERING_ACTOR: ${{ github.triggering_actor }}" in authorization_job
+        assert f"admission.py {filename}" in authorization_job
+        assert "--output" in authorization_job
+        first_admission = protected_job.index(f"admission.py {filename} --admitted")
+        assert first_admission < protected_job.index("azure/login")
+        assert "needs.authorize-production.outputs.sha == github.sha" in protected_job
+        if protected_job_name in {"plan", "apply"}:
+            assert f"admission.py {filename} --receipt --output" in authorization_job
+            assert f"admission.py {filename} --admitted --receipt" in protected_job
+            assert "secrets." not in protected_job[: protected_job.index("steps:")]
 
         assert "needs: authorize-production" in protected_job
         assert "environment: production" in protected_job
