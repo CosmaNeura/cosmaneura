@@ -27,6 +27,17 @@ import urllib.request
 
 API = "https://api.stripe.com/v1"
 
+# Mirrors app/utils/spreadsheet.py; this script stays stdlib-only.
+FORMULA_LEADERS = frozenset("=+-@\t\r\n\uff1d\uff0b\uff0d\uff20")
+
+
+def neutralize_formula(value: object) -> object:
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in FORMULA_LEADERS or value.lstrip()[:1] in FORMULA_LEADERS:
+        return "'" + value
+    return value
+
 
 def stripe_get(key: str, path: str, params: dict[str, str]) -> dict:
     query = urllib.parse.urlencode(params)
@@ -73,9 +84,16 @@ def main() -> int:
 
     if "--csv" in sys.argv:
         buffer = io.StringIO()
-        writer = csv.DictWriter(buffer, fieldnames=list(rows[0]) if rows else [])
+        writer = csv.DictWriter(
+            buffer,
+            fieldnames=list(rows[0]) if rows else [],
+            quoting=csv.QUOTE_ALL,
+        )
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            {key: neutralize_formula(value) for key, value in row.items()}
+            for row in rows
+        )
         print(buffer.getvalue(), end="")
     else:
         if not rows:
