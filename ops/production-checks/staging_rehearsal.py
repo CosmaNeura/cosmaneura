@@ -6,7 +6,7 @@ import re
 import sys
 
 import runner
-from carrier import PRODUCTION, TERMINAL, Carrier, Target
+from carrier import PRODUCTION, PRODUCTION_APP, TERMINAL, Carrier, Target
 from contract import (
     REVIEWED_SOURCE,
     Stop,
@@ -24,17 +24,24 @@ SYNTHETIC_DONE = "REHEARSAL_PAYLOAD_OK=1"
 
 
 def staging_target(args):
+    production_names = {PRODUCTION.job, PRODUCTION.container, PRODUCTION_APP}
     require(
-        re.fullmatch(UUID, args.subscription)
-        and args.subscription != PRODUCTION.subscription
+        args.resource_group != PRODUCTION.group
+        and "prod" not in args.resource_group
+        and re.fullmatch(UUID, args.subscription)
         and re.fullmatch(UUID, args.workspace)
         and args.workspace != PRODUCTION.workspace
         and (
             args.resource_group == "cosmaneura-staging"
             or re.fullmatch(STAGING_NAME, args.resource_group)
         )
+        and all(
+            name not in production_names and "prod" not in name
+            for name in (args.job, args.container)
+        )
         and re.fullmatch(STAGING_NAME, args.job)
         and re.fullmatch(STAGING_NAME, args.container)
+        and not args.image.startswith("cosmaneuraprodregistry")
         and re.fullmatch(
             r"cosmaneurastagingregistry\.azurecr\.io/"
             r"cosmaneura/cosmaneura@sha256:[0-9a-f]{64}",

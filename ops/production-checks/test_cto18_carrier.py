@@ -48,6 +48,58 @@ class MarkerTests(unittest.TestCase):
                 contract.parse_markers(malformed)
 
 
+class StagingTargetTests(unittest.TestCase):
+    def setUp(self):
+        self.args = {
+            "subscription": carrier.PRODUCTION.subscription,
+            "resource_group": "cosmaneura-staging",
+            "job": "cosmaneura-staging-fixture-job",
+            "container": "cosmaneura-staging-fixture-container",
+            "workspace": "12345678-1234-1234-1234-123456789abd",
+            "image": "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
+            + "1" * 64,
+        }
+
+    def test_accepts_staging_target_in_shared_subscription(self):
+        target = staging_rehearsal.staging_target(SimpleNamespace(**self.args))
+        self.assertEqual(
+            target,
+            carrier.Target(
+                carrier.PRODUCTION.subscription,
+                self.args["resource_group"],
+                self.args["job"],
+                self.args["workspace"],
+                self.args["image"],
+                self.args["container"],
+            ),
+        )
+
+    def test_refuses_production_values_in_either_subscription(self):
+        for subscription in (
+            carrier.PRODUCTION.subscription,
+            "12345678-1234-1234-1234-123456789abc",
+        ):
+            for field, value in (
+                ("resource_group", carrier.PRODUCTION.group),
+                ("job", carrier.PRODUCTION.job),
+                ("container", carrier.PRODUCTION.container),
+                ("job", carrier.PRODUCTION_APP),
+                ("workspace", carrier.PRODUCTION.workspace),
+                ("image", carrier.PRODUCTION.image),
+                ("resource_group", "cosmaneura-staging-prodlike"),
+                ("job", "cosmaneura-staging-prodlike"),
+                ("container", "cosmaneura-staging-prodlike"),
+            ):
+                with self.subTest(subscription=subscription, field=field, value=value):
+                    args = SimpleNamespace(
+                        **(self.args | {"subscription": subscription, field: value})
+                    )
+                    with self.assertRaisesRegex(
+                        contract.Stop, "^staging_target_required$"
+                    ):
+                        staging_rehearsal.staging_target(args)
+
+
 class FakeAzureTests(unittest.TestCase):
     def setUp(self):
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
