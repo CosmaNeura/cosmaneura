@@ -1,0 +1,61 @@
+# r2 runner synthetic test output — 2026-11-26 09:34:20 ET — runner sha256 b940747c7ed2fdd0d414dca664c8d642adae0f92539fe2ae28d28c72f59a9b59
+# Synthetic local Postgres only; no Azure, no prod, no real secret. Command: tests/run_tests.sh
+synthetic pg up at /workspace/r2-pgtest (TLS, cosmaneura-prod-postgres.postgres.database.azure.com -> 127.0.0.1)
+python: Python 3.13.5; psycopg 3.3.9 libpq 180006; postgres 17.12
+test_happy_path_pass (__main__.T01HappyPath.test_happy_path_pass) ... ok
+test_access_pairs_unit (__main__.T02LabelMismatchSilent.test_access_pairs_unit) ... ok
+test_db_returns_unexpected_label_prints_no_counts (__main__.T02LabelMismatchSilent.test_db_returns_unexpected_label_prints_no_counts) ... ok
+test_missing_and_extra_label_prints_no_counts (__main__.T02LabelMismatchSilent.test_missing_and_extra_label_prints_no_counts) ... ok
+test_boundary_refuses_non_typed_values (__main__.T03RowContentLeakBlocked.test_boundary_refuses_non_typed_values) ... ok
+test_sql_selecting_row_content_is_refused_without_printing_it (__main__.T03RowContentLeakBlocked.test_sql_selecting_row_content_is_refused_without_printing_it) ... ok
+test_tampered_runner_with_leaky_sql_never_executes (__main__.T03RowContentLeakBlocked.test_tampered_runner_with_leaky_sql_never_executes) ... ok
+test_bootstrap_pins_the_file_sha (__main__.T04RunnerShaMismatch.test_bootstrap_pins_the_file_sha) ... ok
+test_one_byte_change_refused_in_bootstrap (__main__.T04RunnerShaMismatch.test_one_byte_change_refused_in_bootstrap) ... ok
+test_bundle_sql_key_refused (__main__.T05ManifestAndBundleMismatch.test_bundle_sql_key_refused) ... ok
+test_candidate_manifest_mismatch (__main__.T05ManifestAndBundleMismatch.test_candidate_manifest_mismatch) ... ok
+test_extra_migration (__main__.T05ManifestAndBundleMismatch.test_extra_migration) ... ok
+test_migration_missing (__main__.T05ManifestAndBundleMismatch.test_migration_missing) ... ok
+test_script_mismatch (__main__.T05ManifestAndBundleMismatch.test_script_mismatch) ... ok
+test_session_lock_timeout_is_4s_and_enforced (__main__.T06LockTimeout.test_session_lock_timeout_is_4s_and_enforced) ... ok
+test_access_table_missing_is_stop (__main__.T07GuardOutcomes.test_access_table_missing_is_stop) ... ok
+test_e78845_abort_is_stop (__main__.T07GuardOutcomes.test_e78845_abort_is_stop) ... ok
+test_guard_tables_missing_is_stop (__main__.T07GuardOutcomes.test_guard_tables_missing_is_stop) ... ok
+test_null_practice_authority_is_stop (__main__.T07GuardOutcomes.test_null_practice_authority_is_stop) ... ok
+test_unknown_head_is_stop (__main__.T07GuardOutcomes.test_unknown_head_is_stop) ... ok
+test_missing_payload_env (__main__.T08SecretsAndFailures.test_missing_payload_env) ... ok
+test_pg_env_refused (__main__.T08SecretsAndFailures.test_pg_env_refused) ... ok
+test_prefer_and_require_urls_never_connect (__main__.T08SecretsAndFailures.test_prefer_and_require_urls_never_connect) ... ok
+test_wrong_password_fixed_codes_only (__main__.T08SecretsAndFailures.test_wrong_password_fixed_codes_only) ... ok
+test_zz_no_secret_or_row_content_in_any_output (__main__.T08SecretsAndFailures.test_zz_no_secret_or_row_content_in_any_output) ... ok
+test_sql_literals_and_no_input_path (__main__.T09StaticContract.test_sql_literals_and_no_input_path) ... ok
+
+----------------------------------------------------------------------
+Ran 26 tests in 9.785s
+
+OK
+
+    happy-path markers:
+      RUNNER_SHA_OK=1
+      RUN_START=1
+      BUNDLE_VERIFIED=97
+      URL_SHAPE=scheme:1,user:1,password:1,host:1,port:1,path:1,keys:1,verify_full:1,prefer:0,ca_file:0
+      PRECHECK_JSON={"abort_counts":{"practice_conflicts":0,"reused_uuids":0,"zero_uuids":0},"e78845cecca6_would_abort":false,"is_ancestor_of_repository_head":true,"migration_head":"49126bf99c72","pending_migrations":["ddd6261fa36f","e78845cecca6","69bad2e072e2","b38d5a410e49","c764298c7590","5f3c9a1e7b24","5708b4399768"],"provider_practice_authority_null_practice_id_count":0,"refusal_reasons":["pending_migrations"],"repository_head":"5708b4399768","scope":"core"}
+      PRECHECK_EXIT=1
+      ACCESS_LOCK_TIMEOUT_MS=4000
+      ACCESS_COUNT=doctors_active,2
+      ACCESS_COUNT=doctors_total,3
+      ACCESS_COUNT=practices_total,2
+      ACCESS_COUNT=practices_baa_clickwrap_accepted,1
+      ACCESS_COUNT=practices_negotiated_baa_on_file,1
+      ACCESS_COUNT=practices_subscription_status_set,1
+      ACCESS_COUNT=baa_acceptances_total,1
+      ACCESS_COUNT=practice_members_active,2
+      ACCESS_COUNT=pilot_grants_active,1
+      ACCESS_ROWS=9
+      RUN_DONE=1
+
+    blocked access query refused after 4.0s (lock_timeout 4s)
+
+    scanned 25 runner outputs (7817 bytes) for 9 forbidden strings: none found
+synthetic pg stopped; /etc/hosts restored
+# exit=0

@@ -39,47 +39,38 @@ concurrency:
 jobs:
   authorize-production:
     name: Authorize production infrastructure apply
-    runs-on: [self-hosted, Linux, ARM64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.admission.outputs.sha }}
     steps:
-      - name: Require founder-authorized manual apply from master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Admit founder dispatch on fresh master
+        id: admission
         env:
-          APPLY_ACTOR: ${{ github.actor }}
-          APPLY_EVENT: ${{ github.event_name }}
-          APPLY_REF: ${{ github.ref }}
-          APPLY_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          if [[ "$APPLY_EVENT" != "workflow_dispatch" ]]; then
-            echo "::error::Production infrastructure apply must be started manually with workflow_dispatch."
-            exit 1
-          fi
-          if [[ "$APPLY_REF" != "refs/heads/master" ]]; then
-            echo "::error::Production infrastructure apply must target the exact master branch."
-            exit 1
-          fi
-          if [[ "$APPLY_ACTOR" != "JohnClem" ]]; then
-            echo "::error::Production infrastructure apply is restricted to the founder account."
-            exit 1
-          fi
-          if [[ "$APPLY_TRIGGERING_ACTOR" != "JohnClem" ]]; then
-            echo "::error::Production infrastructure apply reruns are restricted to the founder account."
-            exit 1
-          fi
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --receipt --output
 
   apply:
     name: Terraform Apply
     needs: authorize-production
     if: >-
       ${{
+        github.repository == 'CosmaNeura/cosmaneura' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/master' &&
         github.actor == 'JohnClem' &&
         github.triggering_actor == 'JohnClem' &&
-        needs.authorize-production.result == 'success'
+        needs.authorize-production.result == 'success' &&
+        needs.authorize-production.outputs.sha == github.sha
       }}
-    runs-on: [self-hosted, Linux, ARM64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: production
     permissions:
@@ -93,9 +84,8 @@ jobs:
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_LOG: "OFF"
+      AZURE_CORE_OUTPUT: none
     steps:
       - name: Reject unreviewed durable webhook activation
         env:
@@ -111,6 +101,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Reverify founder dispatch and receipt before production setup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted --receipt
 
       - name: Verify exact-current-master production plan evidence
         id: plan_evidence
@@ -230,6 +227,14 @@ jobs:
         timeout-minutes: 5
         with:
           apt-packages: zsh
+          enable_cache: "false"
+
+      - name: Reverify admission before Azure login
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
 
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
@@ -245,7 +250,10 @@ jobs:
             --name cosmaneura-prod-scheduler \
             --query properties.outboundIpAddresses \
             --output json \
-            --only-show-errors)
+            --only-show-errors 2>/dev/null) || {
+            echo "Could not verify the production scheduler egress." >&2
+            exit 1
+          }
           production_egress=$(jq -er '
             select(type == "array" and length == 1) |
             .[0] |
@@ -261,15 +269,40 @@ jobs:
           tofu_version: 1.12.5
           tofu_wrapper: false
 
+      - name: Reverify admission before production state access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
+
       - name: tofu init
         working-directory: infra
-        run: tofu init -input=false -lockfile=readonly
+        env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          tofu init -input=false -lockfile=readonly >/dev/null 2>&1 || {
+            echo "OpenTofu initialization failed." >&2
+            exit 1
+          }
+
+      - name: Reverify admission before recreating the plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
 
       - name: Recreate and verify exact reviewed plan
         working-directory: infra
         env:
           # Limit long-lived credentials to the one step that must resolve the
           # production configuration. They are absent from setup and apply.
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
           RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
         run: |
@@ -279,7 +312,7 @@ jobs:
 
           configuration_sha256=$(
             git -C .. ls-files -z -- \
-              infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+              ops/production-checks infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
               Justfile just Procfile .github/actions \
               .github/workflows/infra_production_plan_local.yml \
               .github/workflows/infra_apply_local.yml \
@@ -299,8 +332,11 @@ jobs:
               awk '{print $1}'
           )
           provider_lock_sha256=$(sha256sum .terraform.lock.hcl | awk '{print $1}')
-          state_identity=$(tofu state pull | jq -cS '{lineage, serial}')
-          state_lineage=$(jq -er '.lineage | select(type == "string" and length > 0)' <<<"$state_identity")
+          state_identity=$(tofu state pull 2>/dev/null | jq -cS '{lineage, serial}' 2>/dev/null) || {
+            echo "Could not read the production state identity." >&2
+            exit 1
+          }
+          state_lineage=$(jq -er '.lineage | select(type == "string" and test("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"))' <<<"$state_identity")
           state_serial=$(jq -er '.serial | select(type == "number" and . >= 0)' <<<"$state_identity")
 
           [[ "$configuration_sha256" == "$(jq -er '.configuration_sha256' "$metadata")" ]] || {
@@ -320,34 +356,57 @@ jobs:
             exit 1
           }
 
-          tofu plan -no-color -input=false -out=tfplan.bin
+          tofu plan -no-color -input=false -out=tfplan.bin >/dev/null 2>&1 || {
+            echo "OpenTofu plan recreation failed." >&2
+            exit 1
+          }
           # Keep this normalization identical to the protected plan workflow.
           # OpenTofu does not guarantee relevant_attributes array order.
-          canonical_plan_sha256=$(tofu show -json tfplan.bin |
-            jq -cS 'del(.timestamp) | .relevant_attributes |= ((. // []) | sort_by(.resource, .attribute))' |
+          canonical_plan_sha256=$(tofu show -json tfplan.bin 2>/dev/null |
+            jq -cS 'del(.timestamp) | .relevant_attributes |= ((. // []) | sort_by(.resource, .attribute))' 2>/dev/null |
             sha256sum |
-            awk '{print $1}')
+            awk '{print $1}') || {
+            echo "Could not compute the canonical OpenTofu plan digest." >&2
+            exit 1
+          }
           if [[ "$canonical_plan_sha256" != "$(jq -er '.canonical_plan_sha256' "$metadata")" ]]; then
             echo "The freshly saved plan does not exactly match the reviewed canonical plan." >&2
             exit 1
           fi
           echo "Verified canonical reviewed-plan SHA-256: \`$canonical_plan_sha256\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Reverify admission and receipt before applying
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted --receipt
+
       - name: Reverify current master and apply
         working-directory: infra
         env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           current_master_sha=$(gh api \
             "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
-            --jq '.object.sha')
+            --jq '.object.sha' 2>/dev/null) || {
+            echo "Could not verify current master immediately before apply." >&2
+            exit 1
+          }
           if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
             echo "Master advanced after verification; refusing to apply a stale commit." >&2
             exit 1
           fi
-          tofu apply -input=false -auto-approve tfplan.bin
+          tofu apply -input=false -auto-approve tfplan.bin >/dev/null 2>&1 || {
+            echo "OpenTofu apply failed. Hold production for incident review." >&2
+            exit 1
+          }
+          echo "OpenTofu applied the reviewed plan."
 
       - name: Summarize apply
         if: always()

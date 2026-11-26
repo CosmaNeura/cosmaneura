@@ -1,0 +1,3 @@
+extend = "../../pyproject.toml"
+# The supplied package is checked byte-for-byte in CI, including these three files.
+extend-exclude = ["runner.py", "tests/pass_check.py", "tests/test_runner.py"]
