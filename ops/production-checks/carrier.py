@@ -1,5 +1,6 @@
 """One-shot Azure Container Apps Jobs carrier. CLI output stays private."""
 
+import argparse
 import json
 import os
 import subprocess
@@ -8,9 +9,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+from urllib.parse import urlsplit
 
-from admission import INCIDENT_CODES, RECEIPT_FILE, check_context, verify_checks_receipt
+from admission import check_context
 from contract import (
     CHECKS_WORKFLOW,
     IMAGE,
@@ -25,8 +27,10 @@ from contract import (
     require,
     sha256,
     verify_package,
+    verify_receipt,
 )
 
+RECEIPT_FILE = "production-checks-receipt.json"
 PRODUCTION_SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 PRODUCTION_WORKSPACE = "2a7d954b-373c-4de6-884f-c050ecc1d863"
 PRODUCTION_APP = "cosmaneura-prod-app"
@@ -183,31 +187,47 @@ class Carrier:
         )
         return sha256(json.dumps(value, sort_keys=True).encode()), value["timeout"]
 
+    def pages(self, url, host, code, *options, deadline, method="get", body=()):
+        seen = set()
+        for _ in range(20):
+            require(isinstance(url, str) and url not in seen, code)
+            link = urlsplit(url)
+            require(link.scheme == "https" and link.netloc == host, code)
+            seen.add(url)
+            timeout = min(15, deadline - self.clock())
+            require(timeout > 0, code)
+            args = ("rest", "--method", method, "--url", url, *options, *body)
+            page = self.az(*args, timeout=timeout)
+            require(isinstance(page, dict), code)
+            yield page
+            url = page.get("nextLink")
+            if url is None:
+                return
+            method, body = "get", ()
+        raise Stop(code)
+
     def executions(self, *, newest_first=False):
-        # The CLI execution-list wrapper drops nextLink. Use the ARM envelope
-        # and reject a partial view instead of admitting on the first page.
+        # The CLI execution-list wrapper drops nextLink.
         target = self.target
         url = (
             f"https://management.azure.com/subscriptions/{target.subscription}"
             f"/resourceGroups/{target.group}/providers/Microsoft.App/jobs/{target.job}"
             "/executions?api-version=2025-01-01"
         )
-        page = self.az(
-            "rest",
-            "--method",
-            "get",
-            "--url",
+        pages = self.pages(
             url,
-            "--query",
-            "{next:nextLink,rows:value[].{name:name,status:properties.status,"
-            "start:properties.startTime}}",
-        )
-        require(
-            page["next"] is None and type(page["rows"]) is list,
+            "management.azure.com",
             "execution_list_incomplete",
+            "--query",
+            "{nextLink:nextLink,rows:value[].{name:name,status:properties.status,"
+            "start:properties.startTime}}",
+            deadline=self.clock() + 60,
         )
         executions = {}
-        rows = page["rows"]
+        rows = []
+        for page in pages:
+            require(isinstance(page.get("rows"), list), "execution_list_incomplete")
+            rows.extend(page["rows"])
         if newest_first:
             rows = sorted(
                 rows, key=lambda row: datetime.fromisoformat(row["start"]), reverse=True
@@ -351,6 +371,7 @@ class Carrier:
                 *(f"{key}={value}" for key, value in variables.items()),
                 "--query",
                 "{name:name}",
+                timeout=60,
             )
             name = start.get("name") if isinstance(start, dict) else None
             require(
@@ -388,33 +409,42 @@ class Carrier:
         self.stop_and_confirm(name)
         raise Stop("execution_timed_out_stopped")
 
-    def query_logs(self, query):
-        response = self.az(
-            "rest",
-            "--method",
-            "post",
+    def query_logs(self, query, *, deadline=None):
+        pages = self.pages(
+            f"https://api.loganalytics.io/v1/workspaces/{self.target.workspace}/query",
+            "api.loganalytics.io",
+            "analytics_response",
             "--resource",
             "https://api.loganalytics.io",
-            "--url",
-            f"https://api.loganalytics.io/v1/workspaces/{self.target.workspace}/query",
-            "--headers",
-            "Content-Type=application/json",
-            "--body",
-            json.dumps({"query": query}),
+            method="post",
+            body=(
+                "--headers",
+                "Content-Type=application/json",
+                "--body",
+                json.dumps({"query": query}),
+            ),
+            deadline=self.clock() + 60 if deadline is None else deadline,
         )
-        require(
-            type(response) is dict
-            and set(response) == {"tables"}
-            and type(response["tables"]) is list
-            and len(response["tables"]) == 1,
-            "analytics_response",
-        )
-        table = cast("dict[str, Any]", response)["tables"][0]
-        require(
-            type(table) is dict and type(table.get("rows")) is list,
-            "analytics_response",
-        )
-        return table
+        columns, rows = None, []
+        for page in pages:
+            tables = page.get("tables")
+            require(
+                set(page) <= {"tables", "nextLink"}
+                and isinstance(tables, list)
+                and len(tables) == 1,
+                "analytics_response",
+            )
+            table = page["tables"][0]
+            require(
+                isinstance(table, dict)
+                and isinstance(table.get("rows"), list)
+                and isinstance(table.get("columns"), list)
+                and (columns is None or columns == table["columns"]),
+                "analytics_response",
+            )
+            columns = table["columns"]
+            rows.extend(table["rows"])
+        return {"columns": columns, "rows": rows}
 
     def finished_logs(self, name):
         require(execution_name(name, self.target.job), "invalid_execution_name")
@@ -427,9 +457,10 @@ class Carrier:
             f"| where ContainerGroupName_s matches regex '^{name}(-[a-z0-9]+)?$' "
             "| order by TimeGenerated asc | project log=Log_s"
         )
-        deadline = self.clock() + 120
+        deadline = self.clock() + 240
+        lines = []
         while self.clock() < deadline:
-            table = self.query_logs(query)
+            table = self.query_logs(query, deadline=deadline)
             require(
                 table["columns"] == [{"name": "log", "type": "string"}]
                 and all(
@@ -438,10 +469,11 @@ class Carrier:
                 ),
                 "analytics_response",
             )
-            if table["rows"]:
-                return [row[0] for row in table["rows"]]
-            self.sleep(5)
-        raise Stop("finished_logs_missing")
+            lines = [row[0] for row in table["rows"]]
+            if len(lines) == 18 and lines[-1] == "RUN_DONE=1":
+                break
+            self.sleep(min(5, max(0, deadline - self.clock())))
+        return lines
 
     def verify_only_execution(self, before, name):
         after = self.executions()
@@ -486,15 +518,31 @@ def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=Non
         execution_count=1,
         g2_shape=shape,
         access_counts=counts,
-        preflight=preflight,
     )
     require(shape == "match", "g2_shape_differs")
-    verify_checks_receipt(receipt, candidate, run_id)
+    verify_receipt(receipt, candidate, run_id)
+    receipt["preflight"] = preflight
     return receipt
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--output", action="store_true")
+    mode.add_argument("--admitted", action="store_true")
+    args = parser.parse_args()
+
+    def admit():
+        require(os.environ.get("GITHUB_RUN_ATTEMPT") == "1", "run_attempt")
+        return check_context(CHECKS_WORKFLOW, os.environ, admitted=not args.output)
+
     try:
+        if args.output or args.admitted:
+            candidate = admit()
+            if args.output:
+                with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                    output.write(f"sha={candidate}\n")
+            return 0
         run_id = int(os.environ["GITHUB_RUN_ID"])
         require(run_id > 0, "run_id")
         receipt = run_production(
@@ -502,9 +550,7 @@ def main():
             os.environ["GITHUB_SHA"],
             run_id,
             checkout_sha=os.environ["CHECKOUT_SHA"],
-            before_start=lambda: check_context(
-                CHECKS_WORKFLOW, os.environ, admitted=True
-            ),
+            before_start=admit,
         )
         path = Path(os.environ["RUNNER_TEMP"]) / RECEIPT_FILE
         with path.open("x") as output:
@@ -513,9 +559,6 @@ def main():
             "Production checks passed. Review the immutable production-checks receipt."
         )
     except Stop as error:
-        if str(error) not in INCIDENT_CODES:
-            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-                output.write("execution_reconciled=true\n")
         print(f"Production checks stopped ({error}).")
         return 1
     except Exception:

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,20 @@ def emit(data):
 def fail():
     print("SYNTHETIC_PRIVATE_DIAGNOSTIC", file=sys.stderr)
     sys.exit(1)
+
+
+def log_page(lines, **extra):
+    emit(
+        {
+            "tables": [
+                {
+                    "columns": [{"name": "log", "type": "string"}],
+                    "rows": [[line] for line in lines],
+                }
+            ],
+            **extra,
+        }
+    )
 
 
 if args[:3] == ["containerapp", "revision", "list"]:
@@ -67,6 +82,15 @@ elif args[:3] == ["containerapp", "job", "show"]:
         }
     )
 elif args[:3] == ["rest", "--method", "get"]:
+    url = option("--url")
+    if url == "https://api.loganalytics.io/next":
+        assert (
+            option("--resource") == "https://api.loganalytics.io"
+            and "--body" not in args
+        )
+        log_page(state["lines"][9:])
+        sys.exit(0)
+    assert url.startswith("https://management.azure.com/")
     if scenario == "list_denied":
         fail()
     rows = [
@@ -77,12 +101,17 @@ elif args[:3] == ["rest", "--method", "get"]:
         }
         for name, row in state["executions"].items()
     ]
-    emit(
-        {
-            "next": "https://unused.invalid/next" if scenario == "paginated" else None,
-            "rows": rows,
-        }
-    )
+    link = "https://management.azure.com/next"
+    next_url = None
+    if url == link:
+        rows = rows[-1:]
+    elif scenario == "paginated":
+        next_url, rows = link, rows[:-1]
+    elif scenario == "duplicate_execution_page":
+        next_url = link
+    elif scenario == "foreign_execution_page":
+        next_url = "https://unused.invalid/next"
+    emit({"nextLink": next_url, "rows": rows})
 elif args[:3] == ["containerapp", "job", "start"]:
     assert state["preflight_queries"] == 1
     state["starts"] += 1
@@ -120,6 +149,13 @@ elif args[:3] == ["containerapp", "job", "start"]:
         assert len(payload) == 92412
         if "time.sleep" not in bootstrap:
             assert hashlib.sha256(payload.encode()).hexdigest() in bootstrap
+            emitted = subprocess.check_output(
+                [sys.executable, "-c", bootstrap[2:]],
+                env=os.environ | variables,
+                text=True,
+            ).splitlines()
+            if state["lines"] is None:
+                state["lines"] = emitted
     else:
         assert set(variables) == {
             "CORE_BUNDLE_Z",
@@ -203,17 +239,16 @@ elif args[:3] == ["rest", "--method", "post"]:
     assert f"ContainerName_s == '{state['container']}'" in query
     if scenario == "logs_error":
         fail()
-    if scenario == "logs_missing" or (
-        scenario == "logs_delayed" and state["log_reads"] == 1
-    ):
-        rows = []
-    else:
-        rows = [[line] for line in state["lines"]]
-    response: dict[str, Any] = {
-        "tables": [{"columns": [{"name": "log", "type": "string"}], "rows": rows}]
-    }
+    lines = state["lines"]
+    extra: dict[str, Any] = {}
+    if scenario == "logs_delayed" and state["log_reads"] <= 2:
+        lines = lines[: state["log_reads"] * 5]
+    if scenario in {"log_pages", "foreign_log_page"}:
+        lines = lines[:9]
+        host = "api.loganalytics.io" if scenario == "log_pages" else "unused.invalid"
+        extra["nextLink"] = f"https://{host}/next"
     if scenario == "logs_partial":
-        response["error"] = {"code": "PartialError"}
-    emit(response)
+        extra["error"] = {"code": "PartialError"}
+    log_page(lines, **extra)
 else:
     fail()

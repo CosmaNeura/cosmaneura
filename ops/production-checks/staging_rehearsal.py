@@ -20,8 +20,9 @@ from probe_image import STAGING_IMAGE
 UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 STAGING_NAME = r"(?:cn-stg-[a-z0-9-]+|cosmaneura-staging(?:-[a-z0-9]+)+)"
 TIMEOUT_WAIT = 40
-SYNTHETIC_START = "REHEARSAL_START=1"
-SYNTHETIC_DONE = "REHEARSAL_PAYLOAD_OK=1"
+SYNTHETIC_LINES = [f"REHEARSAL_MARKER={index}" for index in range(1, 18)] + [
+    "RUN_DONE=1"
+]
 
 
 def staging_target(args):
@@ -60,14 +61,13 @@ def rehearsal(carrier):
     expected = sha256(payload.encode())
     command = (
         "-cimport base64,hashlib,json,os,zlib;"
-        f"print({SYNTHETIC_START!r},flush=True);"
         "p=os.environ['CORE_MIGRATIONS_Z'];"
         f"assert hashlib.sha256(p.encode()).hexdigest()=={expected!r};"
         "d=json.loads(zlib.decompress(base64.b64decode(p)));"
         "assert type(d) is dict and len(d)==97;"
         "manifest=json.dumps(sorted((path,hashlib.sha256(t.encode()).hexdigest()) for path,t in d.items()));"
-        f"assert hashlib.sha256(manifest.encode()).hexdigest()=={runner.EXPECT_MIGRATIONS_MANIFEST!r};"
-        f"print({SYNTHETIC_DONE!r},flush=True)"
+        f"assert hashlib.sha256(manifest.encode()).hexdigest()=={runner.EXPECT_MIGRATIONS_MANIFEST!r}\n"
+        f"for line in {SYNTHETIC_LINES!r}: print(line,flush=True)"
     )
     template = carrier.template()
     require(template[1] > TIMEOUT_WAIT, "rehearsal_replica_timeout_too_short")
@@ -76,7 +76,7 @@ def rehearsal(carrier):
     try:
         name = carrier.run_once(before, command, variables)
         require(
-            carrier.finished_logs(name) == [SYNTHETIC_START, SYNTHETIC_DONE],
+            carrier.finished_logs(name) == SYNTHETIC_LINES,
             "rehearsal_finished_log_invalid",
         )
         carrier.verify_only_execution(before, name)

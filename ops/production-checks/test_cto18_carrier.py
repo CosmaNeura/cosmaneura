@@ -18,14 +18,60 @@ import carrier
 import contract
 import probe_image
 import staging_rehearsal
-from admission import INCIDENT_CODES, verify_checks_receipt
-from test_cto18_admission import markers
 
 MASTER = contract.REVIEWED_SOURCE
 WORKFLOW = contract.REPO_ROOT / ".github/workflows/run_production_checks.yml"
+STAGING_ARGS = {
+    "subscription": carrier.PRODUCTION.subscription,
+    "resource_group": "cosmaneura-staging",
+    "job": "cosmaneura-staging-fixture-job",
+    "container": "cn-stg-mig-fixture",
+    "workspace": "12345678-1234-1234-1234-123456789abd",
+    "image": "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
+    + "1" * 64,
+}
+
+
+def markers():
+    bits = {"prefer": 0, "ca_file": 0}
+    return [
+        "RUNNER_SHA_OK=1",
+        "RUN_START=1",
+        "BUNDLE_VERIFIED=97",
+        "URL_SHAPE="
+        + ",".join(f"{key}:{bits.get(key, 1)}" for key in contract.runner.SHAPE_KEYS),
+        f"PRECHECK_JSON={contract.G2}",
+        "PRECHECK_EXIT=1",
+        "ACCESS_LOCK_TIMEOUT_MS=4000",
+        *(f"ACCESS_COUNT={label},0" for label in contract.runner.ACCESS_LABELS),
+        "ACCESS_ROWS=9",
+        "RUN_DONE=1",
+    ]
 
 
 class ProbeTests(unittest.TestCase):
+    def test_release_workflows_have_no_receipt_requirement(self):
+        self.assertIn("production-checks-receipt", WORKFLOW.read_text())
+        for name in (
+            "infra_production_plan_local",
+            "infra_apply_local",
+            "release_verified_candidate",
+            "build_and_publish",
+            "build_and_publish_local",
+        ):
+            with self.subTest(workflow=name):
+                source = WORKFLOW.with_name(name + ".yml").read_text().lower()
+                self.assertNotIn("run_production_checks", source)
+                self.assertNotIn("production-checks-receipt", source)
+                self.assertNotIn("--receipt", source)
+
+    def test_runbook_link_restored(self):
+        source = (
+            contract.REPO_ROOT / "docs/production-migration-precheck.md"
+        ).read_text()
+        self.assertIn("[Hosted production checks](production-hosted-checks.md)", source)
+        self.assertNotRegex(source, r"PR [23]\b")
+
     def test_workflow_orders_login_pull_probe_and_carrier(self):
         workflow = WORKFLOW.read_text()
         positions = [
@@ -35,7 +81,7 @@ class ProbeTests(unittest.TestCase):
                 "az acr login --name cosmaneuraprodregistry",
                 "docker pull --platform linux/amd64",
                 "python3 ops/production-checks/probe_image.py",
-                "python3 ops/production-checks/carrier.py",
+                'CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py',
             )
         ]
         self.assertEqual(positions, sorted(set(positions)))
@@ -116,6 +162,28 @@ class ProbeTests(unittest.TestCase):
 
 
 class MarkerTests(unittest.TestCase):
+    def test_url_shape_requires_host_and_verify_full_without_prefer(self):
+        for bit in (
+            "host",
+            "scheme",
+            "user",
+            "password",
+            "port",
+            "path",
+            "keys",
+            "verify_full",
+            "prefer",
+        ):
+            with self.subTest(bit=bit):
+                lines = markers()
+                good = int(bit != "prefer")
+                lines[3] = lines[3].replace(f"{bit}:{good}", f"{bit}:{1 - good}")
+                with self.assertRaisesRegex(contract.Stop, "^invalid_log_marker$"):
+                    contract.parse_markers(lines)
+        lines = markers()
+        lines[3] = lines[3].replace("ca_file:0", "ca_file:1")
+        self.assertEqual(contract.parse_markers(lines)[1], "match")
+
     def test_g2_requires_exact_canonical_bytes(self):
         lines = markers()
         self.assertEqual(contract.parse_markers(lines)[1], "match")
@@ -145,43 +213,19 @@ class MarkerTests(unittest.TestCase):
 
 
 class StagingTargetTests(unittest.TestCase):
-    def setUp(self):
-        self.args = {
-            "subscription": carrier.PRODUCTION.subscription,
-            "resource_group": "cosmaneura-staging",
-            "job": "cosmaneura-staging-fixture-job",
-            "container": "cosmaneura-staging-fixture-container",
-            "workspace": "12345678-1234-1234-1234-123456789abd",
-            "image": "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
-            + "1" * 64,
-        }
-
     def test_accepts_staging_target_in_shared_subscription(self):
-        target = staging_rehearsal.staging_target(SimpleNamespace(**self.args))
+        target = staging_rehearsal.staging_target(SimpleNamespace(**STAGING_ARGS))
         self.assertEqual(
             target,
             carrier.Target(
                 carrier.PRODUCTION.subscription,
-                self.args["resource_group"],
-                self.args["job"],
-                self.args["workspace"],
-                self.args["image"],
-                self.args["container"],
+                STAGING_ARGS["resource_group"],
+                STAGING_ARGS["job"],
+                STAGING_ARGS["workspace"],
+                STAGING_ARGS["image"],
+                STAGING_ARGS["container"],
             ),
         )
-
-    def test_accepts_real_staging_target(self):
-        job = "cn-stg-mig-9b810f5707655bc74506"
-        args = SimpleNamespace(
-            subscription="bab2a709-1fcb-4c87-a9fc-802f7477ec13",
-            resource_group="cosmaneura-staging",
-            job=job,
-            container=job,
-            workspace="f170125a-69a8-4fe5-9a62-d7d366814c04",
-            image="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
-            "3bf67cbcf1e31999621268f62ad0266005fd651b1a6b700ac794411b14c090db",
-        )
-        self.assertEqual(staging_rehearsal.staging_target(args).job, job)
 
     def test_refuses_production_values_in_either_subscription(self):
         for subscription in (
@@ -205,7 +249,7 @@ class StagingTargetTests(unittest.TestCase):
             ):
                 with self.subTest(subscription=subscription, field=field, value=value):
                     args = SimpleNamespace(
-                        **(self.args | {"subscription": subscription, field: value})
+                        **(STAGING_ARGS | {"subscription": subscription, field: value})
                     )
                     with self.assertRaisesRegex(
                         contract.Stop, "^staging_target_required$"
@@ -249,7 +293,9 @@ class FakeAzureTests(unittest.TestCase):
                     "stops": [],
                     "log_reads": 0,
                     "executions": executors,
-                    "lines": markers() if lines is None else lines,
+                    "lines": markers()
+                    if lines is None and target == carrier.PRODUCTION
+                    else lines,
                 }
             )
         )
@@ -263,8 +309,12 @@ class FakeAzureTests(unittest.TestCase):
 
     def test_production_success_and_finished_log_fallback(self):
         subject = self.configure("logs_delayed")
-        receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
-        verify_checks_receipt(receipt, MASTER, 42)
+        with patch.object(subject, "job", wraps=subject.job) as job:
+            receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        self.assertEqual(
+            [c.kwargs["timeout"] for c in job.call_args_list if c.args[0] == "start"],
+            [60],
+        )
         self.assertEqual(
             receipt["preflight"],
             {
@@ -276,7 +326,7 @@ class FakeAzureTests(unittest.TestCase):
         )
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
-        self.assertEqual(self.state()["log_reads"], 2)
+        self.assertEqual(self.state()["log_reads"], 3)
 
     def test_busy_digest_traffic_retry_incomplete_listing_stop_before_start(self):
         for scenario, code in (
@@ -284,16 +334,19 @@ class FakeAzureTests(unittest.TestCase):
             ("digest", "traffic_image_drift"),
             ("traffic", "traffic_not_fully_verified"),
             ("retry", "retry_must_be_zero"),
-            ("paginated", "preflight_list_denied"),
+            ("foreign_execution_page", "preflight_list_denied"),
+            ("duplicate_execution_page", "preflight_list_denied"),
         ):
             with self.subTest(scenario=scenario):
-                subject = self.configure(scenario, busy=scenario == "busy")
+                subject = self.configure(
+                    scenario, busy=scenario in {"busy", "duplicate_execution_page"}
+                )
                 with self.assertRaisesRegex(contract.Stop, code):
                     carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 0)
 
     def test_preflight_shows_newest_execution(self):
-        subject = self.configure()
+        subject = self.configure("paginated")
         state = self.state()
         newest = subject.target.job + "-newest"
         state["executions"] = {
@@ -309,6 +362,16 @@ class FakeAzureTests(unittest.TestCase):
         self.assertTrue(receipt["preflight"]["show_execution"])
         self.assertFalse(receipt["preflight"]["no_prior_execution"])
 
+    def test_log_next_link_and_foreign_host(self):
+        subject = self.configure("log_pages")
+        self.assertEqual(
+            carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)["status"],
+            "Succeeded",
+        )
+        subject = self.configure("foreign_log_page")
+        with self.assertRaisesRegex(contract.Stop, "^analytics_response$"):
+            carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+
     def test_preflight_denials_never_start_or_stop(self):
         for action in ("list", "show", "query"):
             with self.subTest(action=action):
@@ -320,25 +383,23 @@ class FakeAzureTests(unittest.TestCase):
                 self.assertEqual(self.state()["starts"], 0)
                 self.assertEqual(self.state()["stops"], [])
 
-    def test_carrier_only_confirms_reconciled_failures(self):
-        output = self.state_path
-        for code in (*INCIDENT_CODES, "preflight_list_denied"):
-            output.write_text("")
-            with (
-                self.subTest(code=code),
-                patch.dict(
-                    os.environ,
-                    GITHUB_RUN_ID="42",
-                    GITHUB_SHA=MASTER,
-                    CHECKOUT_SHA=MASTER,
-                    GITHUB_OUTPUT=str(output),
-                ),
-                patch("carrier.run_production", side_effect=contract.Stop(code)),
-                patch("sys.stdout", io.StringIO()),
-            ):
-                self.assertEqual(carrier.main(), 1)
-            expected = "" if code in INCIDENT_CODES else "execution_reconciled=true\n"
-            self.assertEqual(output.read_text(), expected)
+    def test_button_admission_checks_first_attempt_and_sets_sha(self):
+        with (
+            patch.object(sys, "argv", ["carrier.py", "--output"]),
+            patch.dict(
+                os.environ, GITHUB_RUN_ATTEMPT="1", GITHUB_OUTPUT=str(self.state_path)
+            ),
+            patch("carrier.check_context", return_value=MASTER) as admit,
+            patch("sys.stdout", io.StringIO()),
+        ):
+            self.assertEqual(carrier.main(), 0)
+            admit.assert_called_once_with(
+                contract.CHECKS_WORKFLOW, os.environ, admitted=False
+            )
+            self.assertEqual(self.state_path.read_text(), f"sha={MASTER}\n")
+            os.environ["GITHUB_RUN_ATTEMPT"] = "2"
+            self.assertEqual(carrier.main(), 1)
+            self.assertEqual(admit.call_count, 1)
 
     def test_checkout_sha_mismatch_stops_before_start(self):
         subject = self.configure()
@@ -359,7 +420,7 @@ class FakeAzureTests(unittest.TestCase):
                         subject, checkout_sha, 42, checkout_sha=checkout_sha
                     )
                     encode.assert_called_once_with(checkout_sha)
-                verify_checks_receipt(receipt, checkout_sha, 42)
+                self.assertEqual(receipt["candidate_sha"], checkout_sha)
                 results.append(
                     (receipt["status"], receipt["access_counts"], self.state())
                 )
@@ -408,8 +469,6 @@ class FakeAzureTests(unittest.TestCase):
             ("two_executions", "execution_count_or_status_changed", None),
             ("logs_error", "azure_command_failed", None),
             ("logs_partial", "analytics_response", None),
-            ("logs_missing", "finished_logs_missing", None),
-            ("pass", "incomplete_or_extra_log", markers()[:-1]),
         ):
             with self.subTest(scenario=scenario):
                 subject = self.configure(scenario, lines=lines)
@@ -417,39 +476,31 @@ class FakeAzureTests(unittest.TestCase):
                     carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 1)
 
+    def test_partial_logs_fail_closed_after_four_minutes(self):
+        subject = self.configure(lines=markers()[:-1])
+        with self.assertRaisesRegex(contract.Stop, "^incomplete_or_extra_log$"):
+            carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        self.assertEqual(self.now, 240)
+        self.assertEqual(self.state()["log_reads"], 48)
+
     def test_staging_rehearsal_payload_template_timeout_and_finished_logs(self):
-        target = staging_rehearsal.staging_target(
-            SimpleNamespace(
-                subscription="12345678-1234-1234-1234-123456789abc",
-                resource_group="cosmaneura-staging",
-                job="cosmaneura-staging-fixture",
-                container="cosmaneura-staging-fixture",
-                workspace="12345678-1234-1234-1234-123456789abd",
-                image="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
-                + "1" * 64,
-            )
-        )
-        lines = [staging_rehearsal.SYNTHETIC_START, staging_rehearsal.SYNTHETIC_DONE]
-        result = staging_rehearsal.rehearsal(self.configure(target=target, lines=lines))
+        target = staging_rehearsal.staging_target(SimpleNamespace(**STAGING_ARGS))
+        result = staging_rehearsal.rehearsal(self.configure(target=target))
+        lines = self.state()["lines"]
+        self.assertEqual(len(lines), 18)
+        self.assertEqual(lines, staging_rehearsal.SYNTHETIC_LINES)
         self.assertEqual(result["payload_bytes"], 92412)
         self.assertTrue(result["preflight"]["query_workspace"])
         self.assertEqual(self.state()["starts"], 2)
         self.assertEqual(self.state()["stops"], [target.job + "-fake2"])
         with self.assertRaisesRegex(contract.Stop, "rehearsal_finished_log_invalid"):
             staging_rehearsal.rehearsal(
-                self.configure(target=target, lines=lines + lines)
+                self.configure(target=target, lines=lines[1:2] + lines[:1] + lines[2:])
             )
         self.assertEqual(self.state()["starts"], 1)
         with self.assertRaisesRegex(contract.Stop, "retry_must_be_zero"):
             staging_rehearsal.rehearsal(self.configure("retry", target=target))
         self.assertEqual(self.state()["starts"], 0)
-        with self.assertRaisesRegex(contract.Stop, "staging_target_required"):
-            staging_rehearsal.staging_target(
-                SimpleNamespace(
-                    subscription=carrier.PRODUCTION.subscription,
-                    resource_group=carrier.PRODUCTION.group,
-                )
-            )
 
 
 if __name__ == "__main__":

@@ -132,7 +132,10 @@ def parse_markers(lines):
     """Check the whole stream, including malformed, extra and duplicate records."""
     g2_index = 4
     prefix = ["RUNNER_SHA_OK=1", "RUN_START=1", "BUNDLE_VERIFIED=97"]
-    shape = "URL_SHAPE=" + ",".join(f"{key}:[01]" for key in runner.SHAPE_KEYS)
+    bits = {"prefer": "0", "ca_file": "[01]"}
+    shape = "URL_SHAPE=" + ",".join(
+        f"{key}:{bits.get(key, '1')}" for key in runner.SHAPE_KEYS
+    )
     require(
         type(lines) is list
         and len(lines) == 18

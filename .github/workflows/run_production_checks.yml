@@ -25,7 +25,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py run_production_checks.yml --output
+        run: python3 ops/production-checks/carrier.py --output
 
   checks:
     name: Execute production checks
@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py run_production_checks.yml --admitted
+        run: python3 ops/production-checks/carrier.py --admitted
 
       - name: Verify reviewed package and exact candidate before Azure login
         run: |
@@ -111,10 +111,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py run_production_checks.yml --admitted
+        run: python3 ops/production-checks/carrier.py --admitted
 
       - name: Run exactly one checked execution
-        id: carrier
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
@@ -122,11 +121,6 @@ jobs:
         run: |
           checkout_sha="$(git rev-parse --verify HEAD)"
           CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py
-      - name: Confirm no unresolved execution incident
-        if: ${{ failure() && steps.carrier.outcome == 'failure' }}
-        env:
-          EXECUTION_RECONCILED: ${{ steps.carrier.outputs.execution_reconciled }}
-        run: test "$EXECUTION_RECONCILED" = true
       - name: Publish successful production checks receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

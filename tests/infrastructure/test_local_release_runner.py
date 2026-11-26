@@ -60,6 +60,7 @@ def test_every_tracked_workflow_requires_approved_compute() -> None:
                     "deploy_staging_candidate.yml",
                     "infra_apply_local.yml",
                     "infra_production_plan_local.yml",
+                    "run_production_checks.yml",
                 }:
                     assert labels == "ubuntu-24.04", path
                     assert set(workflow.get("on", workflow.get(True, {}))) == {
