@@ -1,36 +1,30 @@
-"""Verify the vendored runner before the hosted workflow layers are added."""
+"""Verify the vendored runner against the hosted production checks contract."""
 
-import hashlib
+import runpy
 import unittest
-from pathlib import Path
 
-import runner
-
-PACKAGE = Path(__file__).resolve().parent
-PACKAGE_SHA = "2fc24fd6e172e507c1895e4ccdaf4f47107bf86ee02c5584c0cb7f9dc0dcb9e9"
-RUNNER_SHA = "b940747c7ed2fdd0d414dca664c8d642adae0f92539fe2ae28d28c72f59a9b59"
-BOOTSTRAP_SHA = "b722cedc815e259920c8cd6f2cb5f891369699183e853612bc95567d83d79a67"
+from contract import (
+    BOOTSTRAP_SHA,
+    G2,
+    PACKAGE,
+    PACKAGE_SHA,
+    RUNNER_SHA,
+    sha256,
+    verify_package,
+)
 
 
 class RunnerPackageTests(unittest.TestCase):
     def test_all_bytes_manifest_bootstrap_and_sql(self):
-        manifest = (PACKAGE / "SHA256SUMS").read_bytes()
-        self.assertEqual(hashlib.sha256(manifest).hexdigest(), PACKAGE_SHA)
-        for line in manifest.decode().splitlines():
-            digest, path = line.split("  ./", 1)
-            with self.subTest(path=path):
-                data = (PACKAGE / path).read_bytes()
-                self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
+        verify_package()
+        for filename, digest in (
+            ("SHA256SUMS", PACKAGE_SHA),
+            ("runner.py", RUNNER_SHA),
+            ("bootstrap-args.txt", BOOTSTRAP_SHA),
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(sha256((PACKAGE / filename).read_bytes()), digest)
 
-        self.assertEqual(
-            hashlib.sha256((PACKAGE / "runner.py").read_bytes()).hexdigest(),
-            RUNNER_SHA,
-        )
-        bootstrap = (PACKAGE / "bootstrap-args.txt").read_bytes()
-        self.assertEqual(hashlib.sha256(bootstrap).hexdigest(), BOOTSTRAP_SHA)
-        self.assertIn(RUNNER_SHA.encode(), bootstrap)
-        self.assertEqual(
-            (PACKAGE / "candidate-access-counts.sql").read_bytes(),
-            runner.ACCESS_SQL.encode(),
-        )
-        runner.self_check()
+    def test_g2_matches_runner_reference(self):
+        reference = runpy.run_path(str(PACKAGE / "tests" / "pass_check.py"))
+        self.assertEqual(G2, reference["EXPECT_G2"])
