@@ -7,7 +7,7 @@ from pathlib import Path
 import runner
 
 PACKAGE = Path(__file__).resolve().parent
-PACKAGE_SHA = "d2914ce309f77ce5e86bd5688a5307be84ed7dad3fe6c8f903d1fc2649845944"
+PACKAGE_SHA = "2fc24fd6e172e507c1895e4ccdaf4f47107bf86ee02c5584c0cb7f9dc0dcb9e9"
 RUNNER_SHA = "b940747c7ed2fdd0d414dca664c8d642adae0f92539fe2ae28d28c72f59a9b59"
 BOOTSTRAP_SHA = "b722cedc815e259920c8cd6f2cb5f891369699183e853612bc95567d83d79a67"
 
