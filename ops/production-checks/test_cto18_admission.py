@@ -4,12 +4,13 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import admission
 import contract
@@ -17,6 +18,46 @@ import render_plan
 
 MASTER = contract.REVIEWED_SOURCE
 EXECUTION = f"{contract.PRODUCTION_JOB}-1234"
+
+
+class TransitionHistory:
+    def __init__(self, root):
+        self.root = root
+        self.env = (
+            os.environ
+            | dict.fromkeys(("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"), "Synthetic Test")
+            | dict.fromkeys(
+                ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"), "test@example.invalid"
+            )
+        )
+        self.git("init", "--template=")
+        self.before = self.commit("Before R2")
+        (root / "reviewed.txt").write_text("Synthetic R2 change\n")
+        self.git("add", "reviewed.txt")
+        self.reviewed = self.commit("Reviewed R2", self.before)
+        self.tip = self.commit("After R2", self.reviewed)
+        self.running_file = root / "running.json"
+
+    def git(self, *args, input=None):
+        return subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "-C", str(self.root), *args],
+            env=self.env,
+            input=input,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def commit(self, message, *parents):
+        return self.git(
+            "commit-tree",
+            self.git("write-tree"),
+            *(arg for parent in parents for arg in ("-p", parent)),
+            input=message + "\n",
+        )
+
+    def write_running(self, revision):
+        self.running_file.write_text(json.dumps({"running_source_sha": revision}))
 
 
 class PackageAndMarkersTests(unittest.TestCase):
@@ -125,18 +166,167 @@ class AdmissionTests(unittest.TestCase):
                 lookup.assert_called_once_with("git/ref/heads/master")
         self.assertEqual(output.read_text(), f"sha={candidate}\n" * 2)
 
-    def test_pinned_candidate_without_receipt_is_refused(self):
+    def test_plan_receipt_flag_without_running_file_preserves_admission(self):
         with (
             patch.dict(os.environ, self.env, clear=True),
+            patch.object(admission, "api", return_value=self.master) as lookup,
+            patch.object(sys, "argv", ["admission", self.workflow, "--receipt"]),
+        ):
+            self.assertEqual(admission.main(), 0)
+            lookup.assert_called_once_with("git/ref/heads/master")
+
+    def transition_history(self):
+        history = TransitionHistory(
+            Path(self.enterContext(tempfile.TemporaryDirectory()))
+        )
+        self.enterContext(patch.object(contract, "REPO_ROOT", history.root))
+        self.enterContext(patch.object(contract, "REVIEWED_SOURCE", history.reviewed))
+        return history
+
+    def test_first_release_without_receipt_is_refused(self):
+        history = self.transition_history()
+        history.write_running(history.before)
+        workflow = "release_verified_candidate.yml"
+        env = self.env | {
+            "GITHUB_WORKFLOW_REF": f"{admission.REPOSITORY}/{admission.WORKFLOW_DIR}"
+            f"{workflow}@{admission.REF}",
+            "GITHUB_SHA": history.tip,
+            "GITHUB_WORKFLOW_SHA": history.tip,
+        }
+        self.master["object"]["sha"] = history.tip
+        with (
+            patch.dict(os.environ, env, clear=True),
             patch.object(
                 admission, "api", side_effect=[self.master, {"workflow_runs": []}]
             ) as lookup,
-            patch.object(sys, "argv", ["admission", self.workflow, "--receipt"]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "admission",
+                    workflow,
+                    "--receipt",
+                    "--running-source-sha-file",
+                    str(history.running_file),
+                ],
+            ),
             patch("sys.stdout", io.StringIO()) as output,
         ):
             self.assertEqual(admission.main(), 1)
-            self.assertIn("receipt_missing", output.getvalue())
-            self.assertIn(f"head_sha={MASTER}", lookup.call_args_list[1].args[0])
+            self.assertEqual(
+                output.getvalue(), "Production admission stopped (receipt_missing).\n"
+            )
+            self.assertIn(f"head_sha={history.tip}", lookup.call_args_list[1].args[0])
+
+    def test_later_release_without_receipt_is_admitted(self):
+        history = self.transition_history()
+        history.write_running(history.tip)
+        candidate = history.commit("Later release", history.tip)
+        lookup = Mock()
+        admission.require_transition_receipt(candidate, history.running_file, lookup)
+        lookup.assert_not_called()
+
+    def test_revert_commit_after_first_release_needs_no_receipt(self):
+        history = self.transition_history()
+        history.write_running(history.tip)
+        history.git("read-tree", history.before)
+        candidate = history.commit("Revert R2 content", history.tip)
+        self.assertEqual(
+            history.git("rev-parse", f"{candidate}^{{tree}}"),
+            history.git("rev-parse", f"{history.before}^{{tree}}"),
+        )
+        lookup = Mock()
+        admission.require_transition_receipt(candidate, history.running_file, lookup)
+        lookup.assert_not_called()
+
+    def test_merge_commit_requires_first_release_receipt(self):
+        history = self.transition_history()
+        history.git("read-tree", history.before)
+        master = history.commit("Master before merge", history.before)
+        history.git("read-tree", history.reviewed)
+        candidate = history.commit("Merge R2", master, history.reviewed)
+        history.write_running(master)
+        lookup = Mock(return_value={"workflow_runs": []})
+        self.assertNotEqual(candidate, history.reviewed)
+        with self.assertRaisesRegex(contract.Stop, "^receipt_missing$"):
+            admission.require_transition_receipt(
+                candidate, history.running_file, lookup
+            )
+        self.assertIn(f"head_sha={candidate}", lookup.call_args.args[0])
+
+    def test_bad_running_sha_requires_receipt_and_valid_receipt_admits(self):
+        history = self.transition_history()
+        _, _, _, _, valid_lookup = self.receipt_fixture(history.tip)
+        for contents, cause in (
+            (None, "running_sha_unreadable"),
+            ("{", "running_sha_unreadable"),
+            ('{"running_source_sha": "not hex"}', "running_sha_unreadable"),
+            (json.dumps({"running_source_sha": "9" * 40}), "running_sha_unknown"),
+        ):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    history.running_file.unlink(missing_ok=True)
+                else:
+                    history.running_file.write_text(contents)
+                with self.assertRaisesRegex(
+                    contract.Stop, f"^receipt_required_{cause}:receipt_missing$"
+                ):
+                    admission.require_transition_receipt(
+                        history.tip,
+                        history.running_file,
+                        lambda _: {"workflow_runs": []},
+                    )
+                admission.require_transition_receipt(
+                    history.tip, history.running_file, valid_lookup
+                )
+
+    def test_shallow_checkout_requires_receipt(self):
+        history = self.transition_history()
+        history.git("update-ref", "HEAD", history.tip)
+        shallow = history.root / "shallow"
+        history.git("clone", "--depth", "1", history.root.as_uri(), str(shallow))
+        with (
+            patch.object(contract, "REPO_ROOT", shallow),
+            self.assertRaisesRegex(
+                contract.Stop, "^receipt_required_shallow_checkout:receipt_missing$"
+            ),
+        ):
+            admission.require_transition_receipt(
+                history.tip, history.running_file, lambda _: {"workflow_runs": []}
+            )
+
+    def test_running_at_reviewed_commit_needs_no_receipt(self):
+        history = self.transition_history()
+        history.write_running(history.reviewed)
+        lookup = Mock()
+        admission.require_transition_receipt(history.tip, history.running_file, lookup)
+        lookup.assert_not_called()
+
+    def test_non_containing_candidate_ignores_garbage_running_file(self):
+        history = self.transition_history()
+        history.running_file.write_text("garbage")
+        lookup = Mock()
+        admission.require_transition_receipt(
+            history.before, history.running_file, lookup
+        )
+        lookup.assert_not_called()
+
+    def test_candidate_ancestry_errors_require_receipt(self):
+        history = self.transition_history()
+        for reviewed, candidate, cause in (
+            ("9" * 40, history.tip, "reviewed_source_missing"),
+            (history.reviewed, "9" * 40, "ancestry_check_error"),
+        ):
+            with (
+                self.subTest(cause=cause),
+                patch.object(contract, "REVIEWED_SOURCE", reviewed),
+                self.assertRaisesRegex(
+                    contract.Stop, f"^receipt_required_{cause}:receipt_missing$"
+                ),
+            ):
+                admission.require_transition_receipt(
+                    candidate, history.running_file, lambda _: {"workflow_runs": []}
+                )
 
     def test_prior_incident_requires_clearance_from_current_master(self):
         workflow = contract.CHECKS_WORKFLOW
@@ -207,8 +397,8 @@ class AdmissionTests(unittest.TestCase):
         with patch.object(admission, "git", return_value=b""):
             self.assertEqual(admission.check_context(workflow, env, lookup), MASTER)
 
-    def test_receipt_provenance_and_digest(self):
-        receipt = contract.receipt_header(MASTER, 42, EXECUTION, "database-url")
+    def receipt_fixture(self, candidate):
+        receipt = contract.receipt_header(candidate, 42, EXECUTION, "database-url")
         receipt.update(
             template_unchanged=True,
             template_sha256="2" * 64,
@@ -228,7 +418,7 @@ class AdmissionTests(unittest.TestCase):
             "path": admission.WORKFLOW_DIR + contract.CHECKS_WORKFLOW,
             "event": "workflow_dispatch",
             "head_branch": "master",
-            "head_sha": MASTER,
+            "head_sha": candidate,
             "repository": {"full_name": admission.REPOSITORY},
             "head_repository": {"full_name": admission.REPOSITORY},
             "actor": {"login": "JohnClem"},
@@ -247,7 +437,7 @@ class AdmissionTests(unittest.TestCase):
         }
         artifact = {
             "id": 48,
-            "name": f"production-checks-receipt-42-{MASTER}",
+            "name": f"production-checks-receipt-42-{candidate}",
             "expired": False,
         }
 
@@ -267,17 +457,19 @@ class AdmissionTests(unittest.TestCase):
                         {"digest": "sha256:" + contract.sha256(content), **artifact}
                     ],
                 }
-            self.assertIn(f"head_sha={MASTER}", path)
+            self.assertIn(f"head_sha={candidate}", path)
             return {"workflow_runs": [run]}
 
-        admission.require_production_receipt(MASTER, lookup)
+        return receipt, run, jobs, artifact, lookup
+
+    def test_receipt_provenance_and_digest(self):
+        receipt, run, jobs, artifact, lookup = self.receipt_fixture(MASTER)
+        admission.verify_production_receipt(MASTER, lookup)
         with patch.dict(receipt, preflight={"query_workspace": True}):
             with self.assertRaisesRegex(contract.Stop, "receipt_preflight"):
-                admission.require_production_receipt(MASTER, lookup)
+                admission.verify_production_receipt(MASTER, lookup)
         with self.assertRaisesRegex(contract.Stop, "receipt_missing"):
-            admission.require_production_receipt(
-                MASTER, lambda _: {"workflow_runs": []}
-            )
+            admission.verify_production_receipt(MASTER, lambda _: {"workflow_runs": []})
         for field, wrong in (
             ("head_sha", "f" * 40),
             ("path", "staging.yml"),
@@ -287,16 +479,16 @@ class AdmissionTests(unittest.TestCase):
         ):
             with patch.dict(run, {field: wrong}):
                 with self.assertRaisesRegex(contract.Stop, "receipt_run_provenance"):
-                    admission.require_production_receipt(MASTER, lookup)
+                    admission.verify_production_receipt(MASTER, lookup)
         with patch.dict(jobs["jobs"][1], conclusion="skipped"):
             with self.assertRaisesRegex(contract.Stop, "receipt_jobs"):
-                admission.require_production_receipt(MASTER, lookup)
+                admission.verify_production_receipt(MASTER, lookup)
         with patch.dict(artifact, digest="sha256:" + "0" * 64):
             with self.assertRaisesRegex(contract.Stop, "receipt_artifact_digest"):
-                admission.require_production_receipt(MASTER, lookup)
+                admission.verify_production_receipt(MASTER, lookup)
         with patch.dict(artifact, expired=True):
             with self.assertRaisesRegex(contract.Stop, "receipt_artifact_metadata"):
-                admission.require_production_receipt(MASTER, lookup)
+                admission.verify_production_receipt(MASTER, lookup)
         for field, wrong in (
             ("source", "synthetic"),
             ("candidate_sha", "f" * 40),
@@ -305,7 +497,7 @@ class AdmissionTests(unittest.TestCase):
         ):
             with patch.dict(receipt, {field: wrong}):
                 with self.assertRaisesRegex(contract.Stop, "receipt_contract"):
-                    admission.require_production_receipt(MASTER, lookup)
+                    admission.verify_production_receipt(MASTER, lookup)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -314,9 +506,8 @@ class WorkflowTests(unittest.TestCase):
         expected = {
             "infra_production_plan_local.yml": {"authorize-production": 1, "plan": 1},
             "infra_apply_local.yml": {"authorize-production": 1, "apply": 2},
-            "release_verified_candidate.yml": {"gate": 1, "publish-and-deploy": 2},
+            "release_verified_candidate.yml": {"publish-and-deploy": 1},
             "build_and_publish_local.yml": {
-                "release-gates": 1,
                 "production-candidate": 1,
                 "deploy": 1,
             },

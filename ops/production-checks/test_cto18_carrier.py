@@ -1,8 +1,11 @@
 """Offline tests for receipt markers and the carrier using synthetic Azure calls."""
 
+import ast
 import io
 import json
 import os
+import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -50,19 +53,90 @@ def markers():
 
 
 class ProbeTests(unittest.TestCase):
-    def test_release_receipt_steps_only_run_for_pinned_candidate(self):
+    def test_transition_receipt_steps_keep_automatic_rollback_independent(self):
         self.assertIn("production-checks-receipt", WORKFLOW.read_text())
-        for name in ("release_verified_candidate", "build_and_publish_local"):
+        release = WORKFLOW.with_name("release_verified_candidate.yml").read_text()
+        build = WORKFLOW.with_name("build_and_publish_local.yml").read_text()
+        for name, source, count in (("release", release, 1), ("build", build, 2)):
             with self.subTest(workflow=name):
-                source = WORKFLOW.with_name(name + ".yml").read_text()
                 steps = [
                     step for step in source.split("\n      - ") if "--receipt" in step
                 ]
-                self.assertEqual(len(steps), 3)
+                self.assertEqual(len(steps), count)
                 for step in steps:
-                    self.assertIn(f"if: github.sha == '{MASTER}'", step)
+                    self.assertIn("--running-source-sha-file", step)
+                    self.assertNotIn("if: github.sha", step)
+        for name in ("infra_production_plan_local", "infra_apply_local"):
+            self.assertNotIn(
+                "--running-source-sha-file",
+                WORKFLOW.with_name(name + ".yml").read_text(),
+            )
         self.assertNotIn(
             "--receipt", WORKFLOW.with_name("build_and_publish.yml").read_text()
+        )
+
+        release_steps = release.split("\n      - ")
+        receipt = next(
+            index for index, step in enumerate(release_steps) if "--receipt" in step
+        )
+        self.assertIn("Admit code-derived schema heads", release_steps[receipt - 1])
+        self.assertIn("Record current production digests", release_steps[receipt + 1])
+        deploy = next(
+            index for index, step in enumerate(release_steps) if "id: deploy\n" in step
+        )
+        rollback = release_steps[deploy + 1]
+        self.assertIn(
+            "Verify healthcheck and ready-revision digests or roll back", rollback
+        )
+        self.assertIn("if: always() && steps.deploy.outcome != 'skipped'", rollback)
+        self.assertIn("release_verified_candidate_ops.py rollback --baseline", rollback)
+        self.assertNotIn("admission.py", rollback)
+        self.assertNotIn("--receipt", rollback)
+
+        ops = (
+            contract.REPO_ROOT / "scripts/release_verified_candidate_ops.py"
+        ).read_text()
+        for node in ast.parse(ops).body:
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "rollback",
+                "verify_ready",
+            }:
+                body = ast.unparse(node)
+                self.assertNotIn("admission.py", body)
+                self.assertNotIn("--receipt", body)
+
+        for job, previous, following in (
+            (
+                "production-candidate",
+                "uses: azure/login@",
+                "Verify, publish and protect",
+            ),
+            ("deploy", "id: candidate", "Deploy the previously verified Core digest"),
+        ):
+            with self.subTest(job=job):
+                body = re.split(r"\n  [\w-]+:\n", build.split(f"\n  {job}:\n", 1)[1])[0]
+                steps = body.split("\n      - ")
+                receipt = next(
+                    index for index, step in enumerate(steps) if "--receipt" in step
+                )
+                self.assertIn(previous, steps[receipt - 2])
+                self.assertIn("running-source-sha --output", steps[receipt - 1])
+                self.assertIn(following, steps[receipt + 1])
+
+    def test_running_source_sha_mode_writes_revision_file(self):
+        path = contract.REPO_ROOT / "scripts/release_verified_candidate_ops.py"
+        output = Path(self.enterContext(tempfile.TemporaryDirectory())) / "running.json"
+        with patch.object(sys, "path", sys.path.copy()):
+            main = runpy.run_path(str(path))["main"]
+        with (
+            patch.dict(main.__globals__, running_source_sha=lambda: "a" * 40),
+            patch.object(
+                sys, "argv", [str(path), "running-source-sha", "--output", str(output)]
+            ),
+        ):
+            self.assertEqual(main(), 0)
+        self.assertEqual(
+            json.loads(output.read_text()), {"running_source_sha": "a" * 40}
         )
 
     def test_button_records_carrier_reconciliation_in_job_history(self):

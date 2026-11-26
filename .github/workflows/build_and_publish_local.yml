@@ -426,12 +426,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require an exact-candidate production checks receipt
-        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt
       - name: Require provider-signed callback gate for manual production deploy
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -530,12 +524,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - name: Require an exact-candidate production checks receipt
-        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt
       - name: Verify founder context and exact current source before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -598,6 +586,13 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Read the running production source revision
+        run: python3 scripts/release_verified_candidate_ops.py running-source-sha --output "$RUNNER_TEMP/running-source-sha.json"
+      - name: Require a production checks receipt for the R2 transition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt --running-source-sha-file "$RUNNER_TEMP/running-source-sha.json"
       - name: Verify, publish and protect the immutable Core candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -654,12 +649,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - name: Require an exact-candidate production checks receipt
-        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt
       - name: Authenticate the previously successful immutable candidate before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -736,6 +725,13 @@ jobs:
             --configuration "$RUNNER_TEMP/production-frontend-build.json" \
             --frontend-admission "$RUNNER_TEMP/production-session-prep-admission.json")
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+      - name: Read the running production source revision
+        run: python3 scripts/release_verified_candidate_ops.py running-source-sha --output "$RUNNER_TEMP/running-source-sha.json"
+      - name: Require a production checks receipt for the R2 transition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt --running-source-sha-file "$RUNNER_TEMP/running-source-sha.json"
       - name: Deploy the previously verified Core digest without rebuilding
         env:
           GH_TOKEN: ${{ github.token }}

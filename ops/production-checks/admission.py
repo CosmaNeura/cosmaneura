@@ -5,14 +5,16 @@ import io
 import json
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from pathlib import Path
 
+import contract
 from contract import (
     CHECKS_WORKFLOW,
-    REVIEWED_SOURCE,
     Stop,
     exact_sha,
     git,
@@ -218,9 +220,7 @@ def verify_checks_receipt(receipt, candidate, run_id):
     verify_receipt(fields, candidate, run_id)
 
 
-def require_production_receipt(candidate, lookup=None):
-    if candidate != REVIEWED_SOURCE:
-        return
+def verify_production_receipt(candidate, lookup=None):
     lookup = lookup or api
     # GitHub returns newest first. Include pending or failed runs so an incident
     # cannot fall back to a previous green run of the same commit.
@@ -285,17 +285,83 @@ def require_production_receipt(candidate, lookup=None):
     verify_checks_receipt(receipt, candidate, run_id)
 
 
+def contains_reviewed_source(revision):
+    try:
+        git("merge-base", "--is-ancestor", contract.REVIEWED_SOURCE, revision)
+    except subprocess.CalledProcessError as error:
+        if error.returncode == 1:
+            return False
+        raise Stop("ancestry_check_error") from error
+    return True
+
+
+def transition_requires_receipt(candidate, running_file):
+    require(
+        git("rev-parse", "--is-shallow-repository").strip() == b"false",
+        "shallow_checkout",
+    )
+    try:
+        git("cat-file", "-e", f"{contract.REVIEWED_SOURCE}^{{commit}}")
+    except subprocess.CalledProcessError as error:
+        raise Stop("reviewed_source_missing") from error
+    if not contains_reviewed_source(candidate):
+        return False
+
+    # release_verified_candidate_ops.py records the OCI revision using
+    # running_source_sha() -> app_image() (Azure) and image_source_revision() (Docker).
+    try:
+        evidence = json.loads(running_file.read_text(), object_pairs_hook=unique_fields)
+        running = (
+            evidence.get("running_source_sha") if isinstance(evidence, dict) else None
+        )
+    except (OSError, ValueError, Stop) as error:
+        raise Stop("running_sha_unreadable") from error
+    require(exact_sha(running), "running_sha_unreadable")
+    try:
+        git("cat-file", "-e", f"{running}^{{commit}}")
+    except subprocess.CalledProcessError as error:
+        raise Stop("running_sha_unknown") from error
+    return not contains_reviewed_source(running)
+
+
+def require_transition_receipt(candidate, running_file, lookup=None):
+    cause = None
+    try:
+        if not transition_requires_receipt(candidate, running_file):
+            return
+    except Stop as error:
+        cause = str(error)
+    except (OSError, subprocess.CalledProcessError):
+        cause = "ancestry_check_error"
+
+    try:
+        verify_production_receipt(candidate, lookup)
+    except Stop as error:
+        if cause is None:
+            raise
+        raise Stop(f"receipt_required_{cause}:{error}") from error
+    except Exception as error:
+        if cause is None:
+            raise
+        raise Stop(
+            f"receipt_required_{cause}:unavailable_or_invalid_metadata"
+        ) from error
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("workflow", choices=WORKFLOWS)
     parser.add_argument("--admitted", action="store_true")
     parser.add_argument("--receipt", action="store_true")
+    parser.add_argument("--running-source-sha-file", type=Path)
     parser.add_argument("--output", action="store_true")
     args = parser.parse_args()
     try:
         candidate = check_context(args.workflow, os.environ, admitted=args.admitted)
-        if args.receipt:
-            require_production_receipt(candidate)
+        # Plan and Apply pass --receipt without a running SHA file, so they
+        # retain exact-tip admission without the release transition check.
+        if args.receipt and args.running_source_sha_file is not None:
+            require_transition_receipt(candidate, args.running_source_sha_file)
         if args.output:
             with open(os.environ["GITHUB_OUTPUT"], "a") as output:
                 output.write(f"sha={candidate}\n")

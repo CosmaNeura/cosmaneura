@@ -291,7 +291,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "mode",
-        choices=("publish", "record-baseline", "verify-ready", "rollback", "admit-schema"),
+        choices=(
+            "publish", "record-baseline", "verify-ready", "rollback", "admit-schema",
+            "running-source-sha",
+        ),
     )
     parser.add_argument("--configuration", type=Path)
     parser.add_argument("--source-sha")
@@ -305,7 +308,13 @@ def main() -> int:
     parser.add_argument("--evidence", type=Path)
     args = parser.parse_args()
     try:
-        if args.mode == "admit-schema":
+        if args.mode == "running-source-sha":
+            if not args.output:
+                refuse("running-source-sha requires --output")
+            args.output.write_text(
+                json.dumps({"running_source_sha": running_source_sha()}) + "\n"
+            )
+        elif args.mode == "admit-schema":
             sha = args.candidate_sha or args.source_sha
             if not sha:
                 refuse("admit-schema requires --candidate-sha")

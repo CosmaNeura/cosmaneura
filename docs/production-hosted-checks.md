@@ -1,8 +1,9 @@
 # Hosted production checks and Terraform admission
 
-**#1019 provides receipt gating for the pinned R2 candidate.**
-The gate compares the dispatch SHA to the exact R2 SHA. A merge commit has its
-own SHA, so a dispatch from that commit falls outside the hold.
+**#1019 gates the first production release that contains the reviewed R2 commit.**
+Release and Build & Publish require a receipt when the exact master tip contains
+`cf67a63129426c558b84559618822a6b59e7cdba` and the running production source revision
+does not. Ancestry includes the commit itself and applies to merge commits.
 
 **Run production checks** is a JohnClem-only dispatch on `master`. Each dispatch must
 be a new first attempt. It uses the existing Release OIDC identity and the
@@ -21,11 +22,33 @@ selector names and embedded source.
 
 ## After the first release
 
-The receipt hold applies only to the pinned R2 candidate SHA. The checks are tied to
-the pre-release serving image, database head `49126bf99c72` with seven pending
-migrations, and the reviewed 97-file migration manifest. A rollback or later release
-uses today's release path unchanged and needs no break-glass procedure. After R2
-ships, retire or repin the hold in a reviewed follow-up PR.
+Once the running revision contains the reviewed commit, later releases and
+revert-commit rollbacks follow the existing release path without a receipt.
+Automatic image rollback keeps its existing path and has no receipt dependency.
+A revert commit released before the first successful R2 release still requires
+a receipt if it contains R2 and production is still running a pre-R2 image.
+If migrations have already run, the checks cannot issue that receipt because
+the pre-migration G2 shape no longer matches.
+
+Run production checks on the final merged master tip. The receipt is valid for
+that exact tip, expires after one day, and must be used before another commit
+lands on master. Plan and Apply retain their exact-tip admission and do not gate
+on a receipt because they supply no running revision file.
+
+The transition check requires a full-history checkout. If ancestry cannot be
+established, or if the candidate contains R2 and the running SHA file is invalid
+or names an unknown commit, admission requires a receipt. Release and Build &
+Publish check after login and after the build, or after reauthenticating the
+immutable candidate on the promote path. The check still precedes publish and
+deploy. A missing first-release receipt therefore stops the run after the build.
+
+The running SHA comes from the `org.opencontainers.image.revision` label on the
+three live apps' images, read using Azure Container Apps and Docker. The label
+on the currently serving image (`877fe96e…`) is unverified. Release already
+refuses at schema admission if it cannot read the revision, and Build & Publish
+would refuse at its new read step. The new read mode and its placement in
+prepare and promote have only offline verification. Whether production
+environment approvals add manual steps is unverified.
 
 ## Before a live dispatch
 
