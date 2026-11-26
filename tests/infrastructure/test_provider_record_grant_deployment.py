@@ -242,6 +242,7 @@ def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
     for path, protected_job_name in (
         (".github/workflows/infra_production_plan_local.yml", "plan"),
         (".github/workflows/infra_apply_local.yml", "apply"),
+        (".github/workflows/run_production_checks.yml", "checks"),
     ):
         workflow = _read(path)
         authorization_start = workflow.index("\n  authorize-production:")
