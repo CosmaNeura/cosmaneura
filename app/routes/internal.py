@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import secrets
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta, timezone
@@ -1378,10 +1379,29 @@ def _current_baa_version() -> BaaVersion:
 
 
 def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
+    """The address our ingress observed, or None when there is no valid one.
+
+    The Azure Container Apps ingress appends the peer it accepted to
+    X-Forwarded-For, so only the rightmost entry is evidence; everything to its
+    left is whatever the client sent. Never fall back to an earlier entry, or
+    to ``request.client`` (which proxy-header middleware may have rewritten
+    from the same header), when the rightmost entry is unusable.
+    """
+    forwarded = [
+        token.strip()
+        for value in request.headers.getlist("x-forwarded-for")
+        for token in value.split(",")
+    ]
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
+        candidate = forwarded[-1]
+    elif request.client:
+        candidate = request.client.host
+    else:
+        return None
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
 
 
 def _make_join_code() -> str:
