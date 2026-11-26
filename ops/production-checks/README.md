@@ -69,13 +69,16 @@ The carrier-independent runner, rebuilt from the Fable-reviewed runner `f61f498b
 - **The documented path in `docs/production-migration-precheck.md`** (John runs it in an Azure-hosted shell, typing a read-only credential). Rejected: it needs a secret and a shell from John. Two deviations from that doc, to be named in the GATE sentence: this path uses the app's own credential inside a read-only session, and it runs through a job execution. A doc correction is queued.
 - **Codex, az or psql from John's Mac, or Cloud Shell.** Rejected: John refused Cloud Shell at 8:28am ET and the Mac-run block at 9:30am ET.
 - **CoS running a one-command block in John's session.** Dropped by John's 9:30 NO.
-- **Chosen:** a JohnClem-gated GitHub Actions button on the existing Release identity, which widens no access (Fable's 12cb28f1 (B)). Fable could not verify the environment-reviewer settings, so whether dispatch plus environment approval adds up to one click is **Unverified**.
+- **Chosen:** a JohnClem-gated GitHub Actions dispatch on the existing Release identity (Fable's 12cb28f1 (B)). The production environment reviewer settings are **Unverified**.
 
-### John's click count: at most ONE
-That one click is the carrier's button, by design. This folder adds no click.
+### Operator actions
+
+Merge #1016, #1017 and #1018, then dispatch Run production checks, Plan, Apply
+and Release separately. Apply requires the successful Plan run ID and
+artifact digest. Each workflow may also require production environment approval.
 
 ### No secrets, no shell for John
-John reads nothing and types nothing. DATABASE_URL stays a `secretref` inside Azure. The runner never prints it, and no secret, connection string, token or env dump appears in any output (tested).
+DATABASE_URL stays a `secretref` inside Azure. The runner never prints it, and no secret, connection string, token or env dump appears in any output (tested).
 
 ## Unverified
 - **SQL candidate:** not reviewed by Fable. Table and column meanings are inferred from the cf67a631 source, not checked against the live schema.
