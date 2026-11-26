@@ -255,15 +255,11 @@ def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
         assert "secrets." not in authorization_job
         assert "environment: production" not in authorization_job
         assert "TRIGGERING_ACTOR: ${{ github.triggering_actor }}" in authorization_job
-        assert f"admission.py {filename}" in authorization_job
-        assert "--output" in authorization_job
+        assert f"admission.py {filename} --output" in authorization_job
         first_admission = protected_job.index(f"admission.py {filename} --admitted")
         assert first_admission < protected_job.index("azure/login")
         assert "needs.authorize-production.outputs.sha == github.sha" in protected_job
-        if protected_job_name in {"plan", "apply"}:
-            assert f"admission.py {filename} --receipt --output" in authorization_job
-            assert f"admission.py {filename} --admitted --receipt" in protected_job
-            assert "secrets." not in protected_job[: protected_job.index("steps:")]
+        assert "secrets." not in protected_job[: protected_job.index("steps:")]
 
         assert "needs: authorize-production" in protected_job
         assert "environment: production" in protected_job

@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read
     outputs:
       sha: ${{ steps.admission.outputs.sha }}
     steps:
@@ -36,7 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --receipt --output
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --output
 
   plan:
     name: Terraform production plan
@@ -55,7 +54,6 @@ jobs:
     timeout-minutes: 15
     environment: production
     permissions:
-      actions: read
       contents: read
       id-token: write
     env:
@@ -79,12 +77,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Reverify founder dispatch and receipt before production setup
+      - name: Reverify founder dispatch before production setup
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --admitted --receipt
+        run: python3 ops/production-checks/admission.py infra_production_plan_local.yml --admitted
 
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5

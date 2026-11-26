@@ -1,11 +1,9 @@
 """Offline tests for admission, the pinned runner package, and plan rendering."""
 
 import io
-import json
 import os
 import sys
 import unittest
-import zipfile
 from unittest.mock import patch
 
 import admission
@@ -13,22 +11,6 @@ import contract
 import render_plan
 
 MASTER = contract.REVIEWED_SOURCE
-EXECUTION = f"{contract.PRODUCTION_JOB}-1234"
-
-
-def markers():
-    return [
-        "RUNNER_SHA_OK=1",
-        "RUN_START=1",
-        "BUNDLE_VERIFIED=97",
-        "URL_SHAPE=" + ",".join(f"{key}:1" for key in contract.runner.SHAPE_KEYS),
-        "PRECHECK_JSON=" + contract.G2,
-        "PRECHECK_EXIT=1",
-        "ACCESS_LOCK_TIMEOUT_MS=4000",
-        *(f"ACCESS_COUNT={label},0" for label in contract.runner.ACCESS_LABELS),
-        "ACCESS_ROWS=9",
-        "RUN_DONE=1",
-    ]
 
 
 class PackageAndMarkersTests(unittest.TestCase):
@@ -114,174 +96,24 @@ class AdmissionTests(unittest.TestCase):
                         self.assertEqual(admission.main(), 1)
                         self.assertNotIn("synthetic", output.getvalue())
 
-    def test_prior_incident_requires_clearance_from_current_master(self):
-        workflow = contract.CHECKS_WORKFLOW
-        env = self.env | {
-            "GITHUB_RUN_ATTEMPT": "1",
-            "GITHUB_WORKFLOW_REF": f"{admission.REPOSITORY}/{admission.WORKFLOW_DIR}"
-            f"{workflow}@{admission.REF}",
-        }
-        history = [
-            {"id": 44, "run_attempt": 1, "status": "in_progress", "conclusion": None},
-            {
-                "id": 43,
-                "run_attempt": 1,
-                "status": "completed",
-                "conclusion": "success",
-            },
-            {
-                "id": 42,
-                "run_attempt": 2,
-                "status": "completed",
-                "conclusion": "success",
-                "head_sha": "a" * 40,
-            },
-        ]
-        steps = [
-            {"name": admission.CARRIER_STEP, "conclusion": "failure"},
-            {"name": admission.RECONCILE_STEP, "conclusion": "failure"},
-        ]
 
-        def lookup(path):
-            if path == "git/ref/heads/master":
-                return self.master
-            if path.startswith(f"actions/workflows/{workflow}/runs?"):
-                self.assertNotIn("head_sha=", path)
-                return {"workflow_runs": history, "total_count": len(history)}
-            self.assertEqual(path, "actions/runs/42/attempts/1/jobs?per_page=10")
-            return {
-                "total_count": 1,
-                "jobs": [
-                    {
-                        "name": admission.EXECUTE_JOB,
-                        "conclusion": "failure",
-                        "steps": steps,
-                    }
-                ],
-            }
-
-        with patch.object(admission, "git", return_value=b""):
-            with self.assertRaisesRegex(
-                contract.Stop, "production_checks_incident_requires_clearance"
-            ):
-                admission.check_context(workflow, env, lookup)
-        with patch.object(
-            admission,
-            "git",
-            side_effect=[b"tracked", b'{"42":"Confirmed terminal and reconciled."}'],
-        ) as git:
-            self.assertEqual(admission.check_context(workflow, env, lookup), MASTER)
-            git.assert_called_with("show", f"{MASTER}:{admission.CLEARANCE_FILE}")
-        with patch.object(
-            admission, "git", side_effect=[b"tracked", b'{"43":"Unrelated run."}']
-        ):
-            with self.assertRaisesRegex(
-                contract.Stop, "production_checks_incident_requires_clearance"
-            ):
-                admission.check_context(workflow, env, lookup)
-        steps[1]["conclusion"] = "success"
-        with patch.object(admission, "git", return_value=b""):
-            self.assertEqual(admission.check_context(workflow, env, lookup), MASTER)
-
-    def test_receipt_provenance_and_digest(self):
-        receipt = contract.receipt_header(MASTER, 42, EXECUTION, "database-url")
-        receipt.update(
-            template_unchanged=True,
-            template_sha256="2" * 64,
-            retry_limit=0,
-            replica_timeout_seconds=450,
-            execution_count=1,
-            g2_shape="match",
-            access_counts=contract.parse_markers(markers())[0],
-            preflight={
-                "list_executions": True,
-                "show_execution": False,
-                "no_prior_execution": True,
-                "query_workspace": True,
-            },
-        )
-        run = {
-            "path": admission.WORKFLOW_DIR + contract.CHECKS_WORKFLOW,
-            "event": "workflow_dispatch",
-            "head_branch": "master",
-            "head_sha": MASTER,
-            "repository": {"full_name": admission.REPOSITORY},
-            "head_repository": {"full_name": admission.REPOSITORY},
-            "actor": {"login": "JohnClem"},
-            "triggering_actor": {"login": "JohnClem"},
-            "status": "completed",
-            "conclusion": "success",
-            "run_attempt": 1,
-            "id": 42,
-        }
-        jobs = {
-            "total_count": 2,
-            "jobs": [
-                {"name": "Authorize production checks", "conclusion": "success"},
-                {"name": "Execute production checks", "conclusion": "success"},
-            ],
-        }
-        artifact = {
-            "id": 48,
-            "name": f"production-checks-receipt-42-{MASTER}",
-            "expired": False,
-        }
-
-        def lookup(path, *, archive=False):
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, "w") as zipped:
-                zipped.writestr(admission.RECEIPT_FILE, json.dumps(receipt))
-            content = buffer.getvalue()
-            if archive:
-                return content
-            if path.endswith("jobs?per_page=10"):
-                return jobs
-            if path.endswith("artifacts?per_page=10"):
-                return {
-                    "total_count": 1,
-                    "artifacts": [
-                        {"digest": "sha256:" + contract.sha256(content), **artifact}
-                    ],
-                }
-            self.assertIn(f"head_sha={MASTER}", path)
-            return {"workflow_runs": [run]}
-
-        admission.require_production_receipt(MASTER, lookup)
-        with patch.dict(receipt, preflight={"query_workspace": True}):
-            with self.assertRaisesRegex(contract.Stop, "receipt_preflight"):
-                admission.require_production_receipt(MASTER, lookup)
-        with self.assertRaisesRegex(contract.Stop, "receipt_missing"):
-            admission.require_production_receipt(
-                MASTER, lambda _: {"workflow_runs": []}
-            )
-        for field, wrong in (
-            ("head_sha", "f" * 40),
-            ("path", "staging.yml"),
-            ("conclusion", "failure"),
-            ("run_attempt", 2),
-            ("triggering_actor", {"login": "other"}),
-        ):
-            with patch.dict(run, {field: wrong}):
-                with self.assertRaisesRegex(contract.Stop, "receipt_run_provenance"):
-                    admission.require_production_receipt(MASTER, lookup)
-        with patch.dict(jobs["jobs"][1], conclusion="skipped"):
-            with self.assertRaisesRegex(contract.Stop, "receipt_jobs"):
-                admission.require_production_receipt(MASTER, lookup)
-        with patch.dict(artifact, digest="sha256:" + "0" * 64):
-            with self.assertRaisesRegex(contract.Stop, "receipt_artifact_digest"):
-                admission.require_production_receipt(MASTER, lookup)
-        with patch.dict(artifact, expired=True):
-            with self.assertRaisesRegex(contract.Stop, "receipt_artifact_metadata"):
-                admission.require_production_receipt(MASTER, lookup)
-        for field, wrong in (
-            ("source", "synthetic"),
-            ("candidate_sha", "f" * 40),
-            ("workflow_sha", "f" * 40),
-            ("retry_limit", False),
-        ):
-            with patch.dict(receipt, {field: wrong}):
-                with self.assertRaisesRegex(contract.Stop, "receipt_contract"):
-                    admission.require_production_receipt(MASTER, lookup)
+class WorkflowTests(unittest.TestCase):
+    def test_workflows_do_not_depend_on_production_checks_receipts(self):
+        workflows = contract.REPO_ROOT / admission.WORKFLOW_DIR
+        self.assertTrue((workflows / "infra_production_plan_local.yml").is_file())
+        self.assertFalse((workflows / "run_production_checks.yml").exists())
+        for workflow in workflows.iterdir():
+            if workflow.suffix not in {".yml", ".yaml"}:
+                continue
+            with self.subTest(workflow=workflow.name):
+                source = workflow.read_text()
+                self.assertNotIn("run_production_checks.yml", source)
+                if workflow.name == "staging_restore_rehearsal.yml":
+                    # The existing staging cleanup gate takes its own receipt.
+                    source = source.replace(
+                        "--receipt evidence/cleanup-envelope.json", "", 2
+                    )
+                self.assertNotIn("--receipt", source)
 
 
 class PlanRendererTests(unittest.TestCase):

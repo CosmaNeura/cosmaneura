@@ -43,7 +43,6 @@ jobs:
     timeout-minutes: 20
     if: >-
       ${{
-        github.repository == 'CosmaNeura/cosmaneura' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/master' &&
         github.actor == 'JohnClem' &&
@@ -71,11 +70,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require an exact-candidate production checks receipt
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt
       - name: Verify staging-verified candidate before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,7 +101,6 @@ jobs:
       cancel-in-progress: false
     if: >-
       ${{
-        github.repository == 'CosmaNeura/cosmaneura' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/master' &&
         github.actor == 'JohnClem' &&
@@ -146,21 +139,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require current admission and receipt before production setup
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
           apt-packages: zsh
       - uses: ./.github/actions/install-nixpacks
-      - name: Reverify founder dispatch before resolving build credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py release_verified_candidate.yml
       - name: Resolve production frontend build configuration
         env:
           FRONTEND_ENV_SOURCE: .env.production.frontend
@@ -211,11 +194,6 @@ jobs:
         env:
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
         run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
-      - name: Reverify exact-candidate production checks before publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt
       - name: Reverify current master and admit production context before publish
         env:
           GH_TOKEN: ${{ github.token }}
