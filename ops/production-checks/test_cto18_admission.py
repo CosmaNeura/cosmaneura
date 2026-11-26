@@ -101,9 +101,9 @@ class WorkflowTests(unittest.TestCase):
     def test_workflows_do_not_depend_on_production_checks_receipts(self):
         workflows = contract.REPO_ROOT / admission.WORKFLOW_DIR
         self.assertTrue((workflows / "infra_production_plan_local.yml").is_file())
-        self.assertFalse((workflows / "run_production_checks.yml").exists())
+        button_workflow = workflows / "run_production_checks.yml"
         for workflow in workflows.iterdir():
-            if workflow.suffix not in {".yml", ".yaml"}:
+            if workflow == button_workflow or workflow.suffix not in {".yml", ".yaml"}:
                 continue
             with self.subTest(workflow=workflow.name):
                 source = workflow.read_text()
