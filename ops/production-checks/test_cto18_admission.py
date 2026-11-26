@@ -114,6 +114,75 @@ class AdmissionTests(unittest.TestCase):
                         self.assertEqual(admission.main(), 1)
                         self.assertNotIn("synthetic", output.getvalue())
 
+    def test_prior_incident_requires_clearance_from_current_master(self):
+        workflow = contract.CHECKS_WORKFLOW
+        env = self.env | {
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_WORKFLOW_REF": f"{admission.REPOSITORY}/{admission.WORKFLOW_DIR}"
+            f"{workflow}@{admission.REF}",
+        }
+        history = [
+            {"id": 44, "run_attempt": 1, "status": "in_progress", "conclusion": None},
+            {
+                "id": 43,
+                "run_attempt": 1,
+                "status": "completed",
+                "conclusion": "success",
+            },
+            {
+                "id": 42,
+                "run_attempt": 2,
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "a" * 40,
+            },
+        ]
+        steps = [
+            {"name": admission.CARRIER_STEP, "conclusion": "failure"},
+            {"name": admission.RECONCILE_STEP, "conclusion": "failure"},
+        ]
+
+        def lookup(path):
+            if path == "git/ref/heads/master":
+                return self.master
+            if path.startswith(f"actions/workflows/{workflow}/runs?"):
+                self.assertNotIn("head_sha=", path)
+                return {"workflow_runs": history, "total_count": len(history)}
+            self.assertEqual(path, "actions/runs/42/attempts/1/jobs?per_page=10")
+            return {
+                "total_count": 1,
+                "jobs": [
+                    {
+                        "name": admission.EXECUTE_JOB,
+                        "conclusion": "failure",
+                        "steps": steps,
+                    }
+                ],
+            }
+
+        with patch.object(admission, "git", return_value=b""):
+            with self.assertRaisesRegex(
+                contract.Stop, "production_checks_incident_requires_clearance"
+            ):
+                admission.check_context(workflow, env, lookup)
+        with patch.object(
+            admission,
+            "git",
+            side_effect=[b"tracked", b'{"42":"Confirmed terminal and reconciled."}'],
+        ) as git:
+            self.assertEqual(admission.check_context(workflow, env, lookup), MASTER)
+            git.assert_called_with("show", f"{MASTER}:{admission.CLEARANCE_FILE}")
+        with patch.object(
+            admission, "git", side_effect=[b"tracked", b'{"43":"Unrelated run."}']
+        ):
+            with self.assertRaisesRegex(
+                contract.Stop, "production_checks_incident_requires_clearance"
+            ):
+                admission.check_context(workflow, env, lookup)
+        steps[1]["conclusion"] = "success"
+        with patch.object(admission, "git", return_value=b""):
+            self.assertEqual(admission.check_context(workflow, env, lookup), MASTER)
+
     def test_receipt_provenance_and_digest(self):
         receipt = contract.receipt_header(MASTER, 42, EXECUTION, "database-url")
         receipt.update(
@@ -124,6 +193,12 @@ class AdmissionTests(unittest.TestCase):
             execution_count=1,
             g2_shape="match",
             access_counts=contract.parse_markers(markers())[0],
+            preflight={
+                "list_executions": True,
+                "show_execution": False,
+                "no_prior_execution": True,
+                "query_workspace": True,
+            },
         )
         run = {
             "path": admission.WORKFLOW_DIR + contract.CHECKS_WORKFLOW,
@@ -172,6 +247,9 @@ class AdmissionTests(unittest.TestCase):
             return {"workflow_runs": [run]}
 
         admission.require_production_receipt(MASTER, lookup)
+        with patch.dict(receipt, preflight={"query_workspace": True}):
+            with self.assertRaisesRegex(contract.Stop, "receipt_preflight"):
+                admission.require_production_receipt(MASTER, lookup)
         with self.assertRaisesRegex(contract.Stop, "receipt_missing"):
             admission.require_production_receipt(
                 MASTER, lambda _: {"workflow_runs": []}
