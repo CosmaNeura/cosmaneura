@@ -15,7 +15,7 @@ import runner
 PACKAGE = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE.parents[1]
 REVIEWED_SOURCE = "cf67a63129426c558b84559618822a6b59e7cdba"
-PACKAGE_SHA = "d2914ce309f77ce5e86bd5688a5307be84ed7dad3fe6c8f903d1fc2649845944"
+PACKAGE_SHA = "2fc24fd6e172e507c1895e4ccdaf4f47107bf86ee02c5584c0cb7f9dc0dcb9e9"
 RUNNER_SHA = "b940747c7ed2fdd0d414dca664c8d642adae0f92539fe2ae28d28c72f59a9b59"
 BOOTSTRAP_SHA = "b722cedc815e259920c8cd6f2cb5f891369699183e853612bc95567d83d79a67"
 IMAGE = (
@@ -214,6 +214,22 @@ def verify_receipt(receipt, candidate, run_id):
         and timeout > 0,
         "receipt_template",
     )
+    preflight = receipt.get("preflight")
+    require(
+        isinstance(preflight, dict)
+        and preflight.keys()
+        == {
+            "list_executions",
+            "show_execution",
+            "no_prior_execution",
+            "query_workspace",
+        }
+        and all(type(value) is bool for value in preflight.values())
+        and preflight["list_executions"]
+        and preflight["query_workspace"]
+        and preflight["show_execution"] == (not preflight["no_prior_execution"]),
+        "receipt_contract",
+    )
     expected.update(
         template_unchanged=True,
         template_sha256=template_digest,
@@ -222,6 +238,7 @@ def verify_receipt(receipt, candidate, run_id):
         execution_count=1,
         g2_shape="match",
         access_counts=counts,
+        preflight=preflight,
     )
     # Canonical serialization also distinguishes booleans from integers.
     require(json.dumps(receipt) == json.dumps(expected), "receipt_contract")

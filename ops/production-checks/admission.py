@@ -200,8 +200,7 @@ def require_incident_clearance(candidate, lookup):
 
 def verify_checks_receipt(receipt, candidate, run_id):
     require(type(receipt) is dict, "receipt_contract")
-    fields = dict(receipt)
-    preflight = fields.pop("preflight", None)
+    preflight = receipt.get("preflight")
     require(
         type(preflight) is dict
         and set(preflight)
@@ -217,7 +216,7 @@ def verify_checks_receipt(receipt, candidate, run_id):
         and preflight["show_execution"] != preflight["no_prior_execution"],
         "receipt_preflight",
     )
-    verify_receipt(fields, candidate, run_id)
+    verify_receipt(receipt, candidate, run_id)
 
 
 def verify_production_receipt(candidate, lookup=None):
