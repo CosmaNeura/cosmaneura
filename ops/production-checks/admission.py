@@ -10,7 +10,15 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-from contract import CHECKS_WORKFLOW, Stop, exact_sha, require, sha256, verify_receipt
+from contract import (
+    CHECKS_WORKFLOW,
+    Stop,
+    exact_sha,
+    git,
+    require,
+    sha256,
+    verify_receipt,
+)
 
 REPOSITORY = "CosmaNeura/cosmaneura"
 REF = "refs/heads/master"
@@ -18,6 +26,17 @@ FOUNDER = "JohnClem"
 WORKFLOW_DIR = ".github/workflows/"
 API = f"https://api.github.com/repos/{REPOSITORY}/"
 RECEIPT_FILE = "production-checks-receipt.json"
+CLEARANCE_FILE = "ops/production-checks/incident-clearances.json"
+EXECUTE_JOB = "Execute production checks"
+CARRIER_STEP = "Run exactly one checked execution"
+RECONCILE_STEP = "Confirm no unresolved execution incident"
+INCIDENT_CODES = {
+    "incident_start_unresolved",
+    "incident_stop_unconfirmed",
+    "incident_stop_failed_terminal",
+    "incident_execution_not_identified",
+    "ambiguous_start",
+}
 WORKFLOWS = (
     "infra_production_plan_local.yml",
     "infra_apply_local.yml",
@@ -93,6 +112,8 @@ def check_context(workflow, env, lookup=None, *, admitted=False):
         and master["object"]["sha"] == candidate,
         "stale_master",
     )
+    if workflow == CHECKS_WORKFLOW:
+        require_incident_clearance(candidate, lookup)
     return candidate
 
 
@@ -100,6 +121,99 @@ def unique_fields(fields):
     result = dict(fields)
     require(len(result) == len(fields), "receipt_duplicate_fields")
     return result
+
+
+def incident_clearances(candidate):
+    if not git("ls-tree", candidate, "--", CLEARANCE_FILE):
+        return {}
+    records = json.loads(
+        git("show", f"{candidate}:{CLEARANCE_FILE}"), object_pairs_hook=unique_fields
+    )
+    require(
+        type(records) is dict
+        and all(
+            re.fullmatch(r"[1-9][0-9]*", run_id)
+            and type(result) is str
+            and result.strip()
+            for run_id, result in records.items()
+        ),
+        "invalid_incident_clearance",
+    )
+    return records
+
+
+def require_incident_clearance(candidate, lookup):
+    clearances = incident_clearances(candidate)
+    seen = set()
+    for page in range(1, 11):
+        history = lookup(
+            f"actions/workflows/{CHECKS_WORKFLOW}/runs?branch=master"
+            f"&event=workflow_dispatch&per_page=100&page={page}"
+        )
+        runs, total = history["workflow_runs"], history["total_count"]
+        require(
+            type(total) is int
+            and 0 <= total < 1000
+            and len(runs) == min(100, max(0, total - len(seen))),
+            "incident_history_incomplete",
+        )
+        for run in runs:
+            run_id = run["id"]
+            require(
+                type(run_id) is int and run_id > 0 and run_id not in seen,
+                "incident_history_incomplete",
+            )
+            seen.add(run_id)
+            attempt = run["run_attempt"]
+            require(type(attempt) is int and attempt > 0, "incident_history_incomplete")
+            if str(run_id) in clearances or (
+                attempt == 1
+                and (run["status"] != "completed" or run["conclusion"] == "success")
+            ):
+                continue
+            listing = lookup(f"actions/runs/{run_id}/attempts/1/jobs?per_page=10")
+            jobs = listing["jobs"]
+            require(
+                0 <= len(jobs) == listing["total_count"] <= 2,
+                "incident_jobs_incomplete",
+            )
+            for job in jobs:
+                if job["name"] != EXECUTE_JOB or job["conclusion"] == "skipped":
+                    continue
+                steps = {step["name"]: step["conclusion"] for step in job["steps"]}
+                outcome = steps.get(CARRIER_STEP)
+                require(
+                    outcome in {"success", "skipped"}
+                    or (
+                        outcome == "failure" and steps.get(RECONCILE_STEP) == "success"
+                    ),
+                    "production_checks_incident_requires_clearance",
+                )
+        if len(seen) == total:
+            return
+    raise Stop("incident_history_incomplete")
+
+
+def verify_checks_receipt(receipt, candidate, run_id):
+    require(type(receipt) is dict, "receipt_contract")
+    fields = dict(receipt)
+    preflight = fields.pop("preflight", None)
+    require(
+        type(preflight) is dict
+        and set(preflight)
+        == {
+            "list_executions",
+            "show_execution",
+            "no_prior_execution",
+            "query_workspace",
+        }
+        and all(type(value) is bool for value in preflight.values())
+        and preflight["list_executions"]
+        and preflight["query_workspace"]
+        and preflight["show_execution"] != preflight["no_prior_execution"],
+        "receipt_preflight",
+    )
+    verify_receipt(fields, candidate, run_id)
 
 
 def require_production_receipt(candidate, lookup=api):
@@ -132,7 +246,7 @@ def require_production_receipt(candidate, lookup=api):
         jobs["total_count"] == 2
         and len(jobs["jobs"]) == 2
         and {job["name"] for job in jobs["jobs"]}
-        == {"Authorize production checks", "Execute production checks"}
+        == {"Authorize production checks", EXECUTE_JOB}
         and all(job["conclusion"] == "success" for job in jobs["jobs"]),
         "receipt_jobs",
     )
@@ -163,7 +277,7 @@ def require_production_receipt(candidate, lookup=api):
         receipt = json.loads(
             compressed.read(RECEIPT_FILE), object_pairs_hook=unique_fields
         )
-    verify_receipt(receipt, candidate, run_id)
+    verify_checks_receipt(receipt, candidate, run_id)
 
 
 def main():
