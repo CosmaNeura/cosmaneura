@@ -86,6 +86,24 @@ class ProbeTests(unittest.TestCase):
         ]
         self.assertEqual(positions, sorted(set(positions)))
 
+    def test_checks_job_and_pre_carrier_step_timeouts(self):
+        checks = WORKFLOW.read_text().split("\n  checks:\n", 1)[1]
+        self.assertRegex(checks, r"(?m)^    timeout-minutes: 31$")
+        for step, minutes in (
+            (r"uses: actions/checkout@[^\n]+", 2),
+            ("name: Reverify admission before production authentication", 1),
+            ("name: Verify reviewed package and exact candidate before Azure login", 1),
+            (r"uses: azure/login@[^\n]+", 2),
+            ("name: Authenticate to production ACR with Azure OIDC", 2),
+            ("name: Pull the pinned production image", 4),
+            ("name: Probe the pinned production image", 2),
+            ("name: Reverify fresh master before starting the check", 1),
+        ):
+            with self.subTest(step=step):
+                self.assertRegex(
+                    checks, rf"(?m)^      - {step}\n        timeout-minutes: {minutes}$"
+                )
+
     def test_registry_login_guard_allows_only_the_entra_token(self):
         block = WORKFLOW.read_text().split("<<'DOCKER_OIDC_ONLY'\n", 1)[1]
         guard = textwrap.dedent(block.split("DOCKER_OIDC_ONLY", 1)[0].rstrip())
@@ -311,6 +329,7 @@ class FakeAzureTests(unittest.TestCase):
         subject = self.configure("logs_delayed")
         with patch.object(subject, "job", wraps=subject.job) as job:
             receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        contract.verify_receipt(receipt, MASTER, 42)
         self.assertEqual(
             [c.kwargs["timeout"] for c in job.call_args_list if c.args[0] == "start"],
             [60],
@@ -327,6 +346,26 @@ class FakeAzureTests(unittest.TestCase):
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
         self.assertEqual(self.state()["log_reads"], 3)
+
+    def test_receipt_contract_rejects_invalid_preflight(self):
+        receipt = carrier.run_production(
+            self.configure(), MASTER, 42, checkout_sha=MASTER
+        )
+        preflight = receipt.pop("preflight")
+        for malformed in (
+            receipt,
+            dict(receipt, preflight=[]),
+            dict(receipt, preflight=dict(preflight, extra=True)),
+            dict(receipt, preflight=dict(preflight, list_executions=1)),
+            dict(receipt, preflight=dict(preflight, list_executions=False)),
+            dict(receipt, preflight=dict(preflight, query_workspace=False)),
+            dict(receipt, preflight=dict(preflight, show_execution=True)),
+        ):
+            with (
+                self.subTest(preflight=malformed.get("preflight")),
+                self.assertRaisesRegex(contract.Stop, "^receipt_contract$"),
+            ):
+                contract.verify_receipt(malformed, MASTER, 42)
 
     def test_busy_digest_traffic_retry_incomplete_listing_stop_before_start(self):
         for scenario, code in (
@@ -384,22 +423,56 @@ class FakeAzureTests(unittest.TestCase):
                 self.assertEqual(self.state()["stops"], [])
 
     def test_button_admission_checks_first_attempt_and_sets_sha(self):
+        candidate = "a" * 40
+        repository = "CosmaNeura/cosmaneura"
+        ref = "refs/heads/master"
+        workflow_ref = f"{repository}/.github/workflows/run_production_checks.yml@{ref}"
+        env = {
+            "GITHUB_REPOSITORY": repository,
+            "GITHUB_SHA": candidate,
+            "GITHUB_WORKFLOW_SHA": candidate,
+            "GITHUB_WORKFLOW_REF": workflow_ref,
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REF": ref,
+            "GITHUB_ACTOR": "JohnClem",
+            "TRIGGERING_ACTOR": "JohnClem",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_OUTPUT": str(self.state_path),
+        }
+        master = {"ref": ref, "object": {"type": "commit", "sha": candidate}}
         with (
-            patch.object(sys, "argv", ["carrier.py", "--output"]),
-            patch.dict(
-                os.environ, GITHUB_RUN_ATTEMPT="1", GITHUB_OUTPUT=str(self.state_path)
-            ),
-            patch("carrier.check_context", return_value=MASTER) as admit,
-            patch("sys.stdout", io.StringIO()),
+            patch.dict(os.environ, env, clear=True),
+            patch("admission.api", return_value=master) as lookup,
+            patch("sys.stdout", io.StringIO()) as stdout,
         ):
-            self.assertEqual(carrier.main(), 0)
-            admit.assert_called_once_with(
-                contract.CHECKS_WORKFLOW, os.environ, admitted=False
-            )
-            self.assertEqual(self.state_path.read_text(), f"sha={MASTER}\n")
-            os.environ["GITHUB_RUN_ATTEMPT"] = "2"
-            self.assertEqual(carrier.main(), 1)
-            self.assertEqual(admit.call_count, 1)
+            with patch.object(sys, "argv", ["carrier.py", "--output"]):
+                self.assertEqual(carrier.main(), 0)
+            sha_output = self.state_path.read_text()
+            self.assertEqual(sha_output, f"sha={candidate}\n")
+            lookup.assert_called_once_with("git/ref/heads/master")
+            lookup.reset_mock()
+            os.environ["ADMITTED_SHA"] = sha_output.strip().removeprefix("sha=")
+            with patch.object(sys, "argv", ["carrier.py", "--admitted"]):
+                self.assertEqual(carrier.main(), 0)
+            self.assertEqual(self.state_path.read_text(), sha_output)
+            lookup.assert_called_once_with("git/ref/heads/master")
+            lookup.reset_mock()
+            with patch.object(sys, "argv", ["carrier.py", "--output"]):
+                os.environ["GITHUB_WORKFLOW_REF"] = (
+                    f"{repository}/.github/workflows/infra_apply_local.yml@{ref}"
+                )
+                self.assertEqual(carrier.main(), 1)
+                self.assertIn(
+                    "Production checks stopped (run_context).", stdout.getvalue()
+                )
+                os.environ["GITHUB_WORKFLOW_REF"] = workflow_ref
+                os.environ["GITHUB_RUN_ATTEMPT"] = "2"
+                self.assertEqual(carrier.main(), 1)
+                self.assertIn(
+                    "Production checks stopped (run_attempt).", stdout.getvalue()
+                )
+            lookup.assert_not_called()
+            self.assertEqual(self.state_path.read_text(), sha_output)
 
     def test_checkout_sha_mismatch_stops_before_start(self):
         subject = self.configure()
@@ -420,7 +493,7 @@ class FakeAzureTests(unittest.TestCase):
                         subject, checkout_sha, 42, checkout_sha=checkout_sha
                     )
                     encode.assert_called_once_with(checkout_sha)
-                self.assertEqual(receipt["candidate_sha"], checkout_sha)
+                contract.verify_receipt(receipt, checkout_sha, 42)
                 results.append(
                     (receipt["status"], receipt["access_counts"], self.state())
                 )

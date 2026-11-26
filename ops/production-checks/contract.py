@@ -207,6 +207,22 @@ def verify_receipt(receipt, candidate, run_id):
         and timeout > 0,
         "receipt_template",
     )
+    preflight = receipt.get("preflight")
+    require(
+        isinstance(preflight, dict)
+        and preflight.keys()
+        == {
+            "list_executions",
+            "show_execution",
+            "no_prior_execution",
+            "query_workspace",
+        }
+        and all(type(value) is bool for value in preflight.values())
+        and preflight["list_executions"]
+        and preflight["query_workspace"]
+        and preflight["show_execution"] == (not preflight["no_prior_execution"]),
+        "receipt_contract",
+    )
     expected.update(
         template_unchanged=True,
         template_sha256=template_digest,
@@ -215,6 +231,7 @@ def verify_receipt(receipt, candidate, run_id):
         execution_count=1,
         g2_shape="match",
         access_counts=counts,
+        preflight=preflight,
     )
     # Canonical serialization also distinguishes booleans from integers.
     require(json.dumps(receipt) == json.dumps(expected), "receipt_contract")

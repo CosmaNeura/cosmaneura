@@ -520,8 +520,8 @@ def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=Non
         access_counts=counts,
     )
     require(shape == "match", "g2_shape_differs")
-    verify_receipt(receipt, candidate, run_id)
     receipt["preflight"] = preflight
+    verify_receipt(receipt, candidate, run_id)
     return receipt
 
 

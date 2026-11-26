@@ -56,9 +56,19 @@ execution, with 60 seconds for terminal confirmation. An unresolved execution fa
 the run. A GitHub rerun cannot start the job.
 
 Log Analytics readback polls the exact execution and container for 18 rows ending
-in `RUN_DONE=1`, for up to 240 seconds within the 15-minute job. Incomplete, malformed,
+in `RUN_DONE=1`, for up to 240 seconds. Incomplete, malformed,
 duplicate and error markers fail validation. Log and execution queries use bounded
 same-host HTTPS pagination. Logs and Azure diagnostics stay private.
+
+The checks job caps the steps before the carrier at 15 minutes total. Checkout,
+admission, package verification, Azure login, ACR login, pull, probe and the final
+admission check get 2 + 1 + 1 + 2 + 2 + 4 + 2 + 1 minutes, respectively. The carrier
+budget includes 15 + 15 seconds for selector and template reads, 60 + 15 + 60 for
+preflight, 15 for the fresh-master lookup, 300 for start and poll, 60 for stop and
+confirmation plus up to 18 for the last status read and sleep, 240 for log readback,
+60 for the final execution list and 15 for the template recheck. The job budgets
+900 + 873 = 1,773 seconds through the carrier, leaving 87 seconds in the 31-minute
+job for receipt upload and job overhead.
 
 ## Staging rehearsal after push
 
