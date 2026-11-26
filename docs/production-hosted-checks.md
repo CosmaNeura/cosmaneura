@@ -1,7 +1,8 @@
 # Hosted production checks and Terraform admission
 
-**The R2 production deploy must not proceed until #1019 (receipt gating) is merged.**
-Plan, Apply, Release and build-and-publish can run without a receipt at this layer.
+**#1019 provides receipt gating for the pinned R2 candidate.**
+The gate compares the dispatch SHA to the exact R2 SHA. A merge commit has its
+own SHA, so a dispatch from that commit falls outside the hold.
 
 **Run production checks** is a JohnClem-only dispatch on `master`. Each dispatch must
 be a new first attempt. It uses the existing Release OIDC identity and the
@@ -17,6 +18,14 @@ with zero retries, and an unchanged template. The session imposes and checks rea
 operation despite the app credential's write privileges. Only fixed markers, aggregate
 counts, booleans and reviewed revisions leave the session. Job execution readers can see
 selector names and embedded source.
+
+## After the first release
+
+The receipt hold applies only to the pinned R2 candidate SHA. The checks are tied to
+the pre-release serving image, database head `49126bf99c72` with seven pending
+migrations, and the reviewed 97-file migration manifest. A rollback or later release
+uses today's release path unchanged and needs no break-glass procedure. After R2
+ships, retire or repin the hold in a reviewed follow-up PR.
 
 ## Before a live dispatch
 
@@ -55,6 +64,12 @@ states and failed status reads trigger cleanup scoped to the positively identifi
 execution, with 60 seconds for terminal confirmation. An unresolved execution fails
 the run. A GitHub rerun cannot start the job.
 
+An unresolved execution incident blocks later production-checks dispatches. Once a
+human verifies and reconciles the execution, record its GitHub run ID and a nonempty
+reconciliation result in `ops/production-checks/incident-clearances.json` on
+`master`. The file is a JSON object keyed by run ID, with a short text result for
+each cleared run. Keep sensitive diagnostics out of the record.
+
 Log Analytics readback polls the exact execution and container for 18 rows ending
 in `RUN_DONE=1`, for up to 240 seconds within the 15-minute job. Incomplete, malformed,
 duplicate and error markers fail validation. Log and execution queries use bounded
@@ -85,9 +100,10 @@ Hosted Plan and Apply use Ubuntu 24.04. Plan emits operation, static source addr
 count, including drift. Stop if these are insufficient for review. Apply retains digest,
 state and final master checks. Artifacts and caches exclude raw state, plans and diagnostics.
 
-After merging #1016 through #1019, separately dispatch checks, Plan, Apply and Release,
-with required environment approvals. John reviews the Plan summary and supplies its run ID
-and artifact-service digest for Apply. Release requires matching staging evidence, applicable
+The sequence is four merges (#1016, #1017, #1018 and #1019) and four dispatches
+(checks, Plan, Apply and Release), plus any required production environment approvals.
+John reviews the Plan summary and supplies its run ID and artifact-service digest for
+the Apply dispatch. Release requires matching staging evidence, applicable
 successful Apply, signed callback and hosted attestations, Trivy, and health and ready-digest
 checks. Stop on skipped deploy or missing health evidence. Follow the rollback procedure
 on an access-count drop or existing-user sign-in or redirect failure.

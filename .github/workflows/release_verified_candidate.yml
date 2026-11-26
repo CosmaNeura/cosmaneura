@@ -70,6 +70,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Require an exact-candidate production checks receipt
+        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt
       - name: Verify staging-verified candidate before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,6 +145,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Require current admission and receipt before production setup
+        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
@@ -194,6 +206,12 @@ jobs:
         env:
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
         run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - name: Reverify exact-candidate production checks before publish
+        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt
       - name: Reverify current master and admit production context before publish
         env:
           GH_TOKEN: ${{ github.token }}

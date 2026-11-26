@@ -50,20 +50,30 @@ def markers():
 
 
 class ProbeTests(unittest.TestCase):
-    def test_release_workflows_have_no_receipt_requirement(self):
+    def test_release_receipt_steps_only_run_for_pinned_candidate(self):
         self.assertIn("production-checks-receipt", WORKFLOW.read_text())
-        for name in (
-            "infra_production_plan_local",
-            "infra_apply_local",
-            "release_verified_candidate",
-            "build_and_publish",
-            "build_and_publish_local",
-        ):
+        for name in ("release_verified_candidate", "build_and_publish_local"):
             with self.subTest(workflow=name):
-                source = WORKFLOW.with_name(name + ".yml").read_text().lower()
-                self.assertNotIn("run_production_checks", source)
-                self.assertNotIn("production-checks-receipt", source)
-                self.assertNotIn("--receipt", source)
+                source = WORKFLOW.with_name(name + ".yml").read_text()
+                steps = [
+                    step for step in source.split("\n      - ") if "--receipt" in step
+                ]
+                self.assertEqual(len(steps), 3)
+                for step in steps:
+                    self.assertIn(f"if: github.sha == '{MASTER}'", step)
+        self.assertNotIn(
+            "--receipt", WORKFLOW.with_name("build_and_publish.yml").read_text()
+        )
+
+    def test_button_records_carrier_reconciliation_in_job_history(self):
+        source = WORKFLOW.read_text()
+        self.assertIn(
+            "- name: Run exactly one checked execution\n        id: carrier", source
+        )
+        self.assertIn("- name: Confirm no unresolved execution incident", source)
+        self.assertIn("failure() && steps.carrier.outcome == 'failure'", source)
+        self.assertIn("steps.carrier.outputs.execution_reconciled", source)
+        self.assertIn('run: test "$EXECUTION_RECONCILED" = true', source)
 
     def test_runbook_link_restored(self):
         source = (
@@ -462,6 +472,68 @@ class FakeAzureTests(unittest.TestCase):
             carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
+
+    def test_carrier_outputs_reconciliation_only_for_non_incident_stops(self):
+        env = {
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": MASTER,
+            "CHECKOUT_SHA": MASTER,
+            "GITHUB_OUTPUT": str(self.state_path),
+        }
+        with (
+            patch.object(sys, "argv", ["carrier.py"]),
+            patch.dict(os.environ, env),
+            patch("sys.stdout", io.StringIO()),
+        ):
+            for code in (
+                "incident_start_unresolved",
+                "incident_stop_unconfirmed",
+                "incident_stop_failed_terminal",
+                "incident_execution_not_identified",
+                "ambiguous_start",
+                "execution_terminal_failure",
+            ):
+                with (
+                    self.subTest(code=code),
+                    patch("carrier.run_production", side_effect=contract.Stop(code)),
+                ):
+                    self.state_path.write_text("")
+                    self.assertEqual(carrier.main(), 1)
+                    expected = (
+                        "execution_reconciled=true\n"
+                        if code == "execution_terminal_failure"
+                        else ""
+                    )
+                    self.assertEqual(self.state_path.read_text(), expected)
+
+    def test_post_migration_markers_refuse_receipt(self):
+        lines = markers()
+        post_migration = json.loads(contract.G2)
+        post_migration.update(
+            migration_head="5708b4399768", pending_migrations=[], refusal_reasons=[]
+        )
+        lines[4] = "PRECHECK_JSON=" + json.dumps(post_migration, separators=(",", ":"))
+        lines[5] = "PRECHECK_EXIT=0"
+        subject = self.configure(lines=lines)
+        directory = self.state_path.parent
+        with (
+            patch.object(sys, "argv", ["carrier.py"]),
+            patch.dict(
+                os.environ,
+                GITHUB_RUN_ATTEMPT="1",
+                GITHUB_RUN_ID="42",
+                GITHUB_SHA=MASTER,
+                CHECKOUT_SHA=MASTER,
+                GITHUB_OUTPUT=str(directory / "output"),
+                RUNNER_TEMP=str(directory),
+            ),
+            patch("carrier.Carrier", return_value=subject),
+            patch("carrier.check_context", return_value=MASTER),
+            patch("sys.stdout", io.StringIO()) as output,
+        ):
+            self.assertEqual(carrier.main(), 1)
+            self.assertIn("g2_shape_differs", output.getvalue())
+        self.assertFalse((directory / carrier.RECEIPT_FILE).exists())
 
     def test_template_drift_multiple_executions_log_errors_and_incomplete_logs(self):
         for scenario, code, lines in (

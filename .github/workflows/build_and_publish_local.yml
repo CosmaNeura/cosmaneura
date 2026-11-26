@@ -426,6 +426,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Require an exact-candidate production checks receipt
+        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt
       - name: Require provider-signed callback gate for manual production deploy
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -524,6 +530,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Require an exact-candidate production checks receipt
+        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt
       - name: Verify founder context and exact current source before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -642,6 +654,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Require an exact-candidate production checks receipt
+        if: github.sha == 'cf67a63129426c558b84559618822a6b59e7cdba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py build_and_publish_local.yml --receipt
       - name: Authenticate the previously successful immutable candidate before credentials
         env:
           GH_TOKEN: ${{ github.token }}

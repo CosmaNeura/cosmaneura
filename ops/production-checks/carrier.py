@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from admission import check_context
+from admission import INCIDENT_CODES, RECEIPT_FILE, check_context, verify_checks_receipt
 from contract import (
     CHECKS_WORKFLOW,
     IMAGE,
@@ -27,10 +27,8 @@ from contract import (
     require,
     sha256,
     verify_package,
-    verify_receipt,
 )
 
-RECEIPT_FILE = "production-checks-receipt.json"
 PRODUCTION_SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 PRODUCTION_WORKSPACE = "2a7d954b-373c-4de6-884f-c050ecc1d863"
 PRODUCTION_APP = "cosmaneura-prod-app"
@@ -518,10 +516,10 @@ def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=Non
         execution_count=1,
         g2_shape=shape,
         access_counts=counts,
+        preflight=preflight,
     )
     require(shape == "match", "g2_shape_differs")
-    verify_receipt(receipt, candidate, run_id)
-    receipt["preflight"] = preflight
+    verify_checks_receipt(receipt, candidate, run_id)
     return receipt
 
 
@@ -559,6 +557,9 @@ def main():
             "Production checks passed. Review the immutable production-checks receipt."
         )
     except Stop as error:
+        if not (args.output or args.admitted) and str(error) not in INCIDENT_CODES:
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                output.write("execution_reconciled=true\n")
         print(f"Production checks stopped ({error}).")
         return 1
     except Exception:
