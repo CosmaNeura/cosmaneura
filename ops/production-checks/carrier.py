@@ -19,7 +19,6 @@ from contract import (
     Stop,
     encoded_inputs,
     execution_name,
-    git,
     parse_markers,
     receipt_header,
     require,
@@ -403,9 +402,9 @@ class Carrier:
         )
 
 
-def run_production(carrier, candidate, run_id, *, before_start=None):
+def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=None):
     verify_package()
-    require(git("rev-parse", "HEAD").decode().strip() == candidate, "checkout_sha")
+    require(checkout_sha == candidate, "checkout_sha")
     variables = encoded_inputs(candidate)
     bootstrap = (PACKAGE / "bootstrap-args.txt").read_bytes().decode()
     selector = carrier.serving_selector()
@@ -450,6 +449,7 @@ def main():
             Carrier(PRODUCTION),
             os.environ["GITHUB_SHA"],
             run_id,
+            checkout_sha=os.environ["CHECKOUT_SHA"],
             before_start=lambda: check_context(
                 CHECKS_WORKFLOW, os.environ, admitted=True
             ),

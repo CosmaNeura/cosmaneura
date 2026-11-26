@@ -274,7 +274,7 @@ class FakeAzureTests(unittest.TestCase):
 
     def test_production_success_and_finished_log_fallback(self):
         subject = self.configure("logs_delayed")
-        receipt = carrier.run_production(subject, MASTER, 42)
+        receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
         contract.verify_receipt(receipt, MASTER, 42)
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
@@ -291,14 +291,40 @@ class FakeAzureTests(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 subject = self.configure(scenario, busy=scenario == "busy")
                 with self.assertRaisesRegex(contract.Stop, code):
-                    carrier.run_production(subject, MASTER, 42)
+                    carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 0)
+
+    def test_checkout_sha_mismatch_stops_before_start(self):
+        subject = self.configure()
+        with self.assertRaisesRegex(contract.Stop, "^checkout_sha$"):
+            carrier.run_production(subject, MASTER, 42, checkout_sha="a" * 40)
+        self.assertEqual(self.state()["starts"], 0)
+
+    def test_production_results_are_identical_for_two_fake_heads(self):
+        payload = contract.encoded_inputs(MASTER)
+        results = []
+        for checkout_sha in ("a" * 40, "b" * 40):
+            with self.subTest(checkout_sha=checkout_sha):
+                subject = self.configure()
+                with patch.object(
+                    carrier, "encoded_inputs", return_value=payload
+                ) as encode:
+                    receipt = carrier.run_production(
+                        subject, checkout_sha, 42, checkout_sha=checkout_sha
+                    )
+                    encode.assert_called_once_with(checkout_sha)
+                contract.verify_receipt(receipt, checkout_sha, 42)
+                results.append(
+                    (receipt["status"], receipt["access_counts"], self.state())
+                )
+        self.assertEqual(len(results), 2)
+        self.assertEqual(*results)
 
     def test_terminal_failure_no_stop_or_retry(self):
         for scenario in ("Failed", "Stopped", "Degraded"):
             subject = self.configure(scenario)
             with self.assertRaisesRegex(contract.Stop, "execution_terminal_failure"):
-                carrier.run_production(subject, MASTER, 42)
+                carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
             self.assertEqual(self.state()["starts"], 1)
             self.assertEqual(self.state()["stops"], [])
 
@@ -315,7 +341,7 @@ class FakeAzureTests(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 subject = self.configure(scenario)
                 with self.assertRaisesRegex(contract.Stop, code):
-                    carrier.run_production(subject, MASTER, 42)
+                    carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 1)
                 self.assertEqual(self.state()["stops"], [expected])
                 if scenario != "stop_unconfirmed":
@@ -326,7 +352,7 @@ class FakeAzureTests(unittest.TestCase):
     def test_unmatched_lost_response_never_stops_another_execution(self):
         subject = self.configure("unmatched")
         with self.assertRaisesRegex(contract.Stop, "incident_start_unresolved"):
-            carrier.run_production(subject, MASTER, 42)
+            carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
 
@@ -342,7 +368,7 @@ class FakeAzureTests(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 subject = self.configure(scenario, lines=lines)
                 with self.assertRaisesRegex(contract.Stop, code):
-                    carrier.run_production(subject, MASTER, 42)
+                    carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 1)
 
     def test_staging_rehearsal_payload_template_timeout_and_finished_logs(self):

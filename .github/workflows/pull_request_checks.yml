@@ -56,7 +56,7 @@ jobs:
           apt-packages: zsh
       - run: just up --fast
       - run: just py_setup
-      - run: bash ops/production-checks/lint_first_party.sh
+      - run: just py_lint
       - name: Test production workflow gates with synthetic fixtures
         run: python3 -B -m unittest discover -s ops/production-checks -p test_cto18.py
       - run: just db_migrate

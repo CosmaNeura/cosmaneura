@@ -220,7 +220,7 @@ jobs:
       - name: Start CI test services
         run: just up --fast
       - run: just py_setup
-      - run: bash ops/production-checks/lint_first_party.sh
+      - run: just py_lint
 
       - run: just db_migrate
       - run: just db_lint

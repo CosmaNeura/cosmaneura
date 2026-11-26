@@ -92,7 +92,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/carrier.py
+        run: |
+          checkout_sha="$(git rev-parse --verify HEAD)"
+          CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py
       - name: Publish successful production checks receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
