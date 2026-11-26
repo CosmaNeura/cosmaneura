@@ -5,10 +5,11 @@ Release and Build & Publish require a receipt when the exact master tip contains
 `cf67a63129426c558b84559618822a6b59e7cdba` and the running production source revision
 does not. Ancestry includes the commit itself and applies to merge commits.
 
-**Run production checks** is a founder-only dispatch on `master`. Each dispatch must
-be a new first attempt. It uses the existing Release OIDC identity and the
-`production` environment, and shares the production deployment concurrency group
-with Plan, Apply and deployments, with `cancel-in-progress: false`.
+**Run production checks** is a founder-only dispatch on `master` (the single account
+named in the workflow's `if:` condition). Each dispatch must be a new first attempt.
+It uses the existing Release OIDC identity and the `production` environment, and
+shares the production deployment concurrency group with Plan, Apply and
+deployments, with `cancel-in-progress: false`.
 
 ## Candidate and receipt
 
@@ -42,8 +43,11 @@ admission cannot provide a usable receipt in these cases:
 - **(e)** A partial deploy leaves the three apps reporting different revisions.
   The running-revision read fails before admission can verify a receipt.
 
-The only exit in each case is a reviewed PR to master that removes or repins
-the receipt step. No ungated manual path exists.
+The only exit in each case is a reviewed PR to master. For (a) to (d) it removes
+or repins the receipt step. For (e) it must also remove the running-revision read
+from Build & Publish, because that read fails before the receipt step runs.
+Release stays refused by its existing schema admission until the three apps
+report one revision. No ungated manual path exists.
 
 Dispatch Run production checks on the final merged master tip. From that
 dispatch until Release succeeds, make no merges and add no new migrations on
@@ -89,7 +93,8 @@ environment approvals add manual steps is unverified.
 Before preflight, the workflow uses Entra token login to ACR, pulls the pinned digest
 and probes the cached image without network or credential inputs. AcrPull remains
 unverified until run. The probe checks `/opt/venv/bin/python`, Python 3.13,
-psycopg 3.2.6 and libpq 17.4 or later. Record its result for the pinned image digest.
+psycopg 3.2.6 and libpq 17.4 or later. Record its result for the pinned image digest
+(`contract.IMAGE` in `ops/production-checks/contract.py`).
 
 The carrier verifies the image and one approved selector across all positive traffic
 weights totaling 100%. It requires a manual job with one replica and completion,
