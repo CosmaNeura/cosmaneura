@@ -73,7 +73,7 @@ The carrier-independent runner, rebuilt from the Fable-reviewed runner `f61f498b
 
 ### Operator actions
 
-Merge #1016, #1017 and #1018, then dispatch Run production checks, Plan, Apply
+Merge #1016, #1017, #1018 and #1019, then dispatch Run production checks, Plan, Apply
 and Release separately. Apply requires the successful Plan run ID and
 artifact digest. Each workflow may also require production environment approval.
 
