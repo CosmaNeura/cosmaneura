@@ -1,11 +1,14 @@
 """Offline tests for receipt markers and the carrier using synthetic Azure calls."""
 
+import io
 import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,10 +16,103 @@ from unittest.mock import patch
 
 import carrier
 import contract
+import probe_image
 import staging_rehearsal
+from admission import INCIDENT_CODES, verify_checks_receipt
 from test_cto18_admission import markers
 
 MASTER = contract.REVIEWED_SOURCE
+WORKFLOW = contract.REPO_ROOT / ".github/workflows/run_production_checks.yml"
+
+
+class ProbeTests(unittest.TestCase):
+    def test_workflow_orders_login_pull_probe_and_carrier(self):
+        workflow = WORKFLOW.read_text()
+        positions = [
+            workflow.index(token)
+            for token in (
+                "uses: azure/login@",
+                "az acr login --name cosmaneuraprodregistry",
+                "docker pull --platform linux/amd64",
+                "python3 ops/production-checks/probe_image.py",
+                "python3 ops/production-checks/carrier.py",
+            )
+        ]
+        self.assertEqual(positions, sorted(set(positions)))
+
+    def test_registry_login_guard_allows_only_the_entra_token(self):
+        block = WORKFLOW.read_text().split("<<'DOCKER_OIDC_ONLY'\n", 1)[1]
+        guard = textwrap.dedent(block.split("DOCKER_OIDC_ONLY", 1)[0].rstrip())
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        docker = directory / "docker"
+        docker.write_text("#!/bin/bash\nprintf 'fake docker called\\n'\n")
+        docker.chmod(stat.S_IRWXU)
+        env = os.environ | {"PATH": str(directory) + os.pathsep + os.environ["PATH"]}
+        for username, code, stdout in (
+            ("00000000-0000-0000-0000-000000000000", 0, "fake docker called\n"),
+            ("synthetic-admin", 1, ""),
+        ):
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    guard,
+                    "guard",
+                    "login",
+                    "--username",
+                    username,
+                    "--password-stdin",
+                    "cosmaneuraprodregistry.azurecr.io",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual((result.returncode, result.stdout), (code, stdout))
+
+    def test_cached_probe_accepts_only_exact_output(self):
+        staging = (
+            "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
+            + "1" * 64
+        )
+        for argv, image in [([], contract.IMAGE), (["--image", staging], staging)]:
+            for stdout, stderr, exit_code in (
+                (b"RUNTIME_SUPPORTED=1\n", b"", 0),
+                (b"RUNTIME_SUPPORTED=1\nextra\n", b"", 1),
+                (b"RUNTIME_SUPPORTED=1\n", b"unexpected\n", 1),
+                (b"", b"", 1),
+            ):
+                with (
+                    self.subTest(argv=argv, stdout=stdout, stderr=stderr),
+                    patch(
+                        "probe_image.subprocess.run",
+                        return_value=SimpleNamespace(stdout=stdout, stderr=stderr),
+                    ) as docker,
+                    patch("sys.stdout", io.StringIO()),
+                ):
+                    self.assertEqual(probe_image.main(argv), exit_code)
+                    command = docker.call_args.args[0]
+                    self.assertIn(image, command)
+                    self.assertIn("--pull=never", command)
+                    self.assertIn("--network=none", command)
+                    self.assertTrue(docker.call_args.kwargs["check"])
+        with (
+            patch(
+                "probe_image.subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, "docker"),
+            ),
+            patch("sys.stdout", io.StringIO()),
+        ):
+            self.assertEqual(probe_image.main([]), 1)
+        for bad in (contract.IMAGE, staging.split("@")[0] + ":latest"):
+            with (
+                patch("probe_image.subprocess.run") as docker,
+                patch("sys.stderr", io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                probe_image.main(["--image", bad])
+            docker.assert_not_called()
 
 
 class MarkerTests(unittest.TestCase):
@@ -74,6 +170,19 @@ class StagingTargetTests(unittest.TestCase):
             ),
         )
 
+    def test_accepts_real_staging_target(self):
+        job = "cn-stg-mig-9b810f5707655bc74506"
+        args = SimpleNamespace(
+            subscription="bab2a709-1fcb-4c87-a9fc-802f7477ec13",
+            resource_group="cosmaneura-staging",
+            job=job,
+            container=job,
+            workspace="f170125a-69a8-4fe5-9a62-d7d366814c04",
+            image="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:"
+            "3bf67cbcf1e31999621268f62ad0266005fd651b1a6b700ac794411b14c090db",
+        )
+        self.assertEqual(staging_rehearsal.staging_target(args).job, job)
+
     def test_refuses_production_values_in_either_subscription(self):
         for subscription in (
             carrier.PRODUCTION.subscription,
@@ -81,14 +190,18 @@ class StagingTargetTests(unittest.TestCase):
         ):
             for field, value in (
                 ("resource_group", carrier.PRODUCTION.group),
+                ("resource_group", "cosmaneura-staging-x"),
                 ("job", carrier.PRODUCTION.job),
                 ("container", carrier.PRODUCTION.container),
                 ("job", carrier.PRODUCTION_APP),
+                ("container", carrier.PRODUCTION_APP),
                 ("workspace", carrier.PRODUCTION.workspace),
                 ("image", carrier.PRODUCTION.image),
                 ("resource_group", "cosmaneura-staging-prodlike"),
                 ("job", "cosmaneura-staging-prodlike"),
                 ("container", "cosmaneura-staging-prodlike"),
+                ("job", "cn-stg-prodlike"),
+                ("container", "cn-stg-prodlike"),
             ):
                 with self.subTest(subscription=subscription, field=field, value=value):
                     args = SimpleNamespace(
@@ -151,7 +264,16 @@ class FakeAzureTests(unittest.TestCase):
     def test_production_success_and_finished_log_fallback(self):
         subject = self.configure("logs_delayed")
         receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
-        contract.verify_receipt(receipt, MASTER, 42)
+        verify_checks_receipt(receipt, MASTER, 42)
+        self.assertEqual(
+            receipt["preflight"],
+            {
+                "list_executions": True,
+                "show_execution": False,
+                "no_prior_execution": True,
+                "query_workspace": True,
+            },
+        )
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
         self.assertEqual(self.state()["log_reads"], 2)
@@ -162,13 +284,61 @@ class FakeAzureTests(unittest.TestCase):
             ("digest", "traffic_image_drift"),
             ("traffic", "traffic_not_fully_verified"),
             ("retry", "retry_must_be_zero"),
-            ("paginated", "execution_list_incomplete"),
+            ("paginated", "preflight_list_denied"),
         ):
             with self.subTest(scenario=scenario):
                 subject = self.configure(scenario, busy=scenario == "busy")
                 with self.assertRaisesRegex(contract.Stop, code):
                     carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 0)
+
+    def test_preflight_shows_newest_execution(self):
+        subject = self.configure()
+        state = self.state()
+        newest = subject.target.job + "-newest"
+        state["executions"] = {
+            subject.target.job + "-older": {
+                "status": "Succeeded",
+                "start": "2026-01-01T00:00:00Z",
+            },
+            newest: {"status": "Succeeded", "start": "2026-01-02T00:00:00Z"},
+        }
+        self.state_path.write_text(json.dumps(state))
+        receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        self.assertEqual(self.state()["preflight_shows"], [newest])
+        self.assertTrue(receipt["preflight"]["show_execution"])
+        self.assertFalse(receipt["preflight"]["no_prior_execution"])
+
+    def test_preflight_denials_never_start_or_stop(self):
+        for action in ("list", "show", "query"):
+            with self.subTest(action=action):
+                subject = self.configure(f"{action}_denied", busy=action == "show")
+                with self.assertRaisesRegex(
+                    contract.Stop, f"^preflight_{action}_denied$"
+                ):
+                    carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+                self.assertEqual(self.state()["starts"], 0)
+                self.assertEqual(self.state()["stops"], [])
+
+    def test_carrier_only_confirms_reconciled_failures(self):
+        output = self.state_path
+        for code in (*INCIDENT_CODES, "preflight_list_denied"):
+            output.write_text("")
+            with (
+                self.subTest(code=code),
+                patch.dict(
+                    os.environ,
+                    GITHUB_RUN_ID="42",
+                    GITHUB_SHA=MASTER,
+                    CHECKOUT_SHA=MASTER,
+                    GITHUB_OUTPUT=str(output),
+                ),
+                patch("carrier.run_production", side_effect=contract.Stop(code)),
+                patch("sys.stdout", io.StringIO()),
+            ):
+                self.assertEqual(carrier.main(), 1)
+            expected = "" if code in INCIDENT_CODES else "execution_reconciled=true\n"
+            self.assertEqual(output.read_text(), expected)
 
     def test_checkout_sha_mismatch_stops_before_start(self):
         subject = self.configure()
@@ -189,7 +359,7 @@ class FakeAzureTests(unittest.TestCase):
                         subject, checkout_sha, 42, checkout_sha=checkout_sha
                     )
                     encode.assert_called_once_with(checkout_sha)
-                contract.verify_receipt(receipt, checkout_sha, 42)
+                verify_checks_receipt(receipt, checkout_sha, 42)
                 results.append(
                     (receipt["status"], receipt["access_counts"], self.state())
                 )
@@ -262,6 +432,7 @@ class FakeAzureTests(unittest.TestCase):
         lines = [staging_rehearsal.SYNTHETIC_START, staging_rehearsal.SYNTHETIC_DONE]
         result = staging_rehearsal.rehearsal(self.configure(target=target, lines=lines))
         self.assertEqual(result["payload_bytes"], 92412)
+        self.assertTrue(result["preflight"]["query_workspace"])
         self.assertEqual(self.state()["starts"], 2)
         self.assertEqual(self.state()["stops"], [target.job + "-fake2"])
         with self.assertRaisesRegex(contract.Stop, "rehearsal_finished_log_invalid"):

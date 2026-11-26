@@ -67,8 +67,14 @@ elif args[:3] == ["containerapp", "job", "show"]:
         }
     )
 elif args[:3] == ["rest", "--method", "get"]:
+    if scenario == "list_denied":
+        fail()
     rows = [
-        {"name": name, "status": row["status"]}
+        {
+            "name": name,
+            "status": row["status"],
+            "start": row.get("start", "2026-01-01T00:00:00Z"),
+        }
         for name, row in state["executions"].items()
     ]
     emit(
@@ -78,6 +84,7 @@ elif args[:3] == ["rest", "--method", "get"]:
         }
     )
 elif args[:3] == ["containerapp", "job", "start"]:
+    assert state["preflight_queries"] == 1
     state["starts"] += 1
     name = f"{state['job']}-fake{state['starts']}"
     bootstrap = next(
@@ -156,6 +163,11 @@ elif args[:3] == ["containerapp", "job", "start"]:
 elif args[:4] == ["containerapp", "job", "execution", "show"]:
     name = option("--job-execution-name")
     row = state["executions"][name]
+    if not state["starts"]:
+        state.setdefault("preflight_shows", []).append(name)
+        save()
+        if scenario == "show_denied":
+            fail()
     if scenario == "poll_error" and not state["stops"]:
         fail()
     emit({"name": name, **row})
@@ -168,9 +180,25 @@ elif args[:3] == ["containerapp", "job", "stop"]:
     if scenario == "stop_failed":
         fail()
 elif args[:3] == ["rest", "--method", "post"]:
+    query = json.loads(option("--body"))["query"]
+    if query.endswith("summarize count = count()"):
+        assert "TimeGenerated > ago(5m)" in query
+        assert f"ContainerName_s == '{state['container']}'" in query
+        assert not state["starts"] and not state["stops"]
+        state["preflight_queries"] = 1
+        save()
+        if scenario == "query_denied":
+            fail()
+        emit(
+            {
+                "tables": [
+                    {"columns": [{"name": "count", "type": "long"}], "rows": [[0]]}
+                ]
+            }
+        )
+        sys.exit(0)
     state["log_reads"] += 1
     save()
-    query = json.loads(option("--body"))["query"]
     assert f"^{state['job']}-fake1(-[a-z0-9]+)?$" in query
     assert f"ContainerName_s == '{state['container']}'" in query
     if scenario == "logs_error":

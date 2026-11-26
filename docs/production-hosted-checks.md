@@ -54,18 +54,20 @@ are readable by principals with execution access.
   the live federation, backend reachability from hosted x64, effective provider
   and backend permissions, and pinned setup and provider compatibility using
   approved evidence. Hold production until the evidence is recorded.
-- Record runtime evidence for the exact traffic-serving image digest
-  `877fe96e9b43297be2ac479ef939c5e47476229fc867062ad0fda2bd1a50fac6`.
-  At the reviewed source, `.tool-versions` specifies Python 3.13.2,
-  `pyproject.toml` requires Python 3.13 or later, and `uv.lock` pins both
-  `psycopg` and `psycopg-binary` to 3.2.6. Run the synthetic probe against an
-  already-cached copy of the exact OCI image. It checks the executable at
-  `/opt/venv/bin/python`, Python 3.13, psycopg 3.2.6 and libpq 17.4 or later
-  without network or credential inputs. Record the probe result for the digest.
 
-```bash
-python3 ops/production-checks/probe_image.py
-```
+## Runtime probe
+
+After Azure login and before permission preflight or any execution, the
+workflow authenticates to ACR with the existing OIDC identity, pulls the
+pinned digest and probes the cached image. Docker accepts only the Entra
+token login from Azure CLI. The identity needs AcrPull, which is unverified
+until the first run. An authentication denial, pull failure or probe failure
+stops the workflow before preflight.
+
+The probe checks the executable at `/opt/venv/bin/python`, Python 3.13,
+psycopg 3.2.6 and libpq 17.4 or later without network or credential inputs.
+Record the probe result for the exact traffic-serving digest
+`877fe96e9b43297be2ac479ef939c5e47476229fc867062ad0fda2bd1a50fac6`.
 
 ## Failure and cleanup
 
@@ -75,6 +77,11 @@ complete execution listing with only terminal states. Before starting, it
 requires manual parallelism and completion count of one, zero replica retry
 and a known positive replica timeout. It hashes the names-only template
 projection, including those settings, and checks it again after the execution.
+The read-only preflight lists executions, shows the newest execution when
+there is one, and runs a five-minute count query for the target container
+against the workspace. An error stops the run before start. The receipt and
+staging rehearsal output include only preflight booleans, including
+`no_prior_execution` when the listing is empty.
 
 The carrier calls start once. On a lost or invalid response, it compares
 execution names with the before-start list and matches the unique invocation
@@ -84,9 +91,15 @@ positively identified execution if it is still nonterminal and checks for
 terminal status. A timeout, unknown state or failed status query for an
 identified execution also takes the execution-specific stop path. The
 five-minute poll budget leaves a separate cleanup interval within the
-15-minute Actions job. An unresolved start or stop requires human incident
-review. Keep downstream production work held and obtain fresh John approval
-before a new dispatch. An Actions rerun cannot start the job.
+15-minute Actions job. An unresolved or unconfirmed execution outcome holds
+later checks dispatches across candidates. Admission checks the first attempt
+in workflow history, including when a run has been rerun. Keep incident runs
+in GitHub history. After reconciling the incident, John records the result in
+the repo-tracked `ops/production-checks/incident-clearances.json` on protected
+`master`. The JSON object maps the original GitHub run ID as a string to the
+human-written reconciliation result. Include no credentials or patient data.
+Admission reads that record from the dispatch commit. An Actions rerun cannot
+start the job.
 
 Completed logs are read through the existing production Log Analytics
 workspace, scoped to the execution and container. This is also the readback
@@ -102,9 +115,11 @@ query the existing Log Analytics workspace and its console table
 (`Microsoft.OperationalInsights/workspaces/query/read` and applicable table
 query permission, such as
 `Microsoft.OperationalInsights/workspaces/query/ContainerAppConsoleLogs_CL/read`).
-The effective stop, execution metadata and log-query permissions are
-**Unverified**. Verify them through existing grants and the authorized
-rehearsal. Hold if a required grant or response shape cannot be verified.
+The workspace query and execution metadata permissions are checked by
+preflight when applicable. The authorized staging rehearsal's timeout stop
+is the evidence for execution-specific stop rights on that staging job.
+Production stop rights still require evidence from existing grants before
+live dispatch.
 
 ## Staging rehearsal after push
 
@@ -115,6 +130,7 @@ manual template must use one replica, zero retries and a replica timeout above
 40 seconds. Follow the existing approval procedure for staging execution.
 
 ```bash
+python3 ops/production-checks/probe_image.py --image "$STAGING_IMAGE_DIGEST_REF"
 python3 ops/production-checks/staging_rehearsal.py \
   --subscription "$STAGING_SUBSCRIPTION" \
   --resource-group "$STAGING_RESOURCE_GROUP" \
@@ -140,8 +156,10 @@ change, stop and record what still needs reviewed evidence. The attestation
 contains digests and state lineage/serial. Raw state, plan JSON, binaries and
 diagnostic logs never enter an artifact or cache.
 
-After an admitted Plan, John reviews the summary and dispatches Apply
-separately with the successful Plan run ID and the artifact-service digest.
+Merge #1016, #1017 and #1018, then dispatch Run production checks, Plan, Apply
+and Release separately. Each workflow may also require production environment
+approval. After an admitted Plan, John reviews the summary and supplies the
+successful Plan run ID and artifact-service digest when dispatching Apply.
 Release still requires the matching staging candidate, successful applicable
 Apply, signed callback and hosted-execution attestations, Trivy and the
 existing post-deploy health and ready-digest checks. A skipped deployment or

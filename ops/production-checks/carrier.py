@@ -6,10 +6,11 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from admission import RECEIPT_FILE, check_context
+from admission import INCIDENT_CODES, RECEIPT_FILE, check_context, verify_checks_receipt
 from contract import (
     CHECKS_WORKFLOW,
     IMAGE,
@@ -24,7 +25,6 @@ from contract import (
     require,
     sha256,
     verify_package,
-    verify_receipt,
 )
 
 PRODUCTION_SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
@@ -183,7 +183,7 @@ class Carrier:
         )
         return sha256(json.dumps(value, sort_keys=True).encode()), value["timeout"]
 
-    def executions(self):
+    def executions(self, *, newest_first=False):
         # The CLI execution-list wrapper drops nextLink. Use the ARM envelope
         # and reject a partial view instead of admitting on the first page.
         target = self.target
@@ -199,14 +199,20 @@ class Carrier:
             "--url",
             url,
             "--query",
-            "{next:nextLink,rows:value[].{name:name,status:properties.status}}",
+            "{next:nextLink,rows:value[].{name:name,status:properties.status,"
+            "start:properties.startTime}}",
         )
         require(
             page["next"] is None and type(page["rows"]) is list,
             "execution_list_incomplete",
         )
         executions = {}
-        for row in page["rows"]:
+        rows = page["rows"]
+        if newest_first:
+            rows = sorted(
+                rows, key=lambda row: datetime.fromisoformat(row["start"]), reverse=True
+            )
+        for row in rows:
             name = row["name"]
             require(
                 execution_name(name, target.job) and name not in executions,
@@ -234,6 +240,44 @@ class Carrier:
         require(record["name"] == name, "execution_identity")
         status = record["status"]
         return status if type(status) is str else None
+
+    def preflight(self):
+        try:
+            executions = self.executions(newest_first=True)
+        except (Stop, KeyError, TypeError, ValueError) as error:
+            raise Stop("preflight_list_denied") from error
+        if executions:
+            try:
+                self.status(next(iter(executions)))
+            except (Stop, KeyError, TypeError) as error:
+                raise Stop("preflight_show_denied") from error
+        try:
+            table = self.query_logs(
+                "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(5m) "
+                f"| where ContainerName_s == '{self.target.container}' "
+                "| summarize count = count()"
+            )
+            rows = table["rows"]
+            require(
+                table["columns"] == [{"name": "count", "type": "long"}]
+                and len(rows) == 1
+                and type(rows[0]) is list
+                and len(rows[0]) == 1
+                and type(rows[0][0]) is int
+                and rows[0][0] >= 0,
+                "analytics_response",
+            )
+        except (Stop, KeyError, TypeError) as error:
+            raise Stop("preflight_query_denied") from error
+        return (
+            {
+                "list_executions": True,
+                "show_execution": bool(executions),
+                "no_prior_execution": not executions,
+                "query_workspace": True,
+            },
+            executions,
+        )
 
     def reconcile(self, before, bootstrap, variables, deadline):
         """Identify only the execution with this invocation's unique override."""
@@ -344,6 +388,34 @@ class Carrier:
         self.stop_and_confirm(name)
         raise Stop("execution_timed_out_stopped")
 
+    def query_logs(self, query):
+        response = self.az(
+            "rest",
+            "--method",
+            "post",
+            "--resource",
+            "https://api.loganalytics.io",
+            "--url",
+            f"https://api.loganalytics.io/v1/workspaces/{self.target.workspace}/query",
+            "--headers",
+            "Content-Type=application/json",
+            "--body",
+            json.dumps({"query": query}),
+        )
+        require(
+            type(response) is dict
+            and set(response) == {"tables"}
+            and type(response["tables"]) is list
+            and len(response["tables"]) == 1,
+            "analytics_response",
+        )
+        table = cast("dict[str, Any]", response)["tables"][0]
+        require(
+            type(table) is dict and type(table.get("rows")) is list,
+            "analytics_response",
+        )
+        return table
+
     def finished_logs(self, name):
         require(execution_name(name, self.target.job), "invalid_execution_name")
         # Finished replicas can lose their stream. Use the existing Log
@@ -357,30 +429,9 @@ class Carrier:
         )
         deadline = self.clock() + 120
         while self.clock() < deadline:
-            response = self.az(
-                "rest",
-                "--method",
-                "post",
-                "--resource",
-                "https://api.loganalytics.io",
-                "--url",
-                f"https://api.loganalytics.io/v1/workspaces/{self.target.workspace}/query",
-                "--headers",
-                "Content-Type=application/json",
-                "--body",
-                json.dumps({"query": query}),
-            )
-            require(
-                type(response) is dict
-                and set(response) == {"tables"}
-                and type(response["tables"]) is list
-                and len(response["tables"]) == 1,
-                "analytics_response",
-            )
-            table = cast("dict[str, Any]", response)["tables"][0]
+            table = self.query_logs(query)
             require(
                 table["columns"] == [{"name": "log", "type": "string"}]
-                and type(table["rows"]) is list
                 and all(
                     type(row) is list and len(row) == 1 and type(row[0]) is str
                     for row in table["rows"]
@@ -409,7 +460,7 @@ def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=Non
     bootstrap = (PACKAGE / "bootstrap-args.txt").read_bytes().decode()
     selector = carrier.serving_selector()
     template_before = carrier.template()
-    before = carrier.executions()
+    preflight, before = carrier.preflight()
     require(all(state in TERMINAL for state in before.values()), "migration_job_busy")
     variables = {"DATABASE_URL": f"secretref:{selector}", **variables}
     if before_start is not None:
@@ -435,9 +486,10 @@ def run_production(carrier, candidate, run_id, *, checkout_sha, before_start=Non
         execution_count=1,
         g2_shape=shape,
         access_counts=counts,
+        preflight=preflight,
     )
     require(shape == "match", "g2_shape_differs")
-    verify_receipt(receipt, candidate, run_id)
+    verify_checks_receipt(receipt, candidate, run_id)
     return receipt
 
 
@@ -461,6 +513,9 @@ def main():
             "Production checks passed. Review the immutable production-checks receipt."
         )
     except Stop as error:
+        if str(error) not in INCIDENT_CODES:
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                output.write("execution_reconciled=true\n")
         print(f"Production checks stopped ({error}).")
         return 1
     except Exception:

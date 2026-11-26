@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       sha: ${{ steps.admission.outputs.sha }}
@@ -44,6 +45,7 @@ jobs:
     timeout-minutes: 15
     environment: production
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
@@ -80,6 +82,30 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Authenticate to production ACR with Azure OIDC
+        run: |
+          guard="$(mktemp)"
+          trap 'rm -f "$guard"' EXIT
+          cat > "$guard" <<'DOCKER_OIDC_ONLY'
+          #!/bin/bash
+          if [[ "$#" == 1 && "$1" == ps ]]; then
+            exec docker "$@"
+          fi
+          if [[ "$#" == 5 && "$1" == login && "$2" == --username &&
+                "$3" == 00000000-0000-0000-0000-000000000000 &&
+                "$4" == --password-stdin && "$5" == cosmaneuraprodregistry.azurecr.io ]]; then
+            exec docker "$@"
+          fi
+          exit 1
+          DOCKER_OIDC_ONLY
+          chmod 700 "$guard"
+          DOCKER_COMMAND="$guard" az acr login --name cosmaneuraprodregistry
+      - name: Pull the pinned production image
+        run: |
+          image="$(PYTHONPATH=ops/production-checks python3 -c 'from contract import IMAGE; print(IMAGE)')"
+          docker pull --platform linux/amd64 "$image"
+      - name: Probe the pinned production image
+        run: python3 ops/production-checks/probe_image.py
       - name: Reverify fresh master before starting the check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -88,6 +114,7 @@ jobs:
         run: python3 ops/production-checks/admission.py run_production_checks.yml --admitted
 
       - name: Run exactly one checked execution
+        id: carrier
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
@@ -95,6 +122,11 @@ jobs:
         run: |
           checkout_sha="$(git rev-parse --verify HEAD)"
           CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py
+      - name: Confirm no unresolved execution incident
+        if: ${{ failure() && steps.carrier.outcome == 'failure' }}
+        env:
+          EXECUTION_RECONCILED: ${{ steps.carrier.outputs.execution_reconciled }}
+        run: test "$EXECUTION_RECONCILED" = true
       - name: Publish successful production checks receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -15,9 +15,10 @@ from contract import (
     sha256,
     verify_package,
 )
+from probe_image import STAGING_IMAGE
 
 UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
-STAGING_NAME = r"cosmaneura-staging(?:-[a-z0-9]+)+"
+STAGING_NAME = r"(?:cn-stg-[a-z0-9-]+|cosmaneura-staging(?:-[a-z0-9]+)+)"
 TIMEOUT_WAIT = 40
 SYNTHETIC_START = "REHEARSAL_START=1"
 SYNTHETIC_DONE = "REHEARSAL_PAYLOAD_OK=1"
@@ -26,15 +27,10 @@ SYNTHETIC_DONE = "REHEARSAL_PAYLOAD_OK=1"
 def staging_target(args):
     production_names = {PRODUCTION.job, PRODUCTION.container, PRODUCTION_APP}
     require(
-        args.resource_group != PRODUCTION.group
-        and "prod" not in args.resource_group
+        args.resource_group == "cosmaneura-staging"
         and re.fullmatch(UUID, args.subscription)
         and re.fullmatch(UUID, args.workspace)
         and args.workspace != PRODUCTION.workspace
-        and (
-            args.resource_group == "cosmaneura-staging"
-            or re.fullmatch(STAGING_NAME, args.resource_group)
-        )
         and all(
             name not in production_names and "prod" not in name
             for name in (args.job, args.container)
@@ -42,11 +38,7 @@ def staging_target(args):
         and re.fullmatch(STAGING_NAME, args.job)
         and re.fullmatch(STAGING_NAME, args.container)
         and not args.image.startswith("cosmaneuraprodregistry")
-        and re.fullmatch(
-            r"cosmaneurastagingregistry\.azurecr\.io/"
-            r"cosmaneura/cosmaneura@sha256:[0-9a-f]{64}",
-            args.image,
-        ),
+        and re.fullmatch(STAGING_IMAGE, args.image),
         "staging_target_required",
     )
     return Target(
@@ -79,7 +71,7 @@ def rehearsal(carrier):
     )
     template = carrier.template()
     require(template[1] > TIMEOUT_WAIT, "rehearsal_replica_timeout_too_short")
-    before = carrier.executions()
+    preflight, before = carrier.preflight()
     require(all(state in TERMINAL for state in before.values()), "staging_job_busy")
     try:
         name = carrier.run_once(before, command, variables)
@@ -122,6 +114,7 @@ def rehearsal(carrier):
         "template_unchanged": True,
         "finished_log_readable": True,
         "timeout_stopped": True,
+        "preflight": preflight,
     }
 
 
