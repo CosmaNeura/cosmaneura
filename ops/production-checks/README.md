@@ -73,9 +73,7 @@ The carrier-independent runner, rebuilt from the Fable-reviewed runner `f61f498b
 
 ### Operator actions
 
-Merge #1016, #1017, #1018 and #1019, then dispatch Run production checks, Plan, Apply
-and Release separately. Apply requires the successful Plan run ID and
-artifact digest. Each workflow may also require production environment approval.
+Dispatch Run production checks, Plan, Apply and Release separately. Apply requires the successful Plan run ID and artifact digest. Each workflow may also require production environment approval.
 
 ### No secrets, no shell for John
 DATABASE_URL stays a `secretref` inside Azure. The runner never prints it, and no secret, connection string, token or env dump appears in any output (tested).
