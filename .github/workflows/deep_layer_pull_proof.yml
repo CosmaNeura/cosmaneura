@@ -1,7 +1,8 @@
-# Non-production proof: a synthetic deep-layer image fails to pull under
-# classic overlay2 and pulls+probes after enabling the containerd image store.
-# Two jobs on fresh runners avoid flipping the daemon twice on one machine.
-# No secrets, Azure, or production environment. Hosted PR allowlists track this file.
+# Non-production proof: a synthetic deep-layer image fails under classic
+# overlay2 and pulls+probes after enabling the containerd image store.
+# Build once under containerd, then (a) pull+probe on that runner and
+# (b) refuse load on a fresh default-overlay2 runner. No daemon flip on the
+# refuse job. No secrets, Azure, or production environment.
 name: Deep-layer pull proof
 on:
   pull_request:
@@ -16,51 +17,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  refuse-on-overlay2:
-    name: Overlay2 refuses deep-layer pull
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Build deep image under containerd, then refuse pull on overlay2
-        run: |
-          printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
-            | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl restart docker
-          mkdir -p "$RUNNER_TEMP/registry-data"
-          docker run -d --name deep-layer-registry -p 5000:5000 \
-            -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
-          work="$(mktemp -d)"
-          {
-            echo 'FROM python:3.13-slim'
-            i=0
-            while [ "$i" -lt 130 ]; do
-              printf 'COPY layer-%s.txt /layers/%s.txt\n' "$i" "$i"
-              printf 'synthetic-layer-%s\n' "$i" >"$work/layer-$i.txt"
-              i=$((i + 1))
-            done
-            echo 'CMD ["python", "-c", "print(\"RUNTIME_SUPPORTED=1\")"]'
-          } >"$work/Dockerfile"
-          docker build -t localhost:5000/deep-layer-proof:synthetic "$work"
-          history_lines="$(docker history --format '{{.ID}}' localhost:5000/deep-layer-proof:synthetic | wc -l)"
-          test "$history_lines" -gt 125
-          docker push localhost:5000/deep-layer-proof:synthetic
-          docker rmi localhost:5000/deep-layer-proof:synthetic
-          printf '%s\n' '{"features":{"containerd-snapshotter":false}}' \
-            | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl restart docker
-          docker run -d --name deep-layer-registry -p 5000:5000 \
-            -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
-          set +e
-          out="$(docker pull localhost:5000/deep-layer-proof:synthetic 2>&1)"
-          code=$?
-          set -e
-          test "$code" -ne 0
-          printf '%s\n' "$out" | grep -F 'max depth exceeded' >/dev/null
-
   pull-on-containerd:
     name: Containerd pulls and probes deep-layer image
     runs-on: ubuntu-24.04
@@ -70,7 +26,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Pull and probe deep image with containerd image store
+      - name: Enable containerd, build, pull, and probe
         run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
@@ -92,8 +48,40 @@ jobs:
           docker build -t localhost:5000/deep-layer-proof:synthetic "$work"
           history_lines="$(docker history --format '{{.ID}}' localhost:5000/deep-layer-proof:synthetic | wc -l)"
           test "$history_lines" -gt 125
+          docker save -o "$RUNNER_TEMP/deep-layer-proof.tar" localhost:5000/deep-layer-proof:synthetic
           docker push localhost:5000/deep-layer-proof:synthetic
           docker rmi localhost:5000/deep-layer-proof:synthetic
           docker pull localhost:5000/deep-layer-proof:synthetic
           out="$(docker run --rm --pull=never --network=none localhost:5000/deep-layer-proof:synthetic)"
           test "$out" = 'RUNTIME_SUPPORTED=1'
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deep-layer-proof-image
+          path: ${{ runner.temp }}/deep-layer-proof.tar
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+          include-hidden-files: false
+
+  refuse-on-overlay2:
+    name: Overlay2 refuses deep-layer unpack
+    needs: pull-on-containerd
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: deep-layer-proof-image
+          path: ${{ runner.temp }}
+
+      - name: Classic overlay2 refuses the deep-layer load
+        run: |
+          # Fresh hosted runner defaults to classic overlay2. Do not flip the
+          # daemon; flipping containerd↔overlay2 is flaky on ubuntu-24.04.
+          set +e
+          out="$(docker load -i "$RUNNER_TEMP/deep-layer-proof.tar" 2>&1)"
+          code=$?
+          set -e
+          test "$code" -ne 0
+          printf '%s\n' "$out" | grep -F 'max depth exceeded' >/dev/null
