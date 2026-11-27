@@ -227,6 +227,11 @@ jobs:
           python3 scripts/release_verified_candidate_ops.py admit-schema \
             --candidate-sha "$CANDIDATE_SHA" \
             --output "$RUNNER_TEMP/release-artifacts/schema-heads.json"
+      - name: Require a production checks receipt for the R2 transition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/admission.py release_verified_candidate.yml --receipt --running-source-sha-file "$RUNNER_TEMP/release-artifacts/schema-heads.json"
       - name: Record current production digests and revisions before publish
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}

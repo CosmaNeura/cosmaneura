@@ -43,6 +43,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     outputs:
       sha: ${{ steps.admission.outputs.sha }}
     steps:
@@ -54,7 +55,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 ops/production-checks/admission.py infra_apply_local.yml --output
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --output --receipt
 
   apply:
     name: Terraform Apply
@@ -101,12 +102,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Reverify founder dispatch before production setup
+      - name: Reverify founder dispatch and receipt before production setup
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted --receipt
 
       - name: Verify exact-current-master production plan evidence
         id: plan_evidence
@@ -374,12 +375,12 @@ jobs:
           fi
           echo "Verified canonical reviewed-plan SHA-256: \`$canonical_plan_sha256\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Reverify admission before applying
+      - name: Reverify admission and receipt before applying
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
-        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted
+        run: python3 ops/production-checks/admission.py infra_apply_local.yml --admitted --receipt
 
       - name: Reverify current master and apply
         id: apply_plan

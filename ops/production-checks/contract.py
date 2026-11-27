@@ -145,8 +145,10 @@ def parse_markers(lines):
     lines = cast(list[str], lines)
     require(lines[:3] == prefix and re.fullmatch(shape, lines[3]), "invalid_log_marker")
     require(lines[g2_index].startswith("PRECHECK_JSON="), "invalid_log_marker")
+    precheck_exit = lines[g2_index + 1]
     require(
-        lines[g2_index + 1 : 7] == ["PRECHECK_EXIT=1", "ACCESS_LOCK_TIMEOUT_MS=4000"]
+        precheck_exit in {"PRECHECK_EXIT=0", "PRECHECK_EXIT=1"}
+        and lines[6] == "ACCESS_LOCK_TIMEOUT_MS=4000"
         and lines[-2:] == ["ACCESS_ROWS=9", "RUN_DONE=1"],
         "invalid_log_marker",
     )
@@ -158,7 +160,12 @@ def parse_markers(lines):
         count = int(match[1])
         require(count <= 9223372036854775807, "invalid_access_marker")
         counts[label] = count
-    shape_match = "match" if lines[g2_index] == f"PRECHECK_JSON={G2}" else "differs"
+    shape_match = (
+        "match"
+        if precheck_exit == "PRECHECK_EXIT=1"
+        and lines[g2_index] == f"PRECHECK_JSON={G2}"
+        else "differs"
+    )
     return counts, shape_match
 
 

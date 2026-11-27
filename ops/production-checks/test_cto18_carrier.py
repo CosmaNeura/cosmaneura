@@ -1,8 +1,11 @@
 """Offline tests for receipt markers and the carrier using synthetic Azure calls."""
 
+import ast
 import io
 import json
 import os
+import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -12,7 +15,7 @@ import textwrap
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import carrier
 import contract
@@ -50,20 +53,128 @@ def markers():
 
 
 class ProbeTests(unittest.TestCase):
-    def test_release_workflows_have_no_receipt_requirement(self):
+    @staticmethod
+    def workflow_job(source, job):
+        return re.split(r"\n  [\w-]+:\n", source.split(f"\n  {job}:\n", 1)[1])[0]
+
+    def test_transition_receipt_steps_keep_automatic_rollback_independent(self):
         self.assertIn("production-checks-receipt", WORKFLOW.read_text())
-        for name in (
-            "infra_production_plan_local",
-            "infra_apply_local",
-            "release_verified_candidate",
-            "build_and_publish",
-            "build_and_publish_local",
-        ):
+        release = WORKFLOW.with_name("release_verified_candidate.yml").read_text()
+        build = WORKFLOW.with_name("build_and_publish_local.yml").read_text()
+        for name, source, count in (("release", release, 1), ("build", build, 2)):
             with self.subTest(workflow=name):
-                source = WORKFLOW.with_name(name + ".yml").read_text().lower()
-                self.assertNotIn("run_production_checks", source)
-                self.assertNotIn("production-checks-receipt", source)
-                self.assertNotIn("--receipt", source)
+                steps = [
+                    step for step in source.split("\n      - ") if "--receipt" in step
+                ]
+                self.assertEqual(len(steps), count)
+                for step in steps:
+                    self.assertIn("--running-source-sha-file", step)
+                    self.assertNotIn("if: github.sha", step)
+        for name in ("infra_production_plan_local", "infra_apply_local"):
+            self.assertNotIn(
+                "--running-source-sha-file",
+                WORKFLOW.with_name(name + ".yml").read_text(),
+            )
+        self.assertNotIn(
+            "--receipt", WORKFLOW.with_name("build_and_publish.yml").read_text()
+        )
+
+        release_steps = self.workflow_job(release, "publish-and-deploy").split(
+            "\n      - "
+        )
+        checkout = next(
+            step for step in release_steps if "uses: actions/checkout@" in step
+        )
+        self.assertRegex(checkout, r"(?m)^          fetch-depth: 0$")
+        receipt = next(
+            index for index, step in enumerate(release_steps) if "--receipt" in step
+        )
+        self.assertIn("Admit code-derived schema heads", release_steps[receipt - 1])
+        self.assertIn("Record current production digests", release_steps[receipt + 1])
+        deploy = next(
+            index for index, step in enumerate(release_steps) if "id: deploy\n" in step
+        )
+        rollback = release_steps[deploy + 1]
+        self.assertIn(
+            "Verify healthcheck and ready-revision digests or roll back", rollback
+        )
+        self.assertIn("if: always() && steps.deploy.outcome != 'skipped'", rollback)
+        self.assertIn("release_verified_candidate_ops.py rollback --baseline", rollback)
+        self.assertNotIn("admission.py", rollback)
+        self.assertNotIn("--receipt", rollback)
+
+        ops = (
+            contract.REPO_ROOT / "scripts/release_verified_candidate_ops.py"
+        ).read_text()
+        for node in ast.parse(ops).body:
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "rollback",
+                "verify_ready",
+            }:
+                body = ast.unparse(node)
+                self.assertNotIn("admission.py", body)
+                self.assertNotIn("--receipt", body)
+
+        for job, previous, following in (
+            (
+                "production-candidate",
+                "uses: azure/login@",
+                "Verify, publish and protect",
+            ),
+            ("deploy", "id: candidate", "Deploy the previously verified Core digest"),
+        ):
+            with self.subTest(job=job):
+                steps = self.workflow_job(build, job).split("\n      - ")
+                checkout = next(
+                    step for step in steps if "uses: actions/checkout@" in step
+                )
+                self.assertRegex(checkout, r"(?m)^          fetch-depth: 0$")
+                receipt = next(
+                    index for index, step in enumerate(steps) if "--receipt" in step
+                )
+                read = receipt - 1
+                self.assertIn(previous, steps[receipt - 2])
+                self.assertIn("running-source-sha --output", steps[read])
+                self.assertTrue(
+                    any(
+                        "uses: docker/login-action@" in step or "az acr login " in step
+                        for step in steps[:read]
+                    ),
+                    "Registry authentication must precede the running revision read",
+                )
+                self.assertIn(following, steps[receipt + 1])
+
+    def test_running_source_sha_mode_writes_revision_file(self):
+        path = contract.REPO_ROOT / "scripts/release_verified_candidate_ops.py"
+        output = Path(self.enterContext(tempfile.TemporaryDirectory())) / "running.json"
+        with patch.object(sys, "path", sys.path.copy()):
+            main = runpy.run_path(str(path))["main"]
+        with (
+            patch.dict(main.__globals__, running_source_sha=lambda: "a" * 40),
+            patch.object(
+                sys, "argv", [str(path), "running-source-sha", "--output", str(output)]
+            ),
+        ):
+            self.assertEqual(main(), 0)
+        self.assertEqual(
+            json.loads(output.read_text()), {"running_source_sha": "a" * 40}
+        )
+
+    def test_button_records_carrier_reconciliation_in_job_history(self):
+        source = WORKFLOW.read_text()
+        for job in ("authorize-production", "checks"):
+            with self.subTest(job=job):
+                self.assertRegex(
+                    self.workflow_job(source, job),
+                    r"(?m)^    permissions:\n(?:      \S[^\n]*\n)*?      actions: read$",
+                )
+        self.assertIn(
+            "- name: Run exactly one checked execution\n        id: carrier", source
+        )
+        self.assertIn("- name: Confirm no unresolved execution incident", source)
+        self.assertIn("failure() && steps.carrier.outcome == 'failure'", source)
+        self.assertIn("steps.carrier.outputs.execution_reconciled", source)
+        self.assertIn('run: test "$EXECUTION_RECONCILED" = true', source)
 
     def test_runbook_link_restored(self):
         source = (
@@ -423,7 +534,7 @@ class FakeAzureTests(unittest.TestCase):
                 self.assertEqual(self.state()["stops"], [])
 
     def test_button_admission_checks_first_attempt_and_sets_sha(self):
-        candidate = "a" * 40
+        candidate = MASTER
         repository = "CosmaNeura/cosmaneura"
         ref = "refs/heads/master"
         workflow_ref = f"{repository}/.github/workflows/run_production_checks.yml@{ref}"
@@ -440,22 +551,31 @@ class FakeAzureTests(unittest.TestCase):
             "GITHUB_OUTPUT": str(self.state_path),
         }
         master = {"ref": ref, "object": {"type": "commit", "sha": candidate}}
+        responses = {
+            "git/ref/heads/master": master,
+            "actions/workflows/run_production_checks.yml/runs?branch=master"
+            "&event=workflow_dispatch&per_page=100&page=1": {
+                "workflow_runs": [],
+                "total_count": 0,
+            },
+        }
+        expected_calls = [call(path) for path in responses]
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("admission.api", return_value=master) as lookup,
+            patch("admission.api", side_effect=responses.__getitem__) as lookup,
             patch("sys.stdout", io.StringIO()) as stdout,
         ):
             with patch.object(sys, "argv", ["carrier.py", "--output"]):
-                self.assertEqual(carrier.main(), 0)
+                self.assertEqual(carrier.main(), 0, stdout.getvalue())
             sha_output = self.state_path.read_text()
             self.assertEqual(sha_output, f"sha={candidate}\n")
-            lookup.assert_called_once_with("git/ref/heads/master")
+            self.assertEqual(lookup.call_args_list, expected_calls)
             lookup.reset_mock()
             os.environ["ADMITTED_SHA"] = sha_output.strip().removeprefix("sha=")
             with patch.object(sys, "argv", ["carrier.py", "--admitted"]):
-                self.assertEqual(carrier.main(), 0)
+                self.assertEqual(carrier.main(), 0, stdout.getvalue())
             self.assertEqual(self.state_path.read_text(), sha_output)
-            lookup.assert_called_once_with("git/ref/heads/master")
+            self.assertEqual(lookup.call_args_list, expected_calls)
             lookup.reset_mock()
             with patch.object(sys, "argv", ["carrier.py", "--output"]):
                 os.environ["GITHUB_WORKFLOW_REF"] = (
@@ -535,6 +655,68 @@ class FakeAzureTests(unittest.TestCase):
             carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
         self.assertEqual(self.state()["starts"], 1)
         self.assertEqual(self.state()["stops"], [])
+
+    def test_carrier_outputs_reconciliation_only_for_non_incident_stops(self):
+        env = {
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": MASTER,
+            "CHECKOUT_SHA": MASTER,
+            "GITHUB_OUTPUT": str(self.state_path),
+        }
+        with (
+            patch.object(sys, "argv", ["carrier.py"]),
+            patch.dict(os.environ, env),
+            patch("sys.stdout", io.StringIO()),
+        ):
+            for code in (
+                "incident_start_unresolved",
+                "incident_stop_unconfirmed",
+                "incident_stop_failed_terminal",
+                "incident_execution_not_identified",
+                "ambiguous_start",
+                "execution_terminal_failure",
+            ):
+                with (
+                    self.subTest(code=code),
+                    patch("carrier.run_production", side_effect=contract.Stop(code)),
+                ):
+                    self.state_path.write_text("")
+                    self.assertEqual(carrier.main(), 1)
+                    expected = (
+                        "execution_reconciled=true\n"
+                        if code == "execution_terminal_failure"
+                        else ""
+                    )
+                    self.assertEqual(self.state_path.read_text(), expected)
+
+    def test_post_migration_markers_refuse_receipt(self):
+        lines = markers()
+        post_migration = json.loads(contract.G2)
+        post_migration.update(
+            migration_head="5708b4399768", pending_migrations=[], refusal_reasons=[]
+        )
+        lines[4] = "PRECHECK_JSON=" + json.dumps(post_migration, separators=(",", ":"))
+        lines[5] = "PRECHECK_EXIT=0"
+        subject = self.configure(lines=lines)
+        directory = self.state_path.parent
+        with (
+            patch.object(sys, "argv", ["carrier.py"]),
+            patch.dict(
+                os.environ,
+                GITHUB_RUN_ATTEMPT="1",
+                GITHUB_RUN_ID="42",
+                GITHUB_SHA=MASTER,
+                CHECKOUT_SHA=MASTER,
+                GITHUB_OUTPUT=str(directory / "output"),
+                RUNNER_TEMP=str(directory),
+            ),
+            patch("carrier.Carrier", return_value=subject),
+            patch("carrier.check_context", return_value=MASTER),
+            patch("sys.stdout", io.StringIO()) as output,
+        ):
+            self.assertEqual(carrier.main(), 1)
+            self.assertIn("g2_shape_differs", output.getvalue())
+        self.assertFalse((directory / carrier.RECEIPT_FILE).exists())
 
     def test_template_drift_multiple_executions_log_errors_and_incomplete_logs(self):
         for scenario, code, lines in (

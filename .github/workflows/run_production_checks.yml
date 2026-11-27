@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       sha: ${{ steps.admission.outputs.sha }}
@@ -44,6 +45,7 @@ jobs:
     timeout-minutes: 31
     environment: production
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
@@ -120,6 +122,7 @@ jobs:
         run: python3 ops/production-checks/carrier.py --admitted
 
       - name: Run exactly one checked execution
+        id: carrier
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
@@ -127,6 +130,11 @@ jobs:
         run: |
           checkout_sha="$(git rev-parse --verify HEAD)"
           CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py
+      - name: Confirm no unresolved execution incident
+        if: ${{ failure() && steps.carrier.outcome == 'failure' }}
+        env:
+          EXECUTION_RECONCILED: ${{ steps.carrier.outputs.execution_reconciled }}
+        run: test "$EXECUTION_RECONCILED" = true
       - name: Publish successful production checks receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
