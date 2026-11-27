@@ -210,7 +210,9 @@ class ProbeTests(unittest.TestCase):
             pull.index('containerd-snapshotter":true'),
             pull.index("docker pull --platform linux/amd64"),
         )
-        self.assertIn("python3 ops/production-checks/probe_image.py", WORKFLOW.read_text())
+        self.assertIn(
+            "python3 ops/production-checks/probe_image.py", WORKFLOW.read_text()
+        )
         # Probe contract stays unchanged: cached image, no network, no creds.
         self.assertIn("--pull=never", Path(probe_image.__file__).read_text())
         self.assertIn("--network=none", Path(probe_image.__file__).read_text())
