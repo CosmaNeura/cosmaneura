@@ -190,12 +190,32 @@ class ProbeTests(unittest.TestCase):
             for token in (
                 "uses: azure/login@",
                 "az acr login --name cosmaneuraprodregistry",
+                'containerd-snapshotter":true',
+                "sudo systemctl restart docker",
                 "docker pull --platform linux/amd64",
                 "python3 ops/production-checks/probe_image.py",
                 'CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py',
             )
         ]
         self.assertEqual(positions, sorted(set(positions)))
+
+    def test_pull_enables_containerd_image_store_before_docker_pull(self):
+        pull = WORKFLOW.read_text().split(
+            "name: Pull the pinned production image\n", 1
+        )[1]
+        pull = pull.split("\n      - name:", 1)[0]
+        self.assertIn('containerd-snapshotter":true', pull)
+        self.assertIn("sudo systemctl restart docker", pull)
+        self.assertLess(
+            pull.index('containerd-snapshotter":true'),
+            pull.index("docker pull --platform linux/amd64"),
+        )
+        self.assertIn(
+            "python3 ops/production-checks/probe_image.py", WORKFLOW.read_text()
+        )
+        # Probe contract stays unchanged: cached image, no network, no creds.
+        self.assertIn("--pull=never", Path(probe_image.__file__).read_text())
+        self.assertIn("--network=none", Path(probe_image.__file__).read_text())
 
     def test_checks_job_and_pre_carrier_step_timeouts(self):
         checks = WORKFLOW.read_text().split("\n  checks:\n", 1)[1]

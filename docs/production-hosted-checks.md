@@ -90,11 +90,13 @@ environment approvals add manual steps is unverified.
 
 ## Runtime and execution checks
 
-Before preflight, the workflow uses Entra token login to ACR, pulls the pinned digest
-and probes the cached image without network or credential inputs. AcrPull remains
-unverified until run. The probe checks `/opt/venv/bin/python`, Python 3.13,
-psycopg 3.2.6 and libpq 17.4 or later. Record its result for the pinned image digest
-(`contract.IMAGE` in `ops/production-checks/contract.py`).
+Before preflight, the workflow uses Entra token login to ACR, enables the Docker
+containerd image store on the hosted runner (so digests deeper than overlay2's
+layer limit can unpack), pulls the pinned digest and probes the cached image
+without network or credential inputs. AcrPull remains unverified until run. The
+probe checks `/opt/venv/bin/python`, Python 3.13, psycopg 3.2.6 and libpq 17.4 or
+later. Record its result for the pinned image digest (`contract.IMAGE` in
+`ops/production-checks/contract.py`).
 
 The carrier verifies the image and one approved selector across all positive traffic
 weights totaling 100%. It requires a manual job with one replica and completion,
