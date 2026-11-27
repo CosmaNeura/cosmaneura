@@ -1,0 +1,73 @@
+# Non-production proof: a synthetic deep-layer image fails under classic
+# overlay2 and loads+probes after enabling the containerd image store.
+# No secrets, Azure, or production environment.
+name: Deep-layer pull proof
+on:
+  pull_request:
+    paths:
+      - .github/workflows/deep_layer_pull_proof.yml
+      - .github/workflows/run_production_checks.yml
+      - ops/production-checks/**
+      - docs/production-hosted-checks.md
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  proof:
+    name: Synthetic deep-layer pull proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable containerd image store
+        run: |
+          printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+
+      - name: Build a synthetic image past overlay2 depth
+        run: |
+          work="$(mktemp -d)"
+          {
+            echo 'FROM python:3.13-slim'
+            # 130 COPY layers exceed overlay2's ~125 max depth while staying
+            # cheap; content is fixed synthetic bytes only.
+            i=0
+            while [ "$i" -lt 130 ]; do
+              printf 'COPY layer-%s.txt /layers/%s.txt\n' "$i" "$i"
+              printf 'synthetic-layer-%s\n' "$i" >"$work/layer-$i.txt"
+              i=$((i + 1))
+            done
+            echo 'CMD ["python", "-c", "print(\"RUNTIME_SUPPORTED=1\")"]'
+          } >"$work/Dockerfile"
+          docker build -t deep-layer-proof:synthetic "$work"
+          history_lines="$(docker history --format '{{.ID}}' deep-layer-proof:synthetic | wc -l)"
+          test "$history_lines" -gt 125
+          docker save -o "$RUNNER_TEMP/deep-layer-proof.tar" deep-layer-proof:synthetic
+          docker rmi deep-layer-proof:synthetic
+
+      - name: Classic overlay2 refuses the deep-layer load
+        run: |
+          printf '%s\n' '{"features":{"containerd-snapshotter":false}}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+          set +e
+          out="$(docker load -i "$RUNNER_TEMP/deep-layer-proof.tar" 2>&1)"
+          code=$?
+          set -e
+          test "$code" -ne 0
+          printf '%s\n' "$out" | grep -F 'max depth exceeded' >/dev/null
+
+      - name: Containerd image store loads and probes without network
+        run: |
+          printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+          docker load -i "$RUNNER_TEMP/deep-layer-proof.tar" >/dev/null
+          out="$(docker run --rm --pull=never --network=none deep-layer-proof:synthetic)"
+          test "$out" = 'RUNTIME_SUPPORTED=1'

@@ -108,6 +108,13 @@ jobs:
       - name: Pull the pinned production image
         timeout-minutes: 4
         run: |
+          # Classic overlay2 refuses images deeper than ~125 layers ("max depth
+          # exceeded"). Switch the hosted daemon to the containerd image store
+          # before pull so the pinned digest can unpack. The probe still runs
+          # later with --pull=never --network=none and no credentials.
+          printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
           image="$(PYTHONPATH=ops/production-checks python3 -c 'from contract import IMAGE; print(IMAGE)')"
           docker pull --platform linux/amd64 "$image"
       - name: Probe the pinned production image
