@@ -1,5 +1,5 @@
-# Non-production proof: a synthetic deep-layer image fails under classic
-# overlay2 and loads+probes after enabling the containerd image store.
+# Non-production proof: a synthetic deep-layer image fails to pull under
+# classic overlay2 and pulls+probes after enabling the containerd image store.
 # No secrets, Azure, or production environment.
 name: Deep-layer pull proof
 on:
@@ -24,13 +24,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Enable containerd image store
+      - name: Enable containerd image store and start a durable local registry
         run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl restart docker
+          mkdir -p "$RUNNER_TEMP/registry-data"
+          docker run -d --name deep-layer-registry -p 5000:5000 \
+            -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
 
-      - name: Build a synthetic image past overlay2 depth
+      - name: Build and push a synthetic image past overlay2 depth
         run: |
           work="$(mktemp -d)"
           {
@@ -45,29 +48,34 @@ jobs:
             done
             echo 'CMD ["python", "-c", "print(\"RUNTIME_SUPPORTED=1\")"]'
           } >"$work/Dockerfile"
-          docker build -t deep-layer-proof:synthetic "$work"
-          history_lines="$(docker history --format '{{.ID}}' deep-layer-proof:synthetic | wc -l)"
+          docker build -t localhost:5000/deep-layer-proof:synthetic "$work"
+          history_lines="$(docker history --format '{{.ID}}' localhost:5000/deep-layer-proof:synthetic | wc -l)"
           test "$history_lines" -gt 125
-          docker save -o "$RUNNER_TEMP/deep-layer-proof.tar" deep-layer-proof:synthetic
-          docker rmi deep-layer-proof:synthetic
+          docker push localhost:5000/deep-layer-proof:synthetic
+          docker rmi localhost:5000/deep-layer-proof:synthetic
 
-      - name: Classic overlay2 refuses the deep-layer load
+      - name: Classic overlay2 refuses the deep-layer pull
         run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":false}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl restart docker
+          # Registry data lives on the host volume; restart the container only.
+          docker run -d --name deep-layer-registry -p 5000:5000 \
+            -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
           set +e
-          out="$(docker load -i "$RUNNER_TEMP/deep-layer-proof.tar" 2>&1)"
+          out="$(docker pull localhost:5000/deep-layer-proof:synthetic 2>&1)"
           code=$?
           set -e
           test "$code" -ne 0
           printf '%s\n' "$out" | grep -F 'max depth exceeded' >/dev/null
 
-      - name: Containerd image store loads and probes without network
+      - name: Containerd image store pulls and probes without network
         run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl restart docker
-          docker load -i "$RUNNER_TEMP/deep-layer-proof.tar" >/dev/null
-          out="$(docker run --rm --pull=never --network=none deep-layer-proof:synthetic)"
+          docker run -d --name deep-layer-registry -p 5000:5000 \
+            -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
+          docker pull localhost:5000/deep-layer-proof:synthetic
+          out="$(docker run --rm --pull=never --network=none localhost:5000/deep-layer-proof:synthetic)"
           test "$out" = 'RUNTIME_SUPPORTED=1'
