@@ -242,21 +242,26 @@ def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
     for path, protected_job_name in (
         (".github/workflows/infra_production_plan_local.yml", "plan"),
         (".github/workflows/infra_apply_local.yml", "apply"),
+        (".github/workflows/run_production_checks.yml", "checks"),
     ):
         workflow = _read(path)
         authorization_start = workflow.index("\n  authorize-production:")
         protected_start = workflow.index(f"\n  {protected_job_name}:")
         authorization_job = workflow[authorization_start:protected_start]
         protected_job = workflow[protected_start:]
-        filename = Path(path).name
+        admission = (
+            "carrier.py"
+            if protected_job_name == "checks"
+            else f"admission.py {Path(path).name}"
+        )
 
         assert "contents: read" in authorization_job
         assert "id-token:" not in authorization_job
         assert "secrets." not in authorization_job
         assert "environment: production" not in authorization_job
         assert "TRIGGERING_ACTOR: ${{ github.triggering_actor }}" in authorization_job
-        assert f"admission.py {filename} --output" in authorization_job
-        first_admission = protected_job.index(f"admission.py {filename} --admitted")
+        assert f"{admission} --output" in authorization_job
+        first_admission = protected_job.index(f"{admission} --admitted")
         assert first_admission < protected_job.index("azure/login")
         assert "needs.authorize-production.outputs.sha == github.sha" in protected_job
         assert "secrets." not in protected_job[: protected_job.index("steps:")]

@@ -86,7 +86,5 @@ privileges. The read-only restriction is imposed and checked by the database
 session and transactions, with the existing host, database and TLS checks. The
 workflow supplies the matching secret reference name only. The app and job have
 separate secret stores, so matching names alone provide no database-target
-evidence. This deviation requires final review and the controls in the hosted
-production runbook before dispatch. Hosted Plan and Apply admission and the
-receipt hold land in PR 2. The checks workflow and its runbook
-(`docs/production-hosted-checks.md`) land in PR 3.
+evidence. This deviation requires final review and the controls in
+[Hosted production checks](production-hosted-checks.md) before dispatch.

@@ -1,0 +1,138 @@
+name: Run production checks
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: cosmaneura-production-container-apps
+  cancel-in-progress: false
+jobs:
+  authorize-production:
+    name: Authorize production checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.admission.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Admit founder dispatch on fresh master
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 ops/production-checks/carrier.py --output
+
+  checks:
+    name: Execute production checks
+    needs: authorize-production
+    if: >-
+      ${{
+        github.repository == 'CosmaNeura/cosmaneura' &&
+        github.run_attempt == '1' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize-production.result == 'success' &&
+        needs.authorize-production.outputs.sha == github.sha
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 31
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CORE_OUTPUT: none
+      AZURE_CORE_COLLECT_TELEMETRY: "no"
+      AZURE_EXTENSION_USE_DYNAMIC_INSTALL: "no"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - name: Reverify admission before production authentication
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/carrier.py --admitted
+
+      - name: Verify reviewed package and exact candidate before Azure login
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'ops/production-checks')
+          from contract import candidate_bundle, verify_package
+          try:
+              verify_package()
+              candidate_bundle(os.environ['GITHUB_SHA'])
+          except Exception:
+              sys.exit('Production package or candidate pin verification failed.')
+          PY
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        timeout-minutes: 2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Authenticate to production ACR with Azure OIDC
+        timeout-minutes: 2
+        run: |
+          guard="$(mktemp)"
+          trap 'rm -f "$guard"' EXIT
+          cat > "$guard" <<'DOCKER_OIDC_ONLY'
+          #!/bin/bash
+          if [[ "$#" == 1 && "$1" == ps ]]; then
+            exec docker "$@"
+          fi
+          if [[ "$#" == 5 && "$1" == login && "$2" == --username &&
+                "$3" == 00000000-0000-0000-0000-000000000000 &&
+                "$4" == --password-stdin && "$5" == cosmaneuraprodregistry.azurecr.io ]]; then
+            exec docker "$@"
+          fi
+          exit 1
+          DOCKER_OIDC_ONLY
+          chmod 700 "$guard"
+          DOCKER_COMMAND="$guard" az acr login --name cosmaneuraprodregistry
+      - name: Pull the pinned production image
+        timeout-minutes: 4
+        run: |
+          image="$(PYTHONPATH=ops/production-checks python3 -c 'from contract import IMAGE; print(IMAGE)')"
+          docker pull --platform linux/amd64 "$image"
+      - name: Probe the pinned production image
+        timeout-minutes: 2
+        run: python3 ops/production-checks/probe_image.py
+      - name: Reverify fresh master before starting the check
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: python3 ops/production-checks/carrier.py --admitted
+
+      - name: Run exactly one checked execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ADMITTED_SHA: ${{ needs.authorize-production.outputs.sha }}
+        run: |
+          checkout_sha="$(git rev-parse --verify HEAD)"
+          CHECKOUT_SHA="$checkout_sha" python3 ops/production-checks/carrier.py
+      - name: Publish successful production checks receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-checks-receipt-${{ github.run_id }}-${{ github.sha }}
+          path: ${{ runner.temp }}/production-checks-receipt.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+          include-hidden-files: false

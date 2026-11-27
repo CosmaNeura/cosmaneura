@@ -132,7 +132,10 @@ def parse_markers(lines):
     """Check the whole stream, including malformed, extra and duplicate records."""
     g2_index = 4
     prefix = ["RUNNER_SHA_OK=1", "RUN_START=1", "BUNDLE_VERIFIED=97"]
-    shape = "URL_SHAPE=" + ",".join(f"{key}:[01]" for key in runner.SHAPE_KEYS)
+    bits = {"prefer": "0", "ca_file": "[01]"}
+    shape = "URL_SHAPE=" + ",".join(
+        f"{key}:{bits.get(key, '1')}" for key in runner.SHAPE_KEYS
+    )
     require(
         type(lines) is list
         and len(lines) == 18
@@ -204,6 +207,22 @@ def verify_receipt(receipt, candidate, run_id):
         and timeout > 0,
         "receipt_template",
     )
+    preflight = receipt.get("preflight")
+    require(
+        isinstance(preflight, dict)
+        and preflight.keys()
+        == {
+            "list_executions",
+            "show_execution",
+            "no_prior_execution",
+            "query_workspace",
+        }
+        and all(type(value) is bool for value in preflight.values())
+        and preflight["list_executions"]
+        and preflight["query_workspace"]
+        and preflight["show_execution"] == (not preflight["no_prior_execution"]),
+        "receipt_contract",
+    )
     expected.update(
         template_unchanged=True,
         template_sha256=template_digest,
@@ -212,6 +231,7 @@ def verify_receipt(receipt, candidate, run_id):
         execution_count=1,
         g2_shape="match",
         access_counts=counts,
+        preflight=preflight,
     )
     # Canonical serialization also distinguishes booleans from integers.
     require(json.dumps(receipt) == json.dumps(expected), "receipt_contract")
