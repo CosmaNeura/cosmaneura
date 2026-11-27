@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[2]
 HOSTED_PR_WORKFLOWS = {
     "pull_request_checks.yml": "pull_request",
     "change-budget.yml": "pull_request_target",
-    "deep_layer_pull_proof.yml": "pull_request",
     "infra_plan.yml": "pull_request",
     "staging_environment_boundary.yml": "pull_request",
 }

@@ -504,7 +504,6 @@ def test_every_pull_request_workflow_is_credential_free() -> None:
 
     assert {name for name, _ in pull_request_workflows} == {
         "change-budget.yml",
-        "deep_layer_pull_proof.yml",
         "infra_plan.yml",
         "pull_request_checks.yml",
         "staging_environment_boundary.yml",
