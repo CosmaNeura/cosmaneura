@@ -1,7 +1,7 @@
 # Non-production proof: a synthetic deep-layer image fails to pull under
 # classic overlay2 and pulls+probes after enabling the containerd image store.
 # Two jobs on fresh runners avoid flipping the daemon twice on one machine.
-# No secrets, Azure, or production environment.
+# No secrets, Azure, or production environment. Hosted PR allowlists track this file.
 name: Deep-layer pull proof
 on:
   pull_request:
