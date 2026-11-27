@@ -1,5 +1,6 @@
 # Non-production proof: a synthetic deep-layer image fails to pull under
 # classic overlay2 and pulls+probes after enabling the containerd image store.
+# Two jobs on fresh runners avoid flipping the daemon twice on one machine.
 # No secrets, Azure, or production environment.
 name: Deep-layer pull proof
 on:
@@ -15,8 +16,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  proof:
-    name: Synthetic deep-layer pull proof
+  refuse-on-overlay2:
+    name: Overlay2 refuses deep-layer pull
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -24,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Enable containerd image store and start a durable local registry
+      - name: Build deep image under containerd, then refuse pull on overlay2
         run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
@@ -32,14 +33,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/registry-data"
           docker run -d --name deep-layer-registry -p 5000:5000 \
             -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
-
-      - name: Build and push a synthetic image past overlay2 depth
-        run: |
           work="$(mktemp -d)"
           {
             echo 'FROM python:3.13-slim'
-            # 130 COPY layers exceed overlay2's ~125 max depth while staying
-            # cheap; content is fixed synthetic bytes only.
             i=0
             while [ "$i" -lt 130 ]; do
               printf 'COPY layer-%s.txt /layers/%s.txt\n' "$i" "$i"
@@ -53,13 +49,9 @@ jobs:
           test "$history_lines" -gt 125
           docker push localhost:5000/deep-layer-proof:synthetic
           docker rmi localhost:5000/deep-layer-proof:synthetic
-
-      - name: Classic overlay2 refuses the deep-layer pull
-        run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":false}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl restart docker
-          # Registry data lives on the host volume; restart the container only.
           docker run -d --name deep-layer-registry -p 5000:5000 \
             -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
           set +e
@@ -69,13 +61,39 @@ jobs:
           test "$code" -ne 0
           printf '%s\n' "$out" | grep -F 'max depth exceeded' >/dev/null
 
-      - name: Containerd image store pulls and probes without network
+  pull-on-containerd:
+    name: Containerd pulls and probes deep-layer image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pull and probe deep image with containerd image store
         run: |
           printf '%s\n' '{"features":{"containerd-snapshotter":true}}' \
             | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl restart docker
+          mkdir -p "$RUNNER_TEMP/registry-data"
           docker run -d --name deep-layer-registry -p 5000:5000 \
             -v "$RUNNER_TEMP/registry-data:/var/lib/registry" registry:2
+          work="$(mktemp -d)"
+          {
+            echo 'FROM python:3.13-slim'
+            i=0
+            while [ "$i" -lt 130 ]; do
+              printf 'COPY layer-%s.txt /layers/%s.txt\n' "$i" "$i"
+              printf 'synthetic-layer-%s\n' "$i" >"$work/layer-$i.txt"
+              i=$((i + 1))
+            done
+            echo 'CMD ["python", "-c", "print(\"RUNTIME_SUPPORTED=1\")"]'
+          } >"$work/Dockerfile"
+          docker build -t localhost:5000/deep-layer-proof:synthetic "$work"
+          history_lines="$(docker history --format '{{.ID}}' localhost:5000/deep-layer-proof:synthetic | wc -l)"
+          test "$history_lines" -gt 125
+          docker push localhost:5000/deep-layer-proof:synthetic
+          docker rmi localhost:5000/deep-layer-proof:synthetic
           docker pull localhost:5000/deep-layer-proof:synthetic
           out="$(docker run --rm --pull=never --network=none localhost:5000/deep-layer-proof:synthetic)"
           test "$out" = 'RUNTIME_SUPPORTED=1'
