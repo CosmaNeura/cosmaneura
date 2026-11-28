@@ -71,6 +71,29 @@ PRODUCTION = Target(
     PRODUCTION_JOB,
 )
 
+COMMAND_CLASSES = frozenset(
+    {
+        "readback",
+        "list",
+        "start",
+        "status",
+        "stop",
+        "preflight",
+        "selector",
+        "template",
+    }
+)
+
+
+class AzureCommandFailed(Stop):
+    """Unmapped az failure. str() stays azure_command_failed for incident checks."""
+
+    command_class: str | None
+
+    def __init__(self, command_class: str | None = None):
+        super().__init__("azure_command_failed")
+        self.command_class = command_class
+
 
 class Carrier:
     def __init__(self, target, *, clock=time.monotonic, sleep=time.sleep):
@@ -108,10 +131,7 @@ class Carrier:
             require(not result.stderr, "azure_diagnostic")
             return json.loads(result.stdout) if output == "json" else None
         except (OSError, ValueError, subprocess.SubprocessError) as error:
-            stop = Stop("azure_command_failed")
-            if command_class is not None:
-                stop.command_class = command_class
-            raise stop from error
+            raise AzureCommandFailed(command_class) from error
 
     def job(self, *args, **options):
         return self.az(
@@ -528,7 +548,7 @@ class Carrier:
             raise (
                 azure_failure
                 if azure_failure is not None
-                else Stop("azure_command_failed")
+                else AzureCommandFailed("list")
             )
         require(
             after.keys() - before.keys() == {name}
@@ -616,16 +636,7 @@ def main():
             with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
                 output.write("execution_reconciled=true\n")
         command_class = getattr(error, "command_class", None)
-        if str(error) == "azure_command_failed" and command_class in {
-            "readback",
-            "list",
-            "start",
-            "status",
-            "stop",
-            "preflight",
-            "selector",
-            "template",
-        }:
+        if str(error) == "azure_command_failed" and command_class in COMMAND_CLASSES:
             print(f"Production checks stopped ({error}:{command_class}).")
         else:
             print(f"Production checks stopped ({error}).")
