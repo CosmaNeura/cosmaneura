@@ -738,11 +738,10 @@ class FakeAzureTests(unittest.TestCase):
             self.assertIn("g2_shape_differs", output.getvalue())
         self.assertFalse((directory / carrier.RECEIPT_FILE).exists())
 
-    def test_template_drift_multiple_executions_log_errors_and_incomplete_logs(self):
+    def test_template_drift_multiple_executions_and_incomplete_logs(self):
         for scenario, code, lines in (
             ("drift", "migration_template_changed", None),
             ("two_executions", "execution_count_or_status_changed", None),
-            ("logs_error", "azure_command_failed", None),
             ("logs_partial", "analytics_response", None),
         ):
             with self.subTest(scenario=scenario):
@@ -750,6 +749,70 @@ class FakeAzureTests(unittest.TestCase):
                 with self.assertRaisesRegex(contract.Stop, code):
                     carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
                 self.assertEqual(self.state()["starts"], 1)
+
+    def test_persistent_logs_error_retries_until_readback_budget(self):
+        subject = self.configure("logs_error")
+        with self.assertRaisesRegex(contract.Stop, "^azure_command_failed$") as raised:
+            carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        self.assertEqual(getattr(raised.exception, "command_class", None), "readback")
+        self.assertEqual(self.state()["starts"], 1)
+        self.assertEqual(self.now, 240)
+        self.assertEqual(self.state()["log_reads"], 48)
+
+    def test_transient_logs_error_retries_then_succeeds(self):
+        subject = self.configure("logs_transient")
+        receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        contract.verify_receipt(receipt, MASTER, 42)
+        self.assertEqual(self.state()["starts"], 1)
+        self.assertEqual(self.state()["log_reads"], 3)
+        self.assertEqual(self.state()["stops"], [])
+        self.assertLess(self.now, 240)
+
+    def test_persistent_list_error_retries_until_list_budget(self):
+        subject = self.configure("list_error")
+        with self.assertRaisesRegex(contract.Stop, "^azure_command_failed$") as raised:
+            carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        self.assertEqual(getattr(raised.exception, "command_class", None), "list")
+        self.assertEqual(self.state()["starts"], 1)
+        self.assertEqual(self.now, 60)
+        self.assertEqual(self.state()["list_reads"], 12)
+
+    def test_transient_list_error_retries_then_succeeds(self):
+        subject = self.configure("list_transient")
+        receipt = carrier.run_production(subject, MASTER, 42, checkout_sha=MASTER)
+        contract.verify_receipt(receipt, MASTER, 42)
+        self.assertEqual(self.state()["starts"], 1)
+        self.assertEqual(self.state()["list_reads"], 3)
+        self.assertEqual(self.state()["stops"], [])
+        self.assertLess(self.now, 60)
+
+    def test_azure_command_failed_stop_print_includes_class_word_only(self):
+        directory = self.state_path.parent
+        subject = self.configure("logs_error")
+        with (
+            patch.object(sys, "argv", ["carrier.py"]),
+            patch.dict(
+                os.environ,
+                GITHUB_RUN_ATTEMPT="1",
+                GITHUB_RUN_ID="42",
+                GITHUB_SHA=MASTER,
+                CHECKOUT_SHA=MASTER,
+                GITHUB_OUTPUT=str(directory / "output"),
+                RUNNER_TEMP=str(directory),
+            ),
+            patch("carrier.Carrier", return_value=subject),
+            patch("carrier.check_context", return_value=MASTER),
+            patch("sys.stdout", io.StringIO()) as output,
+        ):
+            self.assertEqual(carrier.main(), 1)
+            text = output.getvalue()
+        self.assertEqual(
+            text.strip(), "Production checks stopped (azure_command_failed:readback)."
+        )
+        self.assertNotRegex(text, r"[0-9a-f]{8,}")
+        self.assertNotIn("SYNTHETIC_PRIVATE_DIAGNOSTIC", text)
+        self.assertNotIn(carrier.PRODUCTION.job + "-fake", text)
+        self.assertEqual(self.state()["starts"], 1)
 
     def test_partial_logs_fail_closed_after_four_minutes(self):
         subject = self.configure(lines=markers()[:-1])
