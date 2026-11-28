@@ -71,6 +71,29 @@ PRODUCTION = Target(
     PRODUCTION_JOB,
 )
 
+COMMAND_CLASSES = frozenset(
+    {
+        "readback",
+        "list",
+        "start",
+        "status",
+        "stop",
+        "preflight",
+        "selector",
+        "template",
+    }
+)
+
+
+class AzureCommandFailed(Stop):
+    """Unmapped az failure. str() stays azure_command_failed for incident checks."""
+
+    command_class: str | None
+
+    def __init__(self, command_class: str | None = None):
+        super().__init__("azure_command_failed")
+        self.command_class = command_class
+
 
 class Carrier:
     def __init__(self, target, *, clock=time.monotonic, sleep=time.sleep):
@@ -78,7 +101,7 @@ class Carrier:
         self.clock = clock
         self.sleep = sleep
 
-    def az(self, *args, timeout=15, output="json") -> Any:
+    def az(self, *args, timeout=15, output="json", command_class=None) -> Any:
         # All calls fail closed. Callers catching Stop do cleanup only.
         try:
             result = subprocess.run(
@@ -108,7 +131,7 @@ class Carrier:
             require(not result.stderr, "azure_diagnostic")
             return json.loads(result.stdout) if output == "json" else None
         except (OSError, ValueError, subprocess.SubprocessError) as error:
-            raise Stop("azure_command_failed") from error
+            raise AzureCommandFailed(command_class) from error
 
     def job(self, *args, **options):
         return self.az(
@@ -137,6 +160,7 @@ class Carrier:
             self.target.group,
             "--query",
             query,
+            command_class="selector",
         )
         total, selectors = 0, set()
         for revision in revisions:
@@ -164,7 +188,7 @@ class Carrier:
         return selectors.pop()
 
     def template(self):
-        value = self.job("show", "--query", TEMPLATE_QUERY)
+        value = self.job("show", "--query", TEMPLATE_QUERY, command_class="template")
         require(
             value["trigger"] == "Manual"
             and value["initContainers"] in (None, [])
@@ -185,7 +209,17 @@ class Carrier:
         )
         return sha256(json.dumps(value, sort_keys=True).encode()), value["timeout"]
 
-    def pages(self, url, host, code, *options, deadline, method="get", body=()):
+    def pages(
+        self,
+        url,
+        host,
+        code,
+        *options,
+        deadline,
+        method="get",
+        body=(),
+        command_class=None,
+    ):
         seen = set()
         for _ in range(20):
             require(isinstance(url, str) and url not in seen, code)
@@ -195,7 +229,7 @@ class Carrier:
             timeout = min(15, deadline - self.clock())
             require(timeout > 0, code)
             args = ("rest", "--method", method, "--url", url, *options, *body)
-            page = self.az(*args, timeout=timeout)
+            page = self.az(*args, timeout=timeout, command_class=command_class)
             require(isinstance(page, dict), code)
             yield page
             url = page.get("nextLink")
@@ -204,7 +238,7 @@ class Carrier:
             method, body = "get", ()
         raise Stop(code)
 
-    def executions(self, *, newest_first=False):
+    def executions(self, *, newest_first=False, deadline=None):
         # The CLI execution-list wrapper drops nextLink.
         target = self.target
         url = (
@@ -219,7 +253,8 @@ class Carrier:
             "--query",
             "{nextLink:nextLink,rows:value[].{name:name,status:properties.status,"
             "start:properties.startTime}}",
-            deadline=self.clock() + 60,
+            deadline=self.clock() + 60 if deadline is None else deadline,
+            command_class="list",
         )
         executions = {}
         rows = []
@@ -253,7 +288,10 @@ class Carrier:
 
     def status(self, name, *, timeout=15):
         record = self.execution(
-            name, "{name:name,status:properties.status}", timeout=timeout
+            name,
+            "{name:name,status:properties.status}",
+            timeout=timeout,
+            command_class="status",
         )
         require(record["name"] == name, "execution_identity")
         status = record["status"]
@@ -339,7 +377,13 @@ class Carrier:
         deadline = self.clock() + 60
         failed = False
         try:
-            self.job("stop", "--job-execution-name", name, output="none")
+            self.job(
+                "stop",
+                "--job-execution-name",
+                name,
+                output="none",
+                command_class="stop",
+            )
         except Stop:
             failed = True
         while self.clock() < deadline:
@@ -370,6 +414,7 @@ class Carrier:
                 "--query",
                 "{name:name}",
                 timeout=60,
+                command_class="start",
             )
             name = start.get("name") if isinstance(start, dict) else None
             require(
@@ -407,7 +452,7 @@ class Carrier:
         self.stop_and_confirm(name)
         raise Stop("execution_timed_out_stopped")
 
-    def query_logs(self, query, *, deadline=None):
+    def query_logs(self, query, *, deadline=None, command_class="readback"):
         pages = self.pages(
             f"https://api.loganalytics.io/v1/workspaces/{self.target.workspace}/query",
             "api.loganalytics.io",
@@ -422,6 +467,7 @@ class Carrier:
                 json.dumps({"query": query}),
             ),
             deadline=self.clock() + 60 if deadline is None else deadline,
+            command_class=command_class,
         )
         columns, rows = None, []
         for page in pages:
@@ -457,8 +503,17 @@ class Carrier:
         )
         deadline = self.clock() + 240
         lines = []
+        azure_failure = None
         while self.clock() < deadline:
-            table = self.query_logs(query, deadline=deadline)
+            try:
+                table = self.query_logs(query, deadline=deadline)
+            except Stop as error:
+                if str(error) != "azure_command_failed":
+                    raise
+                azure_failure = error
+                self.sleep(min(5, max(0, deadline - self.clock())))
+                continue
+            azure_failure = None
             require(
                 table["columns"] == [{"name": "log", "type": "string"}]
                 and all(
@@ -471,10 +526,30 @@ class Carrier:
             if len(lines) == 18 and lines[-1] == "RUN_DONE=1":
                 break
             self.sleep(min(5, max(0, deadline - self.clock())))
+        if azure_failure is not None:
+            raise azure_failure
         return lines
 
     def verify_only_execution(self, before, name):
-        after = self.executions()
+        deadline = self.clock() + 60
+        after = None
+        azure_failure = None
+        while self.clock() < deadline:
+            try:
+                after = self.executions(deadline=deadline)
+                azure_failure = None
+                break
+            except Stop as error:
+                if str(error) != "azure_command_failed":
+                    raise
+                azure_failure = error
+                self.sleep(min(5, max(0, deadline - self.clock())))
+        if after is None:
+            raise (
+                azure_failure
+                if azure_failure is not None
+                else AzureCommandFailed("list")
+            )
         require(
             after.keys() - before.keys() == {name}
             and after[name] == "Succeeded"
@@ -560,7 +635,11 @@ def main():
         if not (args.output or args.admitted) and str(error) not in INCIDENT_CODES:
             with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
                 output.write("execution_reconciled=true\n")
-        print(f"Production checks stopped ({error}).")
+        command_class = getattr(error, "command_class", None)
+        if str(error) == "azure_command_failed" and command_class in COMMAND_CLASSES:
+            print(f"Production checks stopped ({error}:{command_class}).")
+        else:
+            print(f"Production checks stopped ({error}).")
         return 1
     except Exception:
         print("Production checks stopped (invalid_or_unavailable_metadata).")

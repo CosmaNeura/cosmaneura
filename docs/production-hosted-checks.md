@@ -119,9 +119,14 @@ reconciliation result in `ops/production-checks/incident-clearances.json` on
 each cleared run. Keep sensitive diagnostics out of the record.
 
 Log Analytics readback polls the exact execution and container for 18 rows ending
-in `RUN_DONE=1`, for up to 240 seconds. Incomplete, malformed,
+in `RUN_DONE=1`, for up to 240 seconds. A transient `azure_command_failed` on that
+readback is retried inside the same 240-second budget; a persistent failure still
+stops with `azure_command_failed` once the budget is spent. The final execution
+list uses the same rule inside its existing 60-second budget. Incomplete, malformed,
 duplicate and error markers fail validation. Log and execution queries use bounded
-same-host HTTPS pagination. Logs and Azure diagnostics stay private.
+same-host HTTPS pagination. Logs and Azure diagnostics stay private. A final
+`azure_command_failed` stop names only the command class (for example `readback`
+or `list`) with no ids, names, or CLI diagnostics.
 
 The checks job caps the steps before the carrier at 15 minutes total. Checkout,
 admission, package verification, Azure login, ACR login, pull, probe and the final

@@ -93,6 +93,13 @@ elif args[:3] == ["rest", "--method", "get"]:
     assert url.startswith("https://management.azure.com/")
     if scenario == "list_denied":
         fail()
+    if state["starts"]:
+        state["list_reads"] = state.get("list_reads", 0) + 1
+        save()
+        if scenario == "list_error":
+            fail()
+        if scenario == "list_transient" and state["list_reads"] <= 2:
+            fail()
     rows = [
         {
             "name": name,
@@ -238,6 +245,8 @@ elif args[:3] == ["rest", "--method", "post"]:
     assert f"^{state['job']}-fake1(-[a-z0-9]+)?$" in query
     assert f"ContainerName_s == '{state['container']}'" in query
     if scenario == "logs_error":
+        fail()
+    if scenario == "logs_transient" and state["log_reads"] <= 2:
         fail()
     lines = state["lines"]
     extra: dict[str, Any] = {}
